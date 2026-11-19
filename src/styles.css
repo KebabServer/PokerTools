@@ -52,13 +52,65 @@ nav a:not(.active):hover { color: #fff; }
 .section-head p { margin-top: 5px; font-size: .86rem; }
 .replay-head { padding: 18px 22px 12px; }
 .edit-button { flex: 0 0 auto; }
-.table-stage { position: relative; height: clamp(300px, 32vw, 382px); margin: 0 24px; isolation: isolate; }
+.table-stage { position: relative; height: clamp(320px, 32vw, 382px); margin: 0 24px; isolation: isolate; }
 .table-rail { position: absolute; inset: 9% 5% 7%; border-radius: 44% / 49%; padding: 8px; border: 1px solid #525252; background: #303030; box-shadow: inset 0 0 0 2px #212121; }
 .table-felt { height: 100%; border-radius: inherit; position: relative; border: 1px solid #477668; background: #24483e; }
-.table-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); display: grid; justify-items: center; gap: 11px; }
+.table-center { position: absolute; left: 50%; top: calc(50% - 12px); transform: translate(-50%,-50%); display: grid; justify-items: center; gap: 11px; }
+.pot-display { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 32px; }
 .pot-total { background: #1a3530; display: flex; align-items: baseline; gap: 8px; padding: 5px 11px; border: 1px solid #679a8962; border-radius: 20px; white-space: nowrap; }
 .pot-total span { font-size: .74rem; color: #d6e7e1; font-weight: 600; }
 .pot-total strong { color: var(--accent); font-size: .99rem; font-variant-numeric: tabular-nums; }
+.pot-chips { display: flex; align-items: end; padding-bottom: 1px; }
+.pot-chips .chip-stack + .chip-stack { margin-left: -5px; }
+.chip-stack {
+  --chip-width: 22px;
+  --chip-face-height: 13px;
+  --chip-depth: 3px;
+  --chip-step: 2.7px;
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: var(--chip-width);
+  height: calc(var(--chip-face-height) + var(--chip-depth) + var(--chip-layers) * var(--chip-step));
+  filter: drop-shadow(1px 2px 2px #07150eaa);
+}
+.chip-stack-red { --chip-face: #af4249; --chip-edge: #79262b; --chip-inlay: #f5dfc6; --chip-center: #922c34; }
+.chip-stack-black { --chip-face: #454b50; --chip-edge: #24272b; --chip-inlay: #e0e4dd; --chip-center: #35393f; }
+.chip-stack-ivory { --chip-face: #e4cfaa; --chip-edge: #aa885e; --chip-inlay: #645344; --chip-center: #c7a878; }
+.chip-disc {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(var(--chip-index) * var(--chip-step));
+  height: calc(var(--chip-face-height) + var(--chip-depth));
+}
+.chip-disc::before, .chip-disc::after { content: ''; position: absolute; inset-inline: 0; border-radius: 50%; }
+.chip-disc::before {
+  inset-block: var(--chip-depth) 0;
+  background: linear-gradient(90deg, var(--chip-edge) 16%, var(--chip-inlay) 17% 29%, var(--chip-edge) 30% 65%, var(--chip-inlay) 66% 79%, var(--chip-edge) 80%);
+  box-shadow: inset 0 -1px 1px #0008;
+}
+.chip-disc::after {
+  inset-block: 0 var(--chip-depth);
+  background:
+    radial-gradient(ellipse, var(--chip-center) 38%, #231b1950 43%, var(--chip-face) 48% 57%, transparent 59%),
+    repeating-conic-gradient(from 12deg, var(--chip-face) 0 41deg, var(--chip-inlay) 43deg 58deg, var(--chip-face) 60deg);
+  box-shadow: inset 0 1px 1px #fff5, inset 0 -1px 1px #0005;
+}
+.seat-chips { position: absolute; left: calc(50% + var(--bet-x) * 21%); top: var(--top); transform: translate(-50%, -50%); display: flex; align-items: center; gap: 4px; }
+.seat-chips .chip-stack { --chip-width: 17px; --chip-face-height: 10px; --chip-depth: 2px; --chip-step: 2.2px; }
+.seat-chip-amount {
+  max-width: 9ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #f4f6f0;
+  background: #142c25;
+  border-radius: 5px;
+  padding: 2px 5px;
+  font-size: .72rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
 .board-cards, .hole-cards { display: flex; gap: 5px; }
 .playing-card { width: 42px; height: 54px; border-radius: 6px; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; flex: 0 0 auto; }
 .card-face { color: #212121; background: #f5f5f5; border: 1px solid #fff9; box-shadow: 0 2px 5px #0004; font-size: 1.12rem; gap: 1px; }
@@ -66,7 +118,6 @@ nav a:not(.active):hover { color: #fff; }
 .suit-h, .suit-d { color: #a92f3f; }
 .card-empty { border: 1px dashed #8bb7a893; background: #1e4037; }
 .card-back { color: #d0d0d0; border: 1px solid #686868; background: #393939; font-size: .89rem; }
-.felt-street { color: #cae1d9; text-transform: uppercase; font-size: .67rem; font-weight: 650; letter-spacing: .1em; }
 .table-seat { position: absolute; left: var(--left); top: var(--top); transform: translate(-50%, -50%); display: grid; justify-items: center; width: 105px; }
 .table-seat.folded { opacity: .68; }
 .hole-cards { margin-bottom: -3px; }
@@ -139,6 +190,7 @@ input::placeholder, textarea::placeholder { color: #9a9a9a; opacity: 1; }
   .site-inner, .main-wrap { width: calc(100% - 36px); }
   .table-stage { margin-inline: 18px; }
   .table-seat { width: 84px; }
+  .many-seats .seat-chip-amount { display: none; }
   .signin-form { grid-template-columns: 1fr 1fr; }
   .signin-form button { justify-self: start; }
 }
@@ -159,6 +211,11 @@ input::placeholder, textarea::placeholder { color: #9a9a9a; opacity: 1; }
   .tool-heading { flex-wrap: wrap; margin-bottom: 14px; }
   .replay-head { padding: 13px 12px 8px; }
   .table-stage { height: 302px; margin-inline: 9px; }
+  .pot-display { min-height: 29px; gap: 5px; }
+  .pot-chips .chip-stack { --chip-width: 18px; --chip-face-height: 11px; --chip-depth: 2px; --chip-step: 2.2px; }
+  .seat-chips { left: calc(50% + var(--bet-x) * 18%); gap: 2px; }
+  .many-seats .seat-chips .chip-stack { --chip-width: 14px; --chip-face-height: 9px; --chip-step: 1.6px; }
+  .seat-chip-amount { max-width: 6ch; padding-inline: 3px; font-size: .66rem; }
   .table-seat { width: clamp(54px, 18vw, 89px); }
   .seat-info { padding: 4px 3px; }
   .seat-info strong { font-size: .72rem; }

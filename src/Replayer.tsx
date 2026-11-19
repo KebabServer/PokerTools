@@ -1,34 +1,53 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { ChevronLeft, ChevronRight, Pause, Play, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { HandEditor } from './HandEditor.tsx'
 import { handLibrary, supabase, type SavedHand } from './library.ts'
 import { PlayingCard } from './PlayingCard.tsx'
+import { chipLayers, ChipStack, PotChips } from './PokerChips.tsx'
 import { chips, replay, streets, type Frame } from './replay.ts'
 import { emptyHand, sampleHand } from './sample.ts'
 
 const sampleTitle = 'Set over set'
 const sampleStart = replay(sampleHand).frames.findIndex(frame => frame.street === 1)
 
-function Table({ frame, button }: { frame: Frame | undefined; button: number }) {
+function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: number; bigBlind: number }) {
   if (!frame) return <div className="table-fallback">Complete table setup to preview this hand.</div>
-  const { seats, board, pot, street, active } = frame
-  return <div className="table-stage" aria-label="Replay table">
+  const { seats, board, pot, active, awards } = frame
+  const blindCents = Math.round(bigBlind * 100)
+  // The displayed total includes wagers. The center pile represents chips already swept in.
+  const chipsAtSeats = awards
+    ? awards.reduce((sum, award) => sum + award.amount, 0)
+    : seats.reduce((sum, seat) => sum + seat.committed, 0)
+
+  return <div className={'table-stage' + (seats.length > 6 ? ' many-seats' : '')} aria-label="Replay table">
     <div className="table-rail"><div className="table-felt" /></div>
     <div className="table-center">
-      <div className="pot-total"><span>{frame.awards ? 'Total pot' : 'Pot'}</span><strong>{chips(pot)}</strong></div>
+      <div className="pot-display">
+        <PotChips amount={pot - chipsAtSeats} bigBlind={blindCents} />
+        <div className="pot-total"><span>{awards ? 'Total pot' : 'Pot'}</span><strong>{chips(pot)}</strong></div>
+      </div>
       <div className="board-cards">{Array.from({ length: 5 }, (_, index) => <PlayingCard key={index} card={board[index]} />)}</div>
-      <span className="felt-street">{streets[street]}</span>
     </div>
     {seats.map((seat, index) => {
       const angle = Math.PI / 2 - (index * 2 * Math.PI) / seats.length
-      const left = 50 + Math.cos(angle) * 41
-      const top = 50 + Math.sin(angle) * 36
-      return <div key={seat.seat} className={'table-seat' + (seat.folded ? ' folded' : '') + (active === seat.seat ? ' acting' : '')} style={{ '--left': left + '%', '--top': top + '%' } as CSSProperties}>
-        <div className="hole-cards"><PlayingCard card={seat.hole[0]} back /><PlayingCard card={seat.hole[1]} back /></div>
-        <div className="seat-info"><strong title={seat.name}>{seat.name}</strong><span title={seat.folded ? 'Folded' : seat.remaining ? 'Stack' : 'All-in'}>{chips(seat.remaining)}</span>
-          {seat.seat === button && <span className="dealer-chip" aria-label="Dealer button" title="Dealer button">D</span>}
+      const x = Math.cos(angle)
+      const y = Math.sin(angle)
+      const amount = awards ? (awards.find(award => award.seat === seat.seat)?.amount ?? 0) : seat.committed
+      const amountLabel = seat.name + (awards ? ' won ' : ' committed ') + chips(amount)
+      // Leave the board lane clear and keep chips on the felt in front of their seats.
+      const betTop = y < 0 ? 24 - y * 5 : 61 + y * 8.5
+      return <Fragment key={seat.seat}>
+        {amount > 0 && <div role="img" aria-label={amountLabel} title={amountLabel} className="seat-chips" style={{ '--bet-x': x, '--top': betTop + '%' } as CSSProperties}>
+          <ChipStack count={Math.min(5, chipLayers(amount, blindCents))} color={awards ? 'ivory' : 'red'} />
+          <span className="seat-chip-amount">{awards && '+'}{chips(amount)}</span>
+        </div>}
+        <div className={'table-seat' + (seat.folded ? ' folded' : '') + (active === seat.seat ? ' acting' : '')} style={{ '--left': (50 + x * 41) + '%', '--top': (50 + y * 36) + '%' } as CSSProperties}>
+          <div className="hole-cards"><PlayingCard card={seat.hole[0]} back /><PlayingCard card={seat.hole[1]} back /></div>
+          <div className="seat-info"><strong title={seat.name}>{seat.name}</strong><span title={seat.folded ? 'Folded' : seat.remaining ? 'Stack' : 'All-in'}>{chips(seat.remaining)}</span>
+            {seat.seat === button && <span className="dealer-chip" aria-label="Dealer button" title="Dealer button">D</span>}
+          </div>
         </div>
-      </div>
+      </Fragment>
     })}
   </div>
 }
@@ -198,7 +217,7 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
           <div><h2>{title.trim() || 'Untitled hand'}</h2><p>{source === 'sample' && 'Sample hand · '}{hand.smallBlind} / {hand.bigBlind} blinds · {hand.players.length} players</p></div>
           <button className="button small edit-button" onClick={editHand} disabled={busy}>Edit hand</button>
         </div>
-        <Table frame={frame} button={hand.button} />
+        <Table frame={frame} button={hand.button} bigBlind={hand.bigBlind} />
         {frame && frame.pots.length > 1 && <div className="pot-breakdown">{frame.pots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
         {!!frame?.awards?.length && <div className="pot-breakdown">{frame.awards.map(award => <span key={award.seat}>{hand.players.find(player => player.seat === award.seat)?.name} wins <strong>{chips(award.amount)}</strong></span>)}</div>}
         <div className="replay-controls">
