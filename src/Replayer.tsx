@@ -219,8 +219,6 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
           <button className="button small edit-button" onClick={editHand} disabled={busy}>Edit hand</button>
         </div>
         <Table frame={frame} button={hand.button} bigBlind={hand.bigBlind} />
-        {frame && frame.pots.length > 1 && <div className="pot-breakdown">{frame.pots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
-        {!!frame?.awards?.length && <div className="pot-breakdown">{frame.awards.map(award => <span key={award.seat}>{hand.players.find(player => player.seat === award.seat)?.name} wins <strong>{chips(award.amount)}</strong></span>)}</div>}
         <div className="replay-controls">
           <div className="transport">
             <button className="icon-button" aria-label="Restart replay" title="Restart replay" onClick={() => seek(0)} disabled={!index}><RotateCcw size={17} /></button>
@@ -234,6 +232,8 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
           const destination = frames.findIndex(frame => frame.street === id)
           return <button key={street} className={frame?.street === id ? 'current' : ''} aria-pressed={frame?.street === id} disabled={destination < 0} onClick={() => seek(destination)}>{street}</button>
         })}</div>
+        {frame && frame.pots.length > 1 && <div className="pot-breakdown">{frame.pots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
+        {!!frame?.awards?.length && <div className="pot-breakdown">{frame.awards.map(award => <span key={award.seat}>{hand.players.find(player => player.seat === award.seat)?.name} wins <strong>{chips(award.amount)}</strong></span>)}</div>}
       </section>
       <ReplayHistory frames={frames} index={index} seek={seek} />
     </div>
