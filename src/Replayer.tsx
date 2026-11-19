@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
-import { BookOpen, ChevronLeft, ChevronRight, CircleHelp, ClipboardList, FileText, FolderOpen, LockKeyhole, Pause, Pencil, Play, Plus, RotateCcw, Save, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Pause, Play, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { HandEditor } from './HandEditor.tsx'
 import { handLibrary, supabase, type SavedHand } from './library.ts'
 import { PlayingCard } from './PlayingCard.tsx'
@@ -15,7 +15,7 @@ function Table({ frame, button }: { frame: Frame | undefined; button: number }) 
   return <div className="table-stage" aria-label="Replay table">
     <div className="table-rail"><div className="table-felt" /></div>
     <div className="table-center">
-      <div className="pot-total"><span>{frame.awards ? 'TOTAL POT' : 'POT'}</span><strong>{chips(pot)}</strong></div>
+      <div className="pot-total"><span>{frame.awards ? 'Total pot' : 'Pot'}</span><strong>{chips(pot)}</strong></div>
       <div className="board-cards">{Array.from({ length: 5 }, (_, index) => <PlayingCard key={index} card={board[index]} />)}</div>
       <span className="felt-street">{streets[street]}</span>
     </div>
@@ -46,14 +46,14 @@ function ReplayHistory({ frames, index, seek }: { frames: Frame[]; index: number
     if (item.top < outer.top) container.scrollTop -= outer.top - item.top + 10
   }, [index, frames])
   return <aside className="panel history-panel">
-    <div className="section-head history-head"><h2><ClipboardList size={18} /> Action history</h2><span className="event-count">{frames.length}</span></div>
+    <div className="history-head"><h2>Action history</h2></div>
     <div className="history-scroll" ref={scroll}>
       {!frames.length && <p className="history-empty">Actions will appear here as you record the hand.</p>}
       <ol className="history-list">
         {frames.map((frame, step) => <li key={step}>
           {(!step || frame.street !== frames[step - 1].street) && <div className="history-street">{streets[frame.street]}</div>}
           <button className={'history-step' + (step === index ? ' selected' : '')} ref={step === index ? selected : null} aria-current={step === index ? 'step' : undefined} onClick={() => seek(step)}>
-            <span className="step-dot" /><span>{frame.label}</span><span className="step-pot">{chips(frame.pot)}</span>
+            <span>{frame.label}</span><span className="step-pot">{chips(frame.pot)}</span>
           </button>
         </li>)}
       </ol>
@@ -185,15 +185,18 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
 
   return <>
     <div className="tool-heading">
-      <div><div className="eyebrow"><span /> NO-LIMIT TEXAS HOLD’EM</div><h1>Hand Replayer</h1><p>Review your hands, one decision at a time.</p></div>
-      <div className="heading-actions"><button className="button" onClick={() => load()} disabled={busy}><BookOpen size={17} /> Sample hand</button><button className="button primary" onClick={() => { load(undefined, true); editHand() }} disabled={busy}><Plus size={19} /> New hand</button></div>
+      <h1>Hand Replayer</h1>
+      <div className="heading-actions">
+        {(source !== 'sample' || hand !== sampleHand || title !== sampleTitle) && <button className="button text-button" onClick={() => load()} disabled={busy}>Sample hand</button>}
+        <button className="button primary" onClick={() => { load(undefined, true); editHand() }} disabled={busy}><Plus size={18} /> New hand</button>
+      </div>
     </div>
 
     <div className="replay-layout">
       <section className="panel replay-panel">
         <div className="section-head replay-head">
-          <div><div className="hand-title"><h2>{title.trim() || 'Untitled hand'}</h2>{source === 'sample' && <span className="pill">Sample</span>}</div><p>{hand.smallBlind} / {hand.bigBlind} blinds <span className="separator">·</span> {hand.players.length} players</p></div>
-          <button className="button small edit-button" onClick={editHand} disabled={busy}><Pencil size={15} /> Edit hand</button>
+          <div><h2>{title.trim() || 'Untitled hand'}</h2><p>{source === 'sample' && 'Sample hand · '}{hand.smallBlind} / {hand.bigBlind} blinds · {hand.players.length} players</p></div>
+          <button className="button small edit-button" onClick={editHand} disabled={busy}>Edit hand</button>
         </div>
         <Table frame={frame} button={hand.button} />
         {frame && frame.pots.length > 1 && <div className="pot-breakdown">{frame.pots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
@@ -219,29 +222,28 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
 
     <div className="review-layout">
       <section className="panel review-panel" id="library" ref={librarySection}>
-        <div className="section-head"><h2><FolderOpen size={18} /> Saved hands</h2>{userId && <button className="button text-button" disabled={busy} onClick={() => void run(signOut)}>Sign out</button>}</div>
+        <div className="section-head"><h2>Saved hands</h2>{userId && <button className="button text-button" disabled={busy} onClick={() => void run(signOut)}>Sign out</button>}</div>
         {!userId ? <>
-          <p><LockKeyhole size={15} /> Sign in to access your private hand library.</p>
           {supabase
             ? <form onSubmit={signIn} className="signin-form"><label>Email<input type="email" name="email" autoComplete="username" required /></label><label>Password<input type="password" name="password" autoComplete="current-password" required /></label><button className="button" disabled={busy}>Sign in</button></form>
-            : <div className="subtle-status"><CircleHelp size={15} /> Supabase setup is required to sign in.</div>}
+            : <div className="subtle-status">Supabase setup is required to sign in.</div>}
         </> : <>
           <p className="account-email">{email}</p>
           {loading && <p>Loading hands…</p>}
           {!loading && !saved.length && <p>Your saved hands will appear here.</p>}
           <ul className="saved-list">{saved.map(row => <li key={row.id}>
-            <button className={'button saved-entry' + (openId === row.id ? ' current' : '')} disabled={busy} onClick={() => { load(row); window.scrollTo({ top: 0 }) }}><FileText size={16} />{row.title}</button>
+            <button className={'button saved-entry' + (openId === row.id ? ' current' : '')} disabled={busy} onClick={() => { load(row); window.scrollTo({ top: 0 }) }}>{row.title}</button>
             {confirmDelete === row.id ? <div className="delete-actions"><button className="button small danger" disabled={busy} onClick={() => remove(row)}>Delete</button><button className="button small" disabled={busy} onClick={() => setConfirmDelete(null)}>Cancel</button></div> : <button className="icon-button" aria-label={'Delete ' + row.title} disabled={busy} onClick={() => setConfirmDelete(row.id)}><Trash2 size={16} /></button>}
           </li>)}</ul>
-          <button className="button primary" disabled={busy || loading} onClick={() => save()}><Save size={16} /> Save hand</button>
+          <button className="button primary" disabled={busy || loading} onClick={() => save()}>Save hand</button>
         </>}
         {problem && <p className="error" role="alert">{problem}</p>}
         {notice && <p className="success" role="status">{notice}</p>}
       </section>
       <section className="panel review-panel">
-        <div className="section-head"><h2><Pencil size={17} /> Hand notes</h2></div>
+        <div className="section-head"><h2>Hand notes</h2></div>
         <label className="notes-label"><span className="sr-only">Private hand notes</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="What stood out about this hand?" /></label>
-        {userId && openId ? <button className="button small" disabled={busy || !notesDirty} onClick={() => save(true)}><Save size={15} /> Save notes</button> : <p><LockKeyhole size={14} /> Notes are stored privately with a saved hand.</p>}
+        {userId && openId ? <button className="button small" disabled={busy || !notesDirty} onClick={() => save(true)}>Save notes</button> : <p>Notes are stored with your saved hand.</p>}
       </section>
     </div>
   </>

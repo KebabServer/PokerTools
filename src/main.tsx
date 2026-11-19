@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Calculator, Layers3, LockKeyhole, Spade } from 'lucide-react'
+import { Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
@@ -32,12 +32,12 @@ function App() {
 
   return <>
     <header className="site-header"><div className="site-inner">
-      <a className="brand" href="#replayer" aria-label="PokerTools home"><span className="brand-mark"><Spade size={19} fill="currentColor" /></span>Poker<span>Tools</span></a>
+      <a className="brand" href="#replayer" aria-label="PokerTools home"><Spade size={18} fill="currentColor" />PokerTools</a>
       <nav aria-label="Poker tools">
-        <a className={tool === 'replayer' ? 'active' : ''} aria-current={tool === 'replayer' ? 'page' : undefined} href="#replayer"><Layers3 size={17} /> Hand Replayer</a>
-        <a className={tool === 'equity' ? 'active' : ''} aria-current={tool === 'equity' ? 'page' : undefined} href="#equity"><Calculator size={17} /> Equity Calculator</a>
+        <a className={tool === 'replayer' ? 'active' : ''} aria-current={tool === 'replayer' ? 'page' : undefined} href="#replayer" aria-label="Hand Replayer">Replayer</a>
+        <a className={tool === 'equity' ? 'active' : ''} aria-current={tool === 'equity' ? 'page' : undefined} href="#equity" aria-label="Equity Calculator">Equity</a>
       </nav>
-      <button className="button library-link" onClick={() => { if (tool !== 'replayer') { window.location.hash = 'replayer'; setTool('replayer') }; requestLibrary(count => count + 1) }}><LockKeyhole size={15} /> <span>My library</span></button>
+      <button className="button library-link" onClick={() => { if (tool !== 'replayer') { window.location.hash = 'replayer'; setTool('replayer') }; requestLibrary(count => count + 1) }}>My library</button>
     </div></header>
     <main className="main-wrap">
       <div hidden={tool !== 'replayer'}><Replayer key={replayerKey} userId={session?.user.id} email={session?.user.email} libraryRequest={libraryRequest} signOut={async () => {
@@ -46,7 +46,6 @@ function App() {
       }} /></div>
       <div hidden={tool !== 'equity'}><EquityCalculator /></div>
     </main>
-    <footer className="footer"><span>PokerTools</span><span>No-Limit Texas Hold’em</span></footer>
   </>
 }
 
