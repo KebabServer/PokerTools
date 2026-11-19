@@ -39,7 +39,7 @@ function App() {
       </nav>
       <button className="button library-link" onClick={() => { if (tool !== 'replayer') { window.location.hash = 'replayer'; setTool('replayer') }; requestLibrary(count => count + 1) }}>My library</button>
     </div></header>
-    <main className="main-wrap">
+    <main className={tool === 'equity' ? 'main-wrap equity-view' : 'main-wrap'}>
       <div hidden={tool !== 'replayer'}><Replayer key={replayerKey} userId={session?.user.id} email={session?.user.email} libraryRequest={libraryRequest} signOut={async () => {
         const { error } = await supabase!.auth.signOut()
         if (error) throw error

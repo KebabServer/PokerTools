@@ -77,17 +77,19 @@ export function EquityCalculator() {
   }
 
   return <div className="equity-workspace">
-    <div className="tool-heading"><h1>Equity Calculator</h1></div>
-    <form className="panel equity-inputs" onSubmit={calculate}>
-      <div className="section-head"><h2>Hands</h2><button type="button" className="button small" disabled={running || players.length >= 10} onClick={() => {
+    <div className="tool-heading">
+      <h1>Equity Calculator</h1>
+      <button type="button" className="button small add-player" disabled={running || players.length >= 10} onClick={() => {
         clear()
         setFocused(players.length)
         setPlayers([...players, 'random'])
-      }}><Plus size={16} /> Add player</button></div>
-      <div className="range-list">
+      }}><Plus size={16} /> Add player</button>
+    </div>
+    <form className="panel equity-inputs" onSubmit={calculate}>
+      <div className={'range-list' + (players.length > 2 ? ' multiple-players' : '')}>
         {players.map((range, index) => <div className="range-row" key={index}>
           <label><span className="range-heading"><span>Player {index + 1}</span><span aria-hidden="true">{ranges[index] && countText.format(ranges[index].combos.length) + (ranges[index].combos.length === 1 ? ' combo' : ' combos')}</span></span>
-            <input aria-label={'Player ' + (index + 1)} id={'range-player-' + index} value={range} placeholder="AsKd or 77+, AJs+, KQo" onFocus={() => setFocused(index)} onChange={event => setRange(index, event.target.value)} autoComplete="off" spellCheck={false} disabled={running} />
+            <input aria-label={'Player ' + (index + 1)} id={'range-player-' + index} value={range} placeholder="AsKd or 77+" onFocus={() => setFocused(index)} onChange={event => setRange(index, event.target.value)} autoComplete="off" spellCheck={false} disabled={running} />
           </label>
           {players.length > 2 && <button type="button" className="icon-button" aria-label={'Remove player ' + (index + 1)} disabled={running} onClick={() => {
             clear()
@@ -97,16 +99,17 @@ export function EquityCalculator() {
         </div>)}
       </div>
       <div className="equity-board">
-        <label>Board cards <input placeholder="e.g. Ah 9d 4c" value={board} onChange={event => { clear(); setBoard(event.target.value) }} autoComplete="off" spellCheck={false} disabled={running} /></label>
-        <p className="field-hint">Leave blank for preflop.</p>
+        <div className="board-heading"><label htmlFor="board-cards">Board cards</label><span id="board-hint">Blank for preflop</span></div>
+        <input id="board-cards" aria-describedby="board-hint" placeholder="e.g. Ah 9d 4c" value={board} onChange={event => { clear(); setBoard(event.target.value) }} autoComplete="off" spellCheck={false} disabled={running} />
+      </div>
+      <div className="equity-actions">
         <details className="dead-card-options">
-          <summary><ChevronDown size={16} /> Dead cards{dead.trim() && ' · ' + dead.trim()}</summary>
+          <summary><ChevronDown size={16} /><span>Dead cards{dead.trim() && ' · ' + dead.trim()}</span></summary>
           <input aria-label="Dead cards" placeholder="e.g. 2h 7d" value={dead} onChange={event => { clear(); setDead(event.target.value) }} autoComplete="off" spellCheck={false} disabled={running} />
         </details>
-      </div>
-      <div className="calculation-actions">
-        <button className="button primary" disabled={running}>Calculate equity</button>
-        {running && <button type="button" className="button" onClick={() => { stop(); setStatus('Calculation canceled.') }}>Cancel</button>}
+        {running
+          ? <button type="button" className="button" onClick={event => { event.preventDefault(); stop(); setStatus('Calculation canceled.') }}>Cancel</button>
+          : <button type="submit" className="button primary">Calculate equity</button>}
       </div>
       {running && <div className="calculation-progress"><p role="status">Calculating equity…</p><progress aria-label="Calculation progress" max={1} value={progress || undefined} /></div>}
       {status && <p className="field-hint" role="status">{status}</p>}
