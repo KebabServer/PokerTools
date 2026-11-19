@@ -29,7 +29,8 @@ function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: 
       <div className="board-cards">{Array.from({ length: 5 }, (_, index) => <PlayingCard key={index} card={board[index]} />)}</div>
     </div>
     {seats.map((seat, index) => {
-      const angle = Math.PI / 2 - (index * 2 * Math.PI) / seats.length
+      // Screen coordinates increase downward, so increasing the angle moves clockwise.
+      const angle = Math.PI / 2 + (index * 2 * Math.PI) / seats.length
       const x = Math.cos(angle)
       const y = Math.sin(angle)
       const amount = awards ? (awards.find(award => award.seat === seat.seat)?.amount ?? 0) : seat.committed
