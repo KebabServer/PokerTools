@@ -113,15 +113,37 @@ nav a:not(.active):hover { color: #fff; }
 }
 .board-cards, .hole-cards { display: flex; gap: 5px; }
 .playing-card { width: 42px; height: 54px; border-radius: 6px; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; flex: 0 0 auto; }
-.card-face { color: #212121; background: #f5f5f5; border: 1px solid #fff9; box-shadow: 0 2px 5px #0004; font-size: 1.12rem; gap: 1px; }
-.card-face > span { font-size: .91em; }
-.suit-h, .suit-d { color: #a92f3f; }
+.card-face {
+  --rank-size: 1.95rem;
+  --watermark-size: 3.7rem;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  color: #fff;
+  background: var(--suit-color);
+  border: 1px solid #ffffff24;
+  box-shadow: 0 2px 4px #0005;
+}
+.card-rank { z-index: 1; font-size: var(--rank-size); font-weight: 800; text-shadow: 0 1px 2px #0005; }
+.card-watermark {
+  position: absolute;
+  right: -.12em;
+  bottom: -.11em;
+  color: #0007;
+  font: 400 var(--watermark-size)/1 Arial, "DejaVu Sans", sans-serif;
+  transform: rotate(-12deg);
+}
+.suit-s { --suit-color: #505153; }
+.suit-h { --suit-color: #b0192a; }
+.suit-d { --suit-color: #293aaf; }
+.suit-c { --suit-color: #087939; }
 .card-empty { border: 1px dashed #8bb7a893; background: #1e4037; }
 .card-back { color: #d0d0d0; border: 1px solid #686868; background: #393939; font-size: .89rem; }
 .table-seat { position: absolute; left: var(--left); top: var(--top); transform: translate(-50%, -50%); display: grid; justify-items: center; width: 105px; }
 .table-seat.folded { opacity: .68; }
 .hole-cards { margin-bottom: -3px; }
 .hole-cards .playing-card { width: 30px; height: 36px; border-radius: 4px; font-size: .86rem; }
+.hole-cards .card-face { --rank-size: 1.3rem; --watermark-size: 2.6rem; }
 .seat-info { position: relative; text-align: center; width: 100%; padding: 5px 6px; background: #252525; border: 1px solid #555; border-radius: 8px; line-height: 1.15; box-shadow: 0 3px 8px #1115; }
 .seat-info strong, .seat-info > span:not(.dealer-chip) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seat-info strong { font-size: .79rem; }
@@ -223,6 +245,8 @@ input::placeholder, textarea::placeholder { color: #9a9a9a; opacity: 1; }
   .hole-cards .playing-card { width: 23px; height: 30px; font-size: .75rem; }
   .board-cards { gap: 3px; }
   .board-cards .playing-card { width: clamp(24px, 7.7vw, 36px); height: 39px; font-size: .93rem; }
+  .board-cards .card-face { --rank-size: clamp(1.25rem, 5.35vw, 1.55rem); --watermark-size: clamp(2.1rem, 9.6vw, 2.75rem); }
+  .hole-cards .card-face { --rank-size: 1.08rem; --watermark-size: 2.05rem; }
   .replay-controls { gap: 8px; margin: 3px 11px 10px; }
   .transport { gap: 3px; }
   .progress-control { gap: 4px; }
