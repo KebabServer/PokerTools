@@ -1,0 +1,9 @@
+project_id = "pokertools"
+
+[auth]
+site_url = "http://localhost:5173/PokerTools/"
+enable_signup = false
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = false
