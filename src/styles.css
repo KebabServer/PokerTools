@@ -111,7 +111,12 @@ p { color: var(--muted); line-height: 1.5; }
   font-variant-numeric: tabular-nums;
 }
 .seat-chip-amount > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.seat-chip-size { color: #b5d6c8; font-size: .62rem; }
+.seat-chip-size { padding-inline: 2px; border-radius: 2px; color: #fff; font-size: .62rem; }
+.wager-call { background: #227444; }
+.wager-small { background: #a64b08; }
+.wager-medium { background: #b82432; }
+.wager-overbet { background: #693898; }
+.wager-raise { background: #FF14FF; color: #210020; }
 .board-cards, .hole-cards { display: flex; gap: 5px; }
 .playing-card { width: 42px; height: 54px; border-radius: 6px; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; flex: 0 0 auto; }
 .card-face {

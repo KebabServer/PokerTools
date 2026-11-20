@@ -10,17 +10,23 @@ test('postflop sizing uses the pot before a bet and the pot after the call for a
     actions: [{ street: 0, seat: 1, type: 'raise', amount: 18 }, { street: 0, seat: 2, type: 'call' }],
   }
   const bet = replay({ ...start, actions: [...start.actions, { street: 1, seat: 2, type: 'bet', amount: 72 }] })
-  assert.equal(bet.frames[1].seats[0].wagerSize, undefined)
-  assert.deepEqual(bet.frames.at(-1).seats[1].wagerSize, { kind: 'bet', percent: 200 })
+  assert.equal(bet.frames[1].seats[0].wager, undefined)
+  assert.deepEqual(bet.frames.at(-1).seats[1].wager, { kind: 'bet', percent: 200 })
+  for (const amount of [14.4, 14.41, 36, 36.01]) {
+    const sized = replay({ ...start, actions: [...start.actions, { street: 1, seat: 2, type: 'bet', amount }] })
+    assert.equal(sized.frames.at(-1).seats[1].wager.percent, Math.round(amount * 100) / 36)
+  }
   const raised = replay({ ...start, actions: [
     ...start.actions,
     { street: 1, seat: 2, type: 'bet', amount: 12 },
     { street: 1, seat: 1, type: 'raise', amount: 42 },
     { street: 1, seat: 2, type: 'call' },
   ] })
-  assert.deepEqual(raised.frames.at(-3).seats[0].wagerSize, { kind: 'raise', percent: 50 })
-  assert.equal(raised.frames.at(-2).seats[1].wagerSize, undefined)
-  assert.ok(raised.frames.at(-1).seats.every(seat => !seat.wagerSize))
+  assert.deepEqual(raised.frames.at(-3).seats[0].wager, { kind: 'raise', percent: 50 })
+  assert.deepEqual(raised.frames.at(-2).seats[1].wager, { kind: 'call' })
+  assert.ok(raised.frames.at(-1).seats.every(seat => !seat.wager))
+  const allInCall = replay(sampleHand).frames.find(frame => frame.label === 'Alex goes all-in for 163')
+  assert.deepEqual(allInCall.seats.find(seat => seat.name === 'Alex').wager, { kind: 'call' })
 })
 
 test('the displayed pot stays at 40 while a 30-chip flop bet and call sit at the seats', () => {

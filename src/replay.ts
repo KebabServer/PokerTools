@@ -16,8 +16,8 @@ export type Hand = {
   actions: Action[]
 }
 
-type WagerSize = { kind: 'bet' | 'raise'; percent: number }
-type Seat = Player & { remaining: number; committed: number; invested: number; folded: boolean; hole: number[]; actedAt: number | null; wagerSize?: WagerSize }
+type Wager = { kind: 'call' } | { kind: 'bet' | 'raise'; percent: number }
+type Seat = Player & { remaining: number; committed: number; invested: number; folded: boolean; hole: number[]; actedAt: number | null; wager?: Wager }
 type Pot = { amount: number; eligible: number[] }
 export type Frame = {
   street: number
@@ -154,7 +154,7 @@ export function replay(hand: Hand): Replay {
       first.committed -= excess
       first.invested -= excess
       first.remaining += excess
-      first.wagerSize = undefined
+      first.wager = undefined
       snapshot(first.name + ' receives ' + chips(excess) + ' uncalled')
     }
 
@@ -166,7 +166,7 @@ export function replay(hand: Hand): Replay {
       const callTarget = otherCanBet ? target : Math.max(0, ...live().filter(player => player !== seat).map(player => player.committed))
       const owed = Math.max(0, callTarget - seat.committed)
       let paid = 0
-      let wagerSize: WagerSize | undefined
+      let wager: Wager | undefined
       if (action.type === 'fold') seat.folded = true
       if (action.type === 'check' && owed) throw new Error(seat.name + ' is facing a bet and cannot check.')
       if (action.type === 'call') {
@@ -188,7 +188,7 @@ export function replay(hand: Hand): Replay {
           // A pot-sized raise adds the call to the pot before sizing the raise above that call.
           const potAfterCall = frames[frames.length - 1].pot + owed
           if (street > 0 && potAfterCall > 0) {
-            wagerSize = { kind: target ? 'raise' : 'bet', percent: Math.round(100 * increment / potAfterCall) }
+            wager = { kind: target ? 'raise' : 'bet', percent: 100 * increment / potAfterCall }
           }
           if (full) minRaise = increment
           target = total
@@ -197,7 +197,7 @@ export function replay(hand: Hand): Replay {
         }
       }
       contribute(seat, paid)
-      seat.wagerSize = wagerSize
+      seat.wager = street > 0 && paid > 0 && paid <= owed ? { kind: 'call' } : wager
       seat.actedAt = target
       cursor = seat.seat
       const descriptions: Record<ActionType, string> = {
@@ -255,7 +255,7 @@ export function replay(hand: Hand): Replay {
       target = 0
       minRaise = bb
       cursor = hand.button
-      seats.forEach(seat => { seat.committed = 0; seat.actedAt = null; seat.wagerSize = undefined })
+      seats.forEach(seat => { seat.committed = 0; seat.actedAt = null; seat.wager = undefined })
       collectedPots = potLayers(seats)
       snapshot(streets[street] + ' dealt')
     }

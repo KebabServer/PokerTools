@@ -35,16 +35,20 @@ function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: 
       const y = Math.sin(angle)
       const amount = awards ? (awards.find(award => award.seat === seat.seat)?.amount ?? 0) : seat.committed
       const amountLabel = seat.name + (awards ? ' won ' : ' committed ') + chips(amount)
-      const size = awards ? undefined : seat.wagerSize
-      const sizeLabel = size ? (size.kind === 'bet' ? 'Bet ' : 'Raise ') + size.percent + '% of pot' : undefined
+      const wager = awards ? undefined : seat.wager
+      const wagerText = wager?.kind === 'call' ? 'Call' : wager && (wager.kind === 'bet' ? 'B' : 'R') + Math.round(wager.percent)
+      const wagerDescription = wager?.kind === 'call' ? 'Call' : wager && (wager.kind === 'bet' ? 'Bet ' : 'Raise ') + Math.round(wager.percent) + '% of pot'
+      const wagerColor = wager?.kind === 'bet'
+        ? (wager.percent <= 40 ? 'small' : wager.percent <= 100 ? 'medium' : 'overbet')
+        : wager?.kind
       // Leave the board lane clear and keep chips on the felt in front of their seats.
       const betTop = y < 0 ? 24 - y * 5 : 61 + y * 8.5
       return <Fragment key={seat.seat}>
-        {amount > 0 && <div role="img" aria-label={amountLabel} aria-description={sizeLabel} title={sizeLabel ? amountLabel + ' · ' + sizeLabel : amountLabel} className="seat-chips" style={{ '--bet-x': x, '--top': betTop + '%' } as CSSProperties}>
+        {amount > 0 && <div role="img" aria-label={amountLabel} aria-description={wagerDescription} title={wagerDescription ? amountLabel + ' · ' + wagerDescription : amountLabel} className="seat-chips" style={{ '--bet-x': x, '--top': betTop + '%' } as CSSProperties}>
           <ChipStack count={Math.min(5, chipLayers(amount, blindCents))} color={awards ? 'ivory' : 'red'} />
           <span className="seat-chip-amount">
             <span>{awards && '+'}{chips(amount)}</span>
-            {size && <span className="seat-chip-size">{size.kind === 'bet' ? 'B' : 'R'}{size.percent}</span>}
+            {wagerText && <span className={'seat-chip-size wager-' + wagerColor}>{wagerText}</span>}
           </span>
         </div>}
         <div className={'table-seat' + (seat.folded ? ' folded' : '') + (active === seat.seat ? ' acting' : '')} style={{ '--left': (50 + x * 41) + '%', '--top': (50 + y * 36) + '%' } as CSSProperties}>
