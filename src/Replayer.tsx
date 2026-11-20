@@ -1,14 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { ChevronLeft, ChevronRight, Pause, Play, Plus, RotateCcw } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Pause, Play, Plus, RotateCcw } from 'lucide-react'
 import { HandEditor } from './HandEditor.tsx'
 import { handLibrary, type SavedHand } from './library.ts'
 import { PlayingCard } from './PlayingCard.tsx'
 import { chipLayers, ChipStack, PotChips } from './PokerChips.tsx'
-import { chips, replay, streets, type Frame } from './replay.ts'
+import { chips, openingReplayStep, replay, streets, type Frame } from './replay.ts'
 import { emptyHand, sampleHand } from './sample.ts'
 
 const sampleTitle = 'Set over set'
-const sampleStart = replay(sampleHand).frames.findIndex(frame => frame.street === 1)
 
 function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: number; bigBlind: number }) {
   if (!frame) return <div className="table-fallback">Complete table setup to preview this hand.</div>
@@ -53,10 +52,13 @@ function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: 
   </div>
 }
 
-function ReplayHistory({ frames, index, seek }: { frames: Frame[]; index: number; seek: (index: number) => void }) {
+function ReplayHistory({ frames, index, seek, open, setOpen }: {
+  frames: Frame[]; index: number; seek: (index: number) => void; open: boolean; setOpen: (open: boolean) => void
+}) {
   const selected = useRef<HTMLButtonElement>(null)
   const scroll = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    if (!open) return
     const button = selected.current
     const container = scroll.current
     if (!button || !container) return
@@ -64,9 +66,9 @@ function ReplayHistory({ frames, index, seek }: { frames: Frame[]; index: number
     const outer = container.getBoundingClientRect()
     if (item.bottom > outer.bottom) container.scrollTop += item.bottom - outer.bottom + 10
     if (item.top < outer.top) container.scrollTop -= outer.top - item.top + 10
-  }, [index, frames])
-  return <aside className="panel history-panel">
-    <div className="history-head"><h2>Action history</h2></div>
+  }, [index, frames, open])
+  return <details className="panel history-panel" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary className="history-head"><ChevronDown size={17} aria-hidden="true" /><h2>Action history</h2></summary>
     <div className="history-scroll" ref={scroll}>
       {!frames.length && <p className="history-empty">Actions will appear here as you record the hand.</p>}
       <ol className="history-list">
@@ -78,7 +80,7 @@ function ReplayHistory({ frames, index, seek }: { frames: Frame[]; index: number
         </li>)}
       </ol>
     </div>
-  </aside>
+  </details>
 }
 
 export function Replayer({ userId, initialHand, deletedHandId }: {
@@ -90,18 +92,21 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
   const [openId, setOpenId] = useState(initialHand?.id ?? null)
   const [savedNotes, setSavedNotes] = useState(initialHand?.notes ?? '')
   const [source, setSource] = useState<'sample' | 'draft' | 'saved'>(initialHand ? 'saved' : 'sample')
-  const [step, setStep] = useState(initialHand ? 0 : sampleStart)
+  const [step, setStep] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [notice, setNotice] = useState('')
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(false)
   const result = useMemo(() => replay(hand), [hand])
   const { frames } = result
   const last = Math.max(0, frames.length - 1)
-  const index = Math.min(step, last)
+  const index = Math.min(step ?? openingReplayStep(frames), last)
   const frame = frames[index]
   const notesDirty = savedNotes !== notes
+  const hasPotDetails = frames.some(item => item.pots.length > 1 || item.awards?.length)
+  const showsPotDetails = frame && (frame.pots.length > 1 || !!frame.awards?.length)
 
   useEffect(() => {
     if (openId && openId === deletedHandId) {
@@ -132,9 +137,10 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
     setSavedNotes('')
     setHand(blank ? emptyHand : sampleHand)
     setSource(blank ? 'draft' : 'sample')
-    setStep(blank ? 0 : sampleStart)
+    setStep(null)
     setPlaying(false)
     setEditing(blank)
+    setHistoryOpen(false)
     setNotice('')
     setProblem('')
   }
@@ -171,14 +177,7 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
   }
 
   return <>
-    <div className="tool-heading">
-      <h1>Hand Replayer</h1>
-      <div className="heading-actions">
-        {(source !== 'sample' || hand !== sampleHand || title !== sampleTitle) && <button className="button text-button" onClick={() => load()} disabled={busy}>Sample hand</button>}
-        <button className="button primary" onClick={() => { load(true); editHand() }} disabled={busy}><Plus size={18} /> New hand</button>
-      </div>
-    </div>
-
+    <h1 className="sr-only">Hand Replayer</h1>
     <div className="replay-layout">
       <section className="panel replay-panel">
         <div className="section-head replay-head">
@@ -199,25 +198,31 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
           const destination = frames.findIndex(frame => frame.street === id)
           return <button key={street} className={frame?.street === id ? 'current' : ''} aria-pressed={frame?.street === id} disabled={destination < 0} onClick={() => seek(destination)}>{street}</button>
         })}</div>
-        {frame && frame.pots.length > 1 && <div className="pot-breakdown">{frame.pots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
-        {!!frame?.awards?.length && <div className="pot-breakdown">{frame.awards.map(award => <span key={award.seat}>{hand.players.find(player => player.seat === award.seat)?.name} wins <strong>{chips(award.amount)}</strong></span>)}</div>}
+        {hasPotDetails && <div className="replay-pot-details" role="region" aria-label="Pot details" aria-hidden={!showsPotDetails} tabIndex={showsPotDetails ? 0 : undefined}>
+          {frame && frame.pots.length > 1 && <div className="pot-breakdown">{frame.pots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
+          {!!frame?.awards?.length && <div className="pot-breakdown">{frame.awards.map(award => <span key={award.seat}>{hand.players.find(player => player.seat === award.seat)?.name} wins <strong>{chips(award.amount)}</strong></span>)}</div>}
+        </div>}
       </section>
-      <ReplayHistory frames={frames} index={index} seek={seek} />
+      <section className="panel review-panel hand-review">
+        <h2>Hand notes</h2>
+        <label className="notes-label"><span className="sr-only">Private hand notes</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="What stood out about this hand?" /></label>
+        <div className="save-actions main-hand-actions">
+          <button className="button small" onClick={() => { load(true); editHand() }} disabled={busy}><Plus size={16} /> New hand</button>
+          {userId
+            ? <button className="button small primary" disabled={busy} onClick={() => void save()}>Save hand</button>
+            : <a className="button small" href="#library" aria-label="Sign in to save hand">Sign in to save</a>}
+        </div>
+        <div className="save-actions secondary-hand-actions">
+          {userId && openId && <button className="button" disabled={busy || !notesDirty} onClick={() => void save(true)}>Save notes</button>}
+          {(source !== 'sample' || hand !== sampleHand || title !== sampleTitle) && <button className="button text-button" onClick={() => { load(); window.scrollTo(0, 0) }} disabled={busy}>Sample hand</button>}
+        </div>
+        {problem && <p className="error" role="alert">{problem}</p>}
+        {notice && <p className="success" role="status">{notice}</p>}
+      </section>
     </div>
 
     {editing && <HandEditor hand={hand} title={title} result={result} setTitle={setTitle} setHand={updated => { setHand(updated); setPlaying(false); setStep(Number.MAX_SAFE_INTEGER) }} close={() => setEditing(false)} />}
 
-    <section className="panel review-panel hand-review">
-      <h2>Hand notes</h2>
-      <label className="notes-label"><span className="sr-only">Private hand notes</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="What stood out about this hand?" /></label>
-      <div className="save-actions">
-        {userId
-          ? <button className="button primary" disabled={busy} onClick={() => void save()}>Save hand</button>
-          : <a className="button" href="#library">Sign in to save hand</a>}
-        {userId && openId && <button className="button" disabled={busy || !notesDirty} onClick={() => void save(true)}>Save notes</button>}
-      </div>
-      {problem && <p className="error" role="alert">{problem}</p>}
-      {notice && <p className="success" role="status">{notice}</p>}
-    </section>
+    <ReplayHistory frames={frames} index={index} seek={seek} open={historyOpen} setOpen={setHistoryOpen} />
   </>
 }

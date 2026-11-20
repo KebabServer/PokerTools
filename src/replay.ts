@@ -38,6 +38,14 @@ export type Replay = {
 
 export const chips = (cents: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(cents / 100)
 
+export function openingReplayStep(frames: Frame[]) {
+  // Forced blinds and antes are already included in the first frame.
+  const firstVpip = frames.findIndex((frame, index) =>
+    index > 0 && frame.street === 0 && frame.pot > frames[index - 1].pot,
+  )
+  return Math.max(0, firstVpip - 1)
+}
+
 function money(value: number) {
   const cents = Math.round(value * 100)
   if (!Number.isSafeInteger(cents) || cents < 0 || cents > 1e12 || Math.abs(value * 100 - cents) > 0.0001) {

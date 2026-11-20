@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { replay } from '../src/replay.ts'
+import { openingReplayStep, replay } from '../src/replay.ts'
 import { emptyHand, sampleHand } from '../src/sample.ts'
+
+test('a loaded hand starts with the first voluntary preflop player next to act', () => {
+  const { frames } = replay(sampleHand)
+  const start = openingReplayStep(frames)
+  assert.equal(frames[start].active, 6)
+  assert.equal(frames[start].pot, 300)
+  assert.deepEqual(frames[start].seats.filter(seat => seat.folded).map(seat => seat.seat), [3, 4, 5])
+  assert.equal(frames[start + 1].label, 'Alex raises to 12')
+
+  const walk = replay({ ...emptyHand, ante: 1, actions: [{ street: 0, seat: 1, type: 'fold' }] })
+  assert.equal(openingReplayStep(walk.frames), 0)
+  const limp = replay({ ...emptyHand, ante: 1, actions: [{ street: 0, seat: 1, type: 'call' }] })
+  assert.equal(openingReplayStep(limp.frames), 0)
+})
 
 test('sample refunds unmatched chips and reconstructs both pots through backward seeks', () => {
   const result = replay(sampleHand)
