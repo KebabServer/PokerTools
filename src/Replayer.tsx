@@ -150,6 +150,12 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
     requestAnimationFrame(() => document.getElementById('hand-editor')?.scrollIntoView({ block: 'start' }))
   }
 
+  function newHand() {
+    if (!window.confirm('Start a new hand? Any unsaved changes to the current hand will be lost.')) return
+    load(true)
+    editHand()
+  }
+
   async function save(notesOnly = false) {
     if (!userId || busy || (notesOnly && !openId)) return
     if (!notesOnly && (!result.complete || !title.trim())) {
@@ -182,7 +188,10 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
       <section className="panel replay-panel">
         <div className="section-head replay-head">
           <div><h2>{title.trim() || 'Untitled hand'}</h2><p>{source === 'sample' && 'Sample hand · '}{hand.smallBlind} / {hand.bigBlind} blinds · {hand.players.length} players</p></div>
-          <button className="button small edit-button" onClick={editHand} disabled={busy}>Edit hand</button>
+          <div className="replay-head-actions">
+            <button className="button small" onClick={editHand} disabled={busy}>Edit hand</button>
+            <button className="icon-button" onClick={newHand} disabled={busy} aria-label="New hand" title="New hand"><Plus size={19} aria-hidden="true" /></button>
+          </div>
         </div>
         <Table frame={frame} button={hand.button} bigBlind={hand.bigBlind} />
         <div className="replay-controls">
@@ -206,8 +215,7 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
       <section className="panel review-panel hand-review">
         <h2>Hand notes</h2>
         <label className="notes-label"><span className="sr-only">Private hand notes</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="What stood out about this hand?" /></label>
-        <div className="save-actions main-hand-actions">
-          <button className="button small" onClick={() => { load(true); editHand() }} disabled={busy}><Plus size={16} /> New hand</button>
+        <div className="save-actions">
           {userId
             ? <button className="button small primary" disabled={busy} onClick={() => void save()}>Save hand</button>
             : <a className="button small" href="#library" aria-label="Sign in to save hand">Sign in to save</a>}
