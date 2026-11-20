@@ -88,33 +88,8 @@ function RangeViewer({ presets }: { presets: PreflopPreset[] }) {
   }
 
   return <>
-    <div className="tool-heading preflop-heading">
-      <h1>Preflop Viewer</h1>
-      <label className="preflop-preset">Preset
-        <select aria-label="Range preset" value={presetIndex} onChange={event => setPreset(Number(event.target.value))}>
-          {presets.map((item, index) => <option key={item.name} value={index}>{item.name}</option>)}
-        </select>
-      </label>
-    </div>
     <div className="preflop-layout">
       <section className="panel preflop-chart" aria-label="Preflop range chart">
-        <div className="preflop-chart-controls">
-          <label>Spot
-            <select aria-label="Spot" value={spotId} onChange={event => setSpot(event.target.value)}>
-              {preflopSpotGroups.map(group => <optgroup key={group.label} label={group.label}>
-                {group.spots.map(spot => <option key={spot.id} value={spot.id}
-                  disabled={!preset.ranges.get(spot.id)?.length}>
-                  {spot.label}{group.label !== 'RFI' && ' · ' + group.label}
-                </option>)}
-              </optgroup>)}
-            </select>
-          </label>
-          <label>Hand
-            <select aria-label="Hand" value={handIndex} onChange={event => setHand(Number(event.target.value))}>
-              {preflopHands.map((name, index) => <option key={name} value={index}>{name}</option>)}
-            </select>
-          </label>
-        </div>
         <span className="sr-only" id="preflop-grid-keys">Use the arrow keys to select a starting hand.</span>
         <div className="preflop-hand-grid" role="group" ref={grid} aria-label="Starting hands" aria-describedby="preflop-grid-keys">
           {preflopHands.map((name, index) => <button className="preflop-cell" type="button" key={name}
@@ -124,27 +99,46 @@ function RangeViewer({ presets }: { presets: PreflopPreset[] }) {
             {name}
           </button>)}
         </div>
-        {selectedMix.length ? <ul className="preflop-actions" aria-label="Action frequencies for selected hand" aria-live="polite">
-          {selectedMix.map(({ label, color, frequency }) => <li key={label}>
-            <span className="preflop-swatch" style={{ backgroundColor: color }} aria-hidden="true" />
-            {label} <strong>{percent.format(frequency)}</strong>
-          </li>)}
-        </ul> : <p className="preflop-note" role="status">This preset has no range for the selected spot.</p>}
-        {total > 1.0005 && <p className="preflop-note">
-          The export totals {percent.format(total)} for {preflopHands[handIndex]}. The chart scales the colors to fit.
-        </p>}
       </section>
       <div className="preflop-positions">
         <SpotMatrix stage="4-bet" preset={preset} hand={handIndex} spotId={spotId} onChange={setSpot} />
         <SpotMatrix stage="3-bet" preset={preset} hand={handIndex} spotId={spotId} onChange={setSpot} />
-        <ul className="preflop-legend" aria-label="Position matrix colors">
-          {colorLegend.map(({ label, color }) => <li key={label}>
-            <span className="preflop-swatch" style={{ backgroundColor: color }} aria-hidden="true" />
-            {label}
-          </li>)}
-        </ul>
       </div>
     </div>
+    <div className="preflop-details">
+      {selectedMix.length ? <ul className="preflop-actions" aria-label="Action frequencies for selected hand" aria-live="polite">
+        {selectedMix.map(({ label, color, frequency }) => <li key={label}>
+          <span className="preflop-swatch" style={{ backgroundColor: color }} aria-hidden="true" />
+          {label} <strong>{percent.format(frequency)}</strong>
+        </li>)}
+      </ul> : <p className="preflop-note" role="status">This preset has no range for the selected spot.</p>}
+      {total > 1.0005 && <p className="preflop-note">
+        The export totals {percent.format(total)} for {preflopHands[handIndex]}. The chart scales the colors to fit.
+      </p>}
+    </div>
+    <div className="preflop-controls">
+      <label>Preset
+        <select aria-label="Range preset" value={presetIndex} onChange={event => setPreset(Number(event.target.value))}>
+          {presets.map((item, index) => <option key={item.name} value={index}>{item.name}</option>)}
+        </select>
+      </label>
+      <label>Spot
+        <select aria-label="Spot" value={spotId} onChange={event => setSpot(event.target.value)}>
+          {preflopSpotGroups.map(group => <optgroup key={group.label} label={group.label}>
+            {group.spots.map(spot => <option key={spot.id} value={spot.id}
+              disabled={!preset.ranges.get(spot.id)?.length}>
+              {spot.label}{group.label !== 'RFI' && ' · ' + group.label}
+            </option>)}
+          </optgroup>)}
+        </select>
+      </label>
+    </div>
+    <ul className="preflop-legend" aria-label="Position matrix colors">
+      {colorLegend.map(({ label, color }) => <li key={label}>
+        <span className="preflop-swatch" style={{ backgroundColor: color }} aria-hidden="true" />
+        {label}
+      </li>)}
+    </ul>
   </>
 }
 
@@ -170,7 +164,6 @@ export default function PreflopViewer() {
 
   return <div className="preflop-viewer">
     {presets ? <RangeViewer presets={presets} /> : <>
-      <div className="tool-heading"><h1>Preflop Viewer</h1></div>
       {presets === undefined ? <p role="status">Loading preflop ranges…</p> : <div className="preflop-load-error">
         <p className="error" role="alert">Couldn’t load the preflop ranges.</p>
         <button type="button" className="button" onClick={() => { setPresets(undefined); retry(count => count + 1) }}>Retry</button>
