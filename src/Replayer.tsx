@@ -4,25 +4,23 @@ import { HandEditor } from './HandEditor.tsx'
 import { handLibrary, type SavedHand } from './library.ts'
 import { PlayingCard } from './PlayingCard.tsx'
 import { chipLayers, ChipStack, PotChips } from './PokerChips.tsx'
-import { chips, openingReplayStep, replay, streets, type Frame } from './replay.ts'
+import { chips, openingReplayStep, potTotal, replay, streets, type Frame } from './replay.ts'
 import { emptyHand, sampleHand } from './sample.ts'
 
 const sampleTitle = 'Set over set'
 
 function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: number; bigBlind: number }) {
   if (!frame) return <div className="table-fallback">Complete table setup to preview this hand.</div>
-  const { seats, board, pot, active, awards } = frame
+  const { seats, board, collectedPots, active, awards } = frame
   const blindCents = Math.round(bigBlind * 100)
-  // The displayed total includes wagers. The center pile represents chips already swept in.
-  const chipsAtSeats = awards
-    ? awards.reduce((sum, award) => sum + award.amount, 0)
-    : seats.reduce((sum, seat) => sum + seat.committed, 0)
+  const pot = potTotal(collectedPots)
+  const paidOut = awards?.reduce((sum, award) => sum + award.amount, 0) ?? 0
 
   return <div className={'table-stage' + (seats.length > 6 ? ' many-seats' : '')} aria-label="Replay table">
     <div className="table-rail"><div className="table-felt" /></div>
     <div className="table-center">
       <div className="pot-display">
-        <PotChips amount={pot - chipsAtSeats} bigBlind={blindCents} />
+        <PotChips amount={pot - paidOut} bigBlind={blindCents} />
         <div className="pot-total"><span>{awards ? 'Total pot' : 'Pot'}</span><strong>{chips(pot)}</strong></div>
       </div>
       <div className="board-cards">{Array.from({ length: 5 }, (_, index) => <PlayingCard key={index} card={board[index]} />)}</div>
@@ -75,7 +73,7 @@ function ReplayHistory({ frames, index, seek, open, setOpen }: {
         {frames.map((frame, step) => <li key={step}>
           {(!step || frame.street !== frames[step - 1].street) && <div className="history-street">{streets[frame.street]}</div>}
           <button className={'history-step' + (step === index ? ' selected' : '')} ref={step === index ? selected : null} aria-current={step === index ? 'step' : undefined} onClick={() => seek(step)}>
-            <span>{frame.label}</span><span className="step-pot">{chips(frame.pot)}</span>
+            <span>{frame.label}</span><span className="step-pot">{chips(potTotal(frame.collectedPots))}</span>
           </button>
         </li>)}
       </ol>
@@ -105,8 +103,8 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
   const index = Math.min(step ?? openingReplayStep(frames), last)
   const frame = frames[index]
   const notesDirty = savedNotes !== notes
-  const hasPotDetails = frames.some(item => item.pots.length > 1 || item.awards?.length)
-  const showsPotDetails = frame && (frame.pots.length > 1 || !!frame.awards?.length)
+  const hasPotDetails = frames.some(item => item.collectedPots.length > 1 || item.awards?.length)
+  const showsPotDetails = frame && (frame.collectedPots.length > 1 || !!frame.awards?.length)
 
   useEffect(() => {
     if (openId && openId === deletedHandId) {
@@ -205,7 +203,7 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
           return <button key={street} className={frame?.street === id ? 'current' : ''} aria-pressed={frame?.street === id} disabled={destination < 0} onClick={() => seek(destination)}>{street}</button>
         })}</div>
         {hasPotDetails && <div className="replay-pot-details" role="region" aria-label="Pot details" aria-hidden={!showsPotDetails} tabIndex={showsPotDetails ? 0 : undefined}>
-          {frame && frame.pots.length > 1 && <div className="pot-breakdown">{frame.pots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
+          {frame && frame.collectedPots.length > 1 && <div className="pot-breakdown">{frame.collectedPots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
           {!!frame?.awards?.length && <div className="pot-breakdown">{frame.awards.map(award => <span key={award.seat}>{hand.players.find(player => player.seat === award.seat)?.name} wins <strong>{chips(award.amount)}</strong></span>)}</div>}
         </div>}
       </section>

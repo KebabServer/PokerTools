@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { openingReplayStep, replay } from '../src/replay.ts'
+import { openingReplayStep, potTotal, replay } from '../src/replay.ts'
 import { emptyHand, sampleHand } from '../src/sample.ts'
+
+test('the displayed pot stays at 40 while a 30-chip flop bet and call sit at the seats', () => {
+  const { frames } = replay({
+    ...emptyHand,
+    board: ['As 9h 4c', '8h', ''],
+    actions: [
+      { street: 0, seat: 1, type: 'raise', amount: 20 },
+      { street: 0, seat: 2, type: 'call' },
+      { street: 1, seat: 2, type: 'bet', amount: 30 },
+      { street: 1, seat: 1, type: 'call' },
+    ],
+  })
+  assert.deepEqual(frames.slice(-4).map(frame => [potTotal(frame.collectedPots), frame.pot]), [
+    [4000, 4000], [4000, 7000], [4000, 10000], [10000, 10000],
+  ])
+  assert.equal(frames.at(-3).seats[1].committed, 3000)
+})
 
 test('a loaded hand starts with the first voluntary preflop player next to act', () => {
   const { frames } = replay(sampleHand)
@@ -27,6 +44,8 @@ test('sample refunds unmatched chips and reconstructs both pots through backward
     { amount: 19000, eligible: [1, 6] },
   ])
   assert.equal(result.frames[before].pot, 43000)
+  assert.equal(potTotal(result.frames[before].collectedPots), 3600)
+  assert.deepEqual(result.frames[before + 1].collectedPots.map(pot => pot.amount), [24000, 19000])
   assert.equal(stack(before, 'Mina'), 2500)
   assert.deepEqual(result.frames.at(-1).awards, [{ seat: 6, amount: 43000 }])
   assert.equal(stack(result.frames.length - 1, 'Alex'), 43000)

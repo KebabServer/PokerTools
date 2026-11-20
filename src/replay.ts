@@ -24,6 +24,7 @@ export type Frame = {
   seats: Seat[]
   pot: number
   pots: Pot[]
+  collectedPots: Pot[]
   label: string
   active?: number
   awards?: { seat: number; amount: number }[]
@@ -37,6 +38,7 @@ export type Replay = {
 }
 
 export const chips = (cents: number) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(cents / 100)
+export const potTotal = (pots: Pot[]) => pots.reduce((sum, pot) => sum + pot.amount, 0)
 
 export function openingReplayStep(frames: Frame[]) {
   // Forced blinds and antes are already included in the first frame.
@@ -105,6 +107,7 @@ export function replay(hand: Hand): Replay {
     let board: number[] = []
     let target = bb
     let minRaise = bb
+    let collectedPots: Pot[]
     const blindOrder = clockwise(seats, hand.button)
     const small = seats.length === 2 ? blindOrder[1] : blindOrder[0]
     const big = seats.length === 2 ? blindOrder[0] : blindOrder[1]
@@ -126,7 +129,7 @@ export function replay(hand: Hand): Replay {
       const pots = potLayers(seats)
       frames.push({
         street, board: [...board], seats: seats.map(seat => ({ ...seat })),
-        pot: pots.reduce((sum, pot) => sum + pot.amount, 0), pots,
+        pot: potTotal(pots), pots, collectedPots: awards ? pots : collectedPots,
         label, active: awards ? undefined : nextSeat()?.seat, awards,
       })
     }
@@ -138,6 +141,7 @@ export function replay(hand: Hand): Replay {
     }
 
     if (ante) for (const seat of seats) contribute(seat, Math.min(seat.remaining, ante), true)
+    collectedPots = potLayers(seats)
     contribute(small, Math.min(sb, small.remaining))
     contribute(big, Math.min(bb, big.remaining))
     snapshot('Blinds posted' + (ante ? ' with antes' : ''))
@@ -226,7 +230,7 @@ export function replay(hand: Hand): Replay {
           })
         }
         const awards = [...payouts].map(([seat, amount]) => ({ seat, amount }))
-        const resolved = awards.reduce((sum, award) => sum + award.amount, 0) === pots.reduce((sum, pot) => sum + pot.amount, 0)
+        const resolved = awards.reduce((sum, award) => sum + award.amount, 0) === potTotal(pots)
         const label = winners.length === 1 ? winners[0].name + ' wins by folds' : resolved ? 'Showdown · pots awarded' : 'Showdown · unknown cards'
         // Keep pot amounts as the final hand summary while crediting determined winnings.
         for (const seat of seats) seat.remaining += payouts.get(seat.seat) ?? 0
@@ -243,6 +247,7 @@ export function replay(hand: Hand): Replay {
       minRaise = bb
       cursor = hand.button
       seats.forEach(seat => { seat.committed = 0; seat.actedAt = null })
+      collectedPots = potLayers(seats)
       snapshot(streets[street] + ' dealt')
     }
   } catch (error) {
