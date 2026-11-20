@@ -67,8 +67,8 @@ function ReplayHistory({ frames, index, seek, open, setOpen }: {
     if (item.bottom > outer.bottom) container.scrollTop += item.bottom - outer.bottom + 10
     if (item.top < outer.top) container.scrollTop -= outer.top - item.top + 10
   }, [index, frames, open])
-  return <details className="panel history-panel" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary className="history-head"><ChevronDown size={17} aria-hidden="true" /><h2>Action history</h2></summary>
+  return <details className="panel replay-disclosure history-panel" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary className="disclosure-head"><ChevronDown size={17} aria-hidden="true" /><h2>Action history</h2></summary>
     <div className="history-scroll" ref={scroll}>
       {!frames.length && <p className="history-empty">Actions will appear here as you record the hand.</p>}
       <ol className="history-list">
@@ -188,10 +188,7 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
       <section className="panel replay-panel">
         <div className="section-head replay-head">
           <div><h2>{title.trim() || 'Untitled hand'}</h2><p>{source === 'sample' && 'Sample hand · '}{hand.smallBlind} / {hand.bigBlind} blinds · {hand.players.length} players</p></div>
-          <div className="replay-head-actions">
-            <button className="button small" onClick={editHand} disabled={busy}>Edit hand</button>
-            <button className="icon-button" onClick={newHand} disabled={busy} aria-label="New hand" title="New hand"><Plus size={19} aria-hidden="true" /></button>
-          </div>
+          <button className="icon-button" onClick={newHand} disabled={busy} aria-label="New hand" title="New hand"><Plus size={19} aria-hidden="true" /></button>
         </div>
         <Table frame={frame} button={hand.button} bigBlind={hand.bigBlind} />
         <div className="replay-controls">
@@ -229,7 +226,10 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
       </section>
     </div>
 
-    {editing && <HandEditor hand={hand} title={title} result={result} setTitle={setTitle} setHand={updated => { setHand(updated); setPlaying(false); setStep(Number.MAX_SAFE_INTEGER) }} close={() => setEditing(false)} />}
+    <details id="hand-editor" className="panel replay-disclosure" open={editing} onToggle={event => setEditing(event.currentTarget.open)}>
+      <summary className="disclosure-head"><ChevronDown size={17} aria-hidden="true" /><h2>Edit hand</h2></summary>
+      {editing && <HandEditor hand={hand} title={title} result={result} setTitle={setTitle} setHand={updated => { setHand(updated); setPlaying(false); setStep(Number.MAX_SAFE_INTEGER) }} />}
+    </details>
 
     <ReplayHistory frames={frames} index={index} seek={seek} open={historyOpen} setOpen={setHistoryOpen} />
   </>

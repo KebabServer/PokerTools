@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, Plus, Trash2, X } from 'lucide-react'
+import { ChevronDown, Plus, Trash2 } from 'lucide-react'
 import { actionTypes, streets, type Action, type ActionType, type Hand, type Player, type Replay } from './replay.ts'
 
 const labels: Record<ActionType, string> = { fold: 'Fold', check: 'Check', call: 'Call', bet: 'Bet', raise: 'Raise to', 'all-in': 'All-in' }
@@ -23,8 +23,8 @@ function ActionTypeSelect({ value, onChange }: { value: ActionType; onChange: (t
   </select></label>
 }
 
-export function HandEditor({ hand, title, result, setHand, setTitle, close }: {
-  hand: Hand; title: string; result: Replay; setHand: (hand: Hand) => void; setTitle: (title: string) => void; close: () => void
+export function HandEditor({ hand, title, result, setHand, setTitle }: {
+  hand: Hand; title: string; result: Replay; setHand: (hand: Hand) => void; setTitle: (title: string) => void
 }) {
   const [type, setType] = useState<ActionType>('fold')
   const [amount, setAmount] = useState<number>()
@@ -57,8 +57,8 @@ export function HandEditor({ hand, title, result, setHand, setTitle, close }: {
     patch({ actions: hand.actions.map((action, position) => position === index ? { ...action, ...values } : action) })
   }
 
-  return <section id="hand-editor" className="panel editor">
-    <div className="section-head"><div><h2>Hand editor</h2><p>Set the table, enter known cards, then record actions in order.</p></div><button className="icon-button" aria-label="Close editor" onClick={close}><X size={19} /></button></div>
+  return <div className="editor">
+    <p>Set the table, enter known cards, then record actions in order.</p>
     <div className="editor-section">
       <h3>Table setup</h3>
       <div className="form-grid setup-grid">
@@ -126,5 +126,5 @@ export function HandEditor({ hand, title, result, setHand, setTitle, close }: {
       {result.missingBoard && <p className="field-hint">Enter the {streets[result.missingBoard].toLowerCase()} cards to continue.</p>}
       {result.complete && <p className="success" role="status">Hand is complete and ready to save.</p>}
     </div>
-  </section>
+  </div>
 }
