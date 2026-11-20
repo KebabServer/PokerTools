@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
-import { ChevronLeft, ChevronRight, Pause, Play, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { ChevronLeft, ChevronRight, Pause, Play, Plus, RotateCcw } from 'lucide-react'
 import { HandEditor } from './HandEditor.tsx'
-import { handLibrary, supabase, type SavedHand } from './library.ts'
+import { handLibrary, type SavedHand } from './library.ts'
 import { PlayingCard } from './PlayingCard.tsx'
 import { chipLayers, ChipStack, PotChips } from './PokerChips.tsx'
 import { chips, replay, streets, type Frame } from './replay.ts'
@@ -81,46 +81,35 @@ function ReplayHistory({ frames, index, seek }: { frames: Frame[]; index: number
   </aside>
 }
 
-export function Replayer({ userId, email, signOut, libraryRequest }: {
-  userId?: string; email?: string; signOut: () => Promise<void>; libraryRequest: number
+export function Replayer({ userId, initialHand, deletedHandId }: {
+  userId?: string; initialHand: SavedHand | null; deletedHandId: string | null
 }) {
-  const [hand, setHand] = useState(sampleHand)
-  const [title, setTitle] = useState(sampleTitle)
-  const [notes, setNotes] = useState('')
-  const [openId, setOpenId] = useState<string | null>(null)
-  const [source, setSource] = useState<'sample' | 'draft' | 'saved'>('sample')
-  const [step, setStep] = useState(sampleStart)
+  const [hand, setHand] = useState(initialHand?.hand_data ?? sampleHand)
+  const [title, setTitle] = useState(initialHand?.title ?? sampleTitle)
+  const [notes, setNotes] = useState(initialHand?.notes ?? '')
+  const [openId, setOpenId] = useState(initialHand?.id ?? null)
+  const [savedNotes, setSavedNotes] = useState(initialHand?.notes ?? '')
+  const [source, setSource] = useState<'sample' | 'draft' | 'saved'>(initialHand ? 'saved' : 'sample')
+  const [step, setStep] = useState(initialHand ? 0 : sampleStart)
   const [playing, setPlaying] = useState(false)
   const [editing, setEditing] = useState(false)
-  const [saved, setSaved] = useState<SavedHand[]>([])
-  const [loading, setLoading] = useState(Boolean(userId))
   const [notice, setNotice] = useState('')
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-  const librarySection = useRef<HTMLElement>(null)
-  const library = useMemo(() => userId ? handLibrary(userId) : null, [userId])
   const result = useMemo(() => replay(hand), [hand])
   const { frames } = result
   const last = Math.max(0, frames.length - 1)
   const index = Math.min(step, last)
   const frame = frames[index]
-  const cleanNotes = saved.find(row => row.id === openId)?.notes
-  const notesDirty = cleanNotes !== undefined && cleanNotes !== notes
+  const notesDirty = savedNotes !== notes
 
   useEffect(() => {
-    if (libraryRequest) librarySection.current?.scrollIntoView({ block: 'start' })
-  }, [libraryRequest])
-
-  useEffect(() => {
-    if (!library) return
-    let current = true
-    setLoading(true)
-    library.list().then(rows => { if (current) setSaved(rows) })
-      .catch(error => { if (current) setProblem(error.message) })
-      .finally(() => { if (current) setLoading(false) })
-    return () => { current = false }
-  }, [library])
+    if (openId && openId === deletedHandId) {
+      setOpenId(null)
+      setSource('draft')
+      setNotice('')
+    }
+  }, [openId, deletedHandId])
 
   useEffect(() => {
     if (!playing || index === last) return
@@ -136,18 +125,18 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
     setStep(Math.min(last, Math.max(0, next)))
   }
 
-  function load(row?: SavedHand, blank = false) {
-    setOpenId(row?.id ?? null)
-    setTitle(row?.title ?? (blank ? 'Untitled hand' : sampleTitle))
-    setNotes(row?.notes ?? '')
-    setHand(row?.hand_data ?? (blank ? emptyHand : sampleHand))
-    setSource(row ? 'saved' : blank ? 'draft' : 'sample')
-    setStep(row || blank ? 0 : sampleStart)
+  function load(blank = false) {
+    setOpenId(null)
+    setTitle(blank ? 'Untitled hand' : sampleTitle)
+    setNotes('')
+    setSavedNotes('')
+    setHand(blank ? emptyHand : sampleHand)
+    setSource(blank ? 'draft' : 'sample')
+    setStep(blank ? 0 : sampleStart)
     setPlaying(false)
     setEditing(blank)
     setNotice('')
     setProblem('')
-    setConfirmDelete(null)
   }
 
   function editHand() {
@@ -155,52 +144,30 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
     requestAnimationFrame(() => document.getElementById('hand-editor')?.scrollIntoView({ block: 'start' }))
   }
 
-  async function run(task: () => Promise<void>) {
-    setBusy(true)
-    setProblem('')
-    setNotice('')
-    try { await task() } catch (error) { setProblem((error as Error).message) }
-    finally { setBusy(false) }
-  }
-
-  async function signIn(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const data = new FormData(event.currentTarget)
-    await run(async () => {
-      const { error } = await supabase!.auth.signInWithPassword({ email: String(data.get('email')), password: String(data.get('password')) })
-      if (error) throw error
-    })
-  }
-
-  function save(notesOnly = false) {
-    if (!library || loading || busy) return
-    if (notesOnly && !openId) return
+  async function save(notesOnly = false) {
+    if (!userId || busy || (notesOnly && !openId)) return
     if (!notesOnly && (!result.complete || !title.trim())) {
       setProblem(!title.trim() ? 'Give your hand a title.' : 'Complete the hand before saving.')
       editHand()
       return
     }
-    void run(async () => {
+    setBusy(true)
+    setProblem('')
+    setNotice('')
+    try {
       const contents = { title: title.trim(), hand_data: hand }
       const values = notesOnly ? { notes } : openId ? contents : { ...contents, notes }
-      const row = await library.save(values, openId)
-      setSaved(rows => [row, ...rows.filter(item => item.id !== row.id)])
+      const row = await handLibrary(userId).save(values, openId)
       setOpenId(row.id)
+      setSavedNotes(row.notes)
       setSource('saved')
       if (!notesOnly) setTitle(row.title)
       setNotice(notesOnly ? 'Notes saved.' : 'Hand saved.')
-    })
-  }
-
-  function remove(row: SavedHand) {
-    if (!library || busy) return
-    void run(async () => {
-      await library.remove(row.id)
-      setSaved(rows => rows.filter(item => item.id !== row.id))
-      if (openId === row.id) load()
-      setConfirmDelete(null)
-      setNotice('Hand deleted.')
-    })
+    } catch (error) {
+      setProblem((error as Error).message)
+    } finally {
+      setBusy(false)
+    }
   }
 
   return <>
@@ -208,7 +175,7 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
       <h1>Hand Replayer</h1>
       <div className="heading-actions">
         {(source !== 'sample' || hand !== sampleHand || title !== sampleTitle) && <button className="button text-button" onClick={() => load()} disabled={busy}>Sample hand</button>}
-        <button className="button primary" onClick={() => { load(undefined, true); editHand() }} disabled={busy}><Plus size={18} /> New hand</button>
+        <button className="button primary" onClick={() => { load(true); editHand() }} disabled={busy}><Plus size={18} /> New hand</button>
       </div>
     </div>
 
@@ -240,31 +207,17 @@ export function Replayer({ userId, email, signOut, libraryRequest }: {
 
     {editing && <HandEditor hand={hand} title={title} result={result} setTitle={setTitle} setHand={updated => { setHand(updated); setPlaying(false); setStep(Number.MAX_SAFE_INTEGER) }} close={() => setEditing(false)} />}
 
-    <div className="review-layout">
-      <section className="panel review-panel" id="library" ref={librarySection}>
-        <div className="section-head"><h2>Saved hands</h2>{userId && <button className="button text-button" disabled={busy} onClick={() => void run(signOut)}>Sign out</button>}</div>
-        {!userId ? <>
-          {supabase
-            ? <form onSubmit={signIn} className="signin-form"><label>Email<input type="email" name="email" autoComplete="username" required /></label><label>Password<input type="password" name="password" autoComplete="current-password" required /></label><button className="button" disabled={busy}>Sign in</button></form>
-            : <div className="subtle-status">Supabase setup is required to sign in.</div>}
-        </> : <>
-          <p className="account-email">{email}</p>
-          {loading && <p>Loading hands…</p>}
-          {!loading && !saved.length && <p>Your saved hands will appear here.</p>}
-          <ul className="saved-list">{saved.map(row => <li key={row.id}>
-            <button className={'button saved-entry' + (openId === row.id ? ' current' : '')} disabled={busy} onClick={() => { load(row); window.scrollTo({ top: 0 }) }}>{row.title}</button>
-            {confirmDelete === row.id ? <div className="delete-actions"><button className="button small danger" disabled={busy} onClick={() => remove(row)}>Delete</button><button className="button small" disabled={busy} onClick={() => setConfirmDelete(null)}>Cancel</button></div> : <button className="icon-button" aria-label={'Delete ' + row.title} disabled={busy} onClick={() => setConfirmDelete(row.id)}><Trash2 size={16} /></button>}
-          </li>)}</ul>
-          <button className="button primary" disabled={busy || loading} onClick={() => save()}>Save hand</button>
-        </>}
-        {problem && <p className="error" role="alert">{problem}</p>}
-        {notice && <p className="success" role="status">{notice}</p>}
-      </section>
-      <section className="panel review-panel">
-        <div className="section-head"><h2>Hand notes</h2></div>
-        <label className="notes-label"><span className="sr-only">Private hand notes</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="What stood out about this hand?" /></label>
-        {userId && openId ? <button className="button small" disabled={busy || !notesDirty} onClick={() => save(true)}>Save notes</button> : <p>Notes are stored with your saved hand.</p>}
-      </section>
-    </div>
+    <section className="panel review-panel hand-review">
+      <h2>Hand notes</h2>
+      <label className="notes-label"><span className="sr-only">Private hand notes</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)} placeholder="What stood out about this hand?" /></label>
+      <div className="save-actions">
+        {userId
+          ? <button className="button primary" disabled={busy} onClick={() => void save()}>Save hand</button>
+          : <a className="button" href="#library">Sign in to save hand</a>}
+        {userId && openId && <button className="button" disabled={busy || !notesDirty} onClick={() => void save(true)}>Save notes</button>}
+      </div>
+      {problem && <p className="error" role="alert">{problem}</p>}
+      {notice && <p className="success" role="status">{notice}</p>}
+    </section>
   </>
 }

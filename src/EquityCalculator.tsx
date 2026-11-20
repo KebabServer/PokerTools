@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ChevronDown, Plus, Trash2 } from 'lucide-react'
 import type { EquityResult } from './equity.ts'
 import type { WorkerResponse } from './equity.worker.ts'
+import { calculationLibrary, type SavedCalculation } from './library.ts'
 import { gridHands, normalizeExactField, parseRange } from './ranges.ts'
 
 function rangeDetails(text: string) {
@@ -11,20 +12,28 @@ function rangeDetails(text: string) {
 const percent = (decimal: number) => (decimal * 100).toFixed(2) + '%'
 const countText = new Intl.NumberFormat('en-US')
 
-export function EquityCalculator() {
-  const [players, setPlayers] = useState(['AsKd', 'QQ'])
+export function EquityCalculator({ userId, initialCalculation, deletedCalculationId }: {
+  userId?: string; initialCalculation: SavedCalculation | null; deletedCalculationId: string | null
+}) {
+  const [players, setPlayers] = useState(initialCalculation?.input.players ?? ['AsKd', 'QQ'])
   const [focused, setFocused] = useState(1)
-  const [board, setBoard] = useState('')
-  const [dead, setDead] = useState('')
+  const [board, setBoard] = useState(initialCalculation?.input.board ?? '')
+  const [dead, setDead] = useState(initialCalculation?.input.dead ?? '')
   const [progress, setProgress] = useState<number | null>(null)
-  const [result, setResult] = useState<EquityResult | null>(null)
+  const [result, setResult] = useState<EquityResult | null>(initialCalculation?.result ?? null)
   const [problem, setProblem] = useState('')
   const [status, setStatus] = useState('')
+  const [saved, setSaved] = useState(initialCalculation)
+  const [title, setTitle] = useState('')
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saveBusy, setSaveBusy] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const worker = useRef<Worker | null>(null)
   useEffect(() => () => worker.current?.terminate(), [])
   const ranges = players.map(rangeDetails)
   const selected = ranges[focused]
   const running = progress !== null
+  const savedTitle = saved?.result === result && saved?.id !== deletedCalculationId ? saved?.title : undefined
 
   function stop() {
     worker.current?.terminate()
@@ -37,6 +46,24 @@ export function EquityCalculator() {
     setResult(null)
     setProblem('')
     setStatus('')
+    setSaveOpen(false)
+    setSaveError('')
+  }
+
+  async function saveCalculation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!userId || !result || !title.trim() || saveBusy) return
+    setSaveBusy(true)
+    setSaveError('')
+    try {
+      const row = await calculationLibrary(userId).save({ title: title.trim(), input: { players, board, dead }, result })
+      setSaved({ ...row, result })
+      setSaveOpen(false)
+    } catch (error) {
+      setSaveError((error as Error).message)
+    } finally {
+      setSaveBusy(false)
+    }
   }
 
   function setRange(index: number, value: string) {
@@ -125,6 +152,20 @@ export function EquityCalculator() {
         </table>
       </section>}
     </div>
+
+    {result && <div className="calculation-save">
+      {!userId ? <a className="button" href="#library">Sign in to save calculation</a>
+        : savedTitle ? <p role="status">Saved as <strong>{savedTitle}</strong>. <a href="#library">Open Library</a></p>
+        : saveOpen ? <form className="save-calculation-form" onSubmit={saveCalculation}>
+          <label>Calculation name<input value={title} onChange={event => setTitle(event.target.value)} maxLength={120} required /></label>
+          <button className="button primary" disabled={saveBusy || !title.trim()}>Save calculation</button>
+        </form>
+        : <button className="button" disabled={saveBusy} onClick={() => {
+          setTitle(players.map(player => player.trim()).join(' vs ').slice(0, 120))
+          setSaveOpen(true)
+        }}>Save calculation</button>}
+      {saveError && <p className="error" role="alert">{saveError}</p>}
+    </div>}
 
     <details className="panel equity-grid-panel">
       <summary><ChevronDown size={16} /> Range grid</summary>

@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import type { EquityInput, EquityResult } from './equity.ts'
 import type { Hand } from './replay.ts'
 
 const url = import.meta.env.VITE_SUPABASE_URL?.trim()
@@ -15,27 +16,35 @@ export type SavedHand = {
   updated_at: string
 }
 
-type HandWrite = Partial<Pick<SavedHand, 'title' | 'notes' | 'hand_data'>>
+export type SavedCalculation = {
+  id: string
+  title: string
+  input: EquityInput
+  result: EquityResult
+  created_at: string
+}
 
-export function handLibrary(userId: string) {
+type HandWrite = Partial<Pick<SavedHand, 'title' | 'notes' | 'hand_data'>>
+type CalculationWrite = Pick<SavedCalculation, 'title' | 'input' | 'result'>
+
+function privateCollection<Row, Write extends object>(name: string, columns: string, order: string, userId: string) {
   const table = () => {
     if (!supabase) throw new Error('The saved library has not been configured.')
-    return supabase.from('saved_hands')
+    return supabase.from(name)
   }
   return {
     async list() {
-      const { data, error } = await table().select('id,title,notes,hand_data,created_at,updated_at')
-        .eq('owner_id', userId).order('updated_at', { ascending: false })
+      const { data, error } = await table().select(columns).eq('owner_id', userId).order(order, { ascending: false }).overrideTypes<Row[], { merge: false }>()
       if (error) throw error
-      return data as SavedHand[]
+      return data
     },
-    async save(values: HandWrite, id: string | null) {
+    async save(values: Write, id?: string | null) {
       const request = id
         ? table().update(values).eq('owner_id', userId).eq('id', id)
         : table().insert({ ...values, owner_id: userId })
-      const { data, error } = await request.select('id,title,notes,hand_data,created_at,updated_at').single()
+      const { data, error } = await request.select(columns).single().overrideTypes<Row, { merge: false }>()
       if (error) throw error
-      return data as SavedHand
+      return data
     },
     async remove(id: string) {
       const { error } = await table().delete().eq('owner_id', userId).eq('id', id).select('id').single()
@@ -43,3 +52,11 @@ export function handLibrary(userId: string) {
     },
   }
 }
+
+export const handLibrary = (userId: string) => privateCollection<SavedHand, HandWrite>(
+  'saved_hands', 'id,title,notes,hand_data,created_at,updated_at', 'updated_at', userId,
+)
+
+export const calculationLibrary = (userId: string) => privateCollection<SavedCalculation, CalculationWrite>(
+  'saved_calculations', 'id,title,input,result,created_at', 'created_at', userId,
+)

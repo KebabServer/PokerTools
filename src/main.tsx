@@ -1,52 +1,97 @@
 import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Spade } from 'lucide-react'
+import { BookOpen, Calculator, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
-import { supabase } from './library.ts'
+import { Library } from './Library.tsx'
+import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type SavedHand } from './library.ts'
 import './styles.css'
 
-const toolFromHash = () => window.location.hash === '#equity' ? 'equity' : 'replayer'
+const tabs = [
+  { id: 'replayer', label: 'Replayer', name: 'Hand Replayer', Icon: Spade },
+  { id: 'equity', label: 'Equity', name: 'Equity Calculator', Icon: Calculator },
+  { id: 'library', label: 'Library', name: 'Library', Icon: BookOpen },
+] as const
 
-function App() {
-  const [tool, setTool] = useState(toolFromHash)
-  const [session, setSession] = useState<Session | null>(null)
-  const previousUser = useRef<string | undefined>(undefined)
-  const [replayerKey, resetReplayer] = useState(0)
-  const [libraryRequest, requestLibrary] = useState(0)
+function tabFromHash() {
+  return tabs.find(tab => '#' + tab.id === window.location.hash)?.id ?? 'replayer'
+}
+
+function Workspace({ session }: { session: Session | null }) {
+  const [tool, setTool] = useState(tabFromHash)
+  const [hand, setHand] = useState<SavedHand | null>(null)
+  const [calculation, setCalculation] = useState<SavedCalculation | null>(null)
+  const [handVersion, resetHand] = useState(0)
+  const [calculationVersion, resetCalculation] = useState(0)
+  const [deletedHandId, setDeletedHandId] = useState<string | null>(null)
+  const [deletedCalculationId, setDeletedCalculationId] = useState<string | null>(null)
+
   useEffect(() => {
-    const change = () => setTool(toolFromHash())
+    const change = () => {
+      setTool(tabFromHash())
+      window.scrollTo(0, 0)
+    }
     window.addEventListener('hashchange', change)
     return () => window.removeEventListener('hashchange', change)
   }, [])
+
+  function openHand(row: SavedHand) {
+    setHand(row)
+    resetHand(version => version + 1)
+    window.location.hash = 'replayer'
+  }
+
+  function openCalculation(row: SavedCalculation) {
+    setCalculation(row)
+    resetCalculation(version => version + 1)
+    window.location.hash = 'equity'
+  }
+
+  async function removeHand(id: string) {
+    if (!session) return
+    await handLibrary(session.user.id).remove(id)
+    setDeletedHandId(id)
+  }
+
+  async function removeCalculation(id: string) {
+    if (!session) return
+    await calculationLibrary(session.user.id).remove(id)
+    setDeletedCalculationId(id)
+  }
+
+  return <>
+    <header className="site-header">
+      <nav className="app-nav" aria-label="Poker tools">
+        {tabs.map(({ id, label, name, Icon }) => <a key={id} className={tool === id ? 'active' : ''} aria-current={tool === id ? 'page' : undefined} href={'#' + id} aria-label={name}>
+          <Icon size={18} aria-hidden="true" />
+          <span>{label}</span>
+        </a>)}
+      </nav>
+    </header>
+    <main className={tool === 'equity' ? 'main-wrap equity-view' : 'main-wrap'}>
+      <div hidden={tool !== 'replayer'}><Replayer key={handVersion} userId={session?.user.id} initialHand={hand} deletedHandId={deletedHandId} /></div>
+      <div hidden={tool !== 'equity'}><EquityCalculator key={calculationVersion} userId={session?.user.id} initialCalculation={calculation} deletedCalculationId={deletedCalculationId} /></div>
+      {tool === 'library' && <Library session={session} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />}
+    </main>
+  </>
+}
+
+function App() {
+  const [session, setSession] = useState<Session | null>(null)
+  const previousUser = useRef<string | undefined>(undefined)
+  const [workspaceKey, resetWorkspace] = useState(0)
   useEffect(() => {
     if (!supabase) return
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
-      if (previousUser.current && previousUser.current !== next?.user.id) resetReplayer(key => key + 1)
+      if (previousUser.current && previousUser.current !== next?.user.id) resetWorkspace(key => key + 1)
       previousUser.current = next?.user.id
       setSession(next)
     })
     return () => subscription.unsubscribe()
   }, [])
 
-  return <>
-    <header className="site-header"><div className="site-inner">
-      <a className="brand" href="#replayer" aria-label="PokerTools home"><Spade size={18} fill="currentColor" />PokerTools</a>
-      <nav aria-label="Poker tools">
-        <a className={tool === 'replayer' ? 'active' : ''} aria-current={tool === 'replayer' ? 'page' : undefined} href="#replayer" aria-label="Hand Replayer">Replayer</a>
-        <a className={tool === 'equity' ? 'active' : ''} aria-current={tool === 'equity' ? 'page' : undefined} href="#equity" aria-label="Equity Calculator">Equity</a>
-      </nav>
-      <button className="button library-link" onClick={() => { if (tool !== 'replayer') { window.location.hash = 'replayer'; setTool('replayer') }; requestLibrary(count => count + 1) }}>My library</button>
-    </div></header>
-    <main className={tool === 'equity' ? 'main-wrap equity-view' : 'main-wrap'}>
-      <div hidden={tool !== 'replayer'}><Replayer key={replayerKey} userId={session?.user.id} email={session?.user.email} libraryRequest={libraryRequest} signOut={async () => {
-        const { error } = await supabase!.auth.signOut()
-        if (error) throw error
-      }} /></div>
-      <div hidden={tool !== 'equity'}><EquityCalculator /></div>
-    </main>
-  </>
+  return <Workspace key={workspaceKey} session={session} />
 }
 
 createRoot(document.getElementById('root')!).render(<App />)
