@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BookOpen, Calculator, ChartColumn, Spade } from 'lucide-react'
+import { BookOpen, Calculator, ChartColumn, Grid3X3, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
@@ -9,10 +9,12 @@ import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type 
 import './styles.css'
 
 const FlopReports = lazy(() => import('./FlopReports.tsx'))
+const PreflopViewer = lazy(() => import('./PreflopViewer.tsx'))
 
 const tabs = [
   { id: 'replayer', label: 'Replayer', name: 'Hand Replayer', Icon: Spade },
   { id: 'equity', label: 'Equity', name: 'Equity Calculator', Icon: Calculator },
+  { id: 'preflop', label: 'Preflop', name: 'Preflop Viewer', Icon: Grid3X3 },
   { id: 'flop-reports', label: 'Flop Reports', name: 'Flop Reports', Icon: ChartColumn },
   { id: 'library', label: 'Library', name: 'Library', Icon: BookOpen },
 ] as const
@@ -23,7 +25,7 @@ function tabFromHash() {
 
 function Workspace({ session }: { session: Session | null }) {
   const [tool, setTool] = useState(tabFromHash)
-  const [reportsOpened, setReportsOpened] = useState(tool === 'flop-reports')
+  const [openedTabs, setOpenedTabs] = useState(() => new Set([tool]))
   const [hand, setHand] = useState<SavedHand | null>(null)
   const [calculation, setCalculation] = useState<SavedCalculation | null>(null)
   const [handVersion, resetHand] = useState(0)
@@ -35,7 +37,9 @@ function Workspace({ session }: { session: Session | null }) {
     const change = () => {
       const tab = tabFromHash()
       setTool(tab)
-      if (tab === 'flop-reports') setReportsOpened(true)
+      if (tab === 'preflop' || tab === 'flop-reports') {
+        setOpenedTabs(opened => opened.has(tab) ? opened : new Set(opened).add(tab))
+      }
       window.scrollTo(0, 0)
     }
     window.addEventListener('hashchange', change)
@@ -75,10 +79,13 @@ function Workspace({ session }: { session: Session | null }) {
         </a>)}
       </nav>
     </header>
-    <main className={tool === 'equity' ? 'main-wrap equity-view' : 'main-wrap'}>
+    <main className={tool === 'equity' ? 'main-wrap equity-view' : 'main-wrap'} data-tool={tool}>
       <div hidden={tool !== 'replayer'}><Replayer key={handVersion} userId={session?.user.id} initialHand={hand} deletedHandId={deletedHandId} /></div>
       <div hidden={tool !== 'equity'}><EquityCalculator key={calculationVersion} userId={session?.user.id} initialCalculation={calculation} deletedCalculationId={deletedCalculationId} /></div>
-      {reportsOpened && <div hidden={tool !== 'flop-reports'}>
+      {openedTabs.has('preflop') && <div hidden={tool !== 'preflop'}>
+        <Suspense fallback={<p role="status">Loading preflop viewer…</p>}><PreflopViewer /></Suspense>
+      </div>}
+      {openedTabs.has('flop-reports') && <div hidden={tool !== 'flop-reports'}>
         <Suspense fallback={<p role="status">Loading flop reports…</p>}><FlopReports /></Suspense>
       </div>}
       {tool === 'library' && <Library session={session} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />}
