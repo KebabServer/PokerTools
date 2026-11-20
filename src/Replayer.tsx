@@ -35,12 +35,17 @@ function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: 
       const y = Math.sin(angle)
       const amount = awards ? (awards.find(award => award.seat === seat.seat)?.amount ?? 0) : seat.committed
       const amountLabel = seat.name + (awards ? ' won ' : ' committed ') + chips(amount)
+      const size = awards ? undefined : seat.wagerSize
+      const sizeLabel = size ? (size.kind === 'bet' ? 'Bet ' : 'Raise ') + size.percent + '% of pot' : undefined
       // Leave the board lane clear and keep chips on the felt in front of their seats.
       const betTop = y < 0 ? 24 - y * 5 : 61 + y * 8.5
       return <Fragment key={seat.seat}>
-        {amount > 0 && <div role="img" aria-label={amountLabel} title={amountLabel} className="seat-chips" style={{ '--bet-x': x, '--top': betTop + '%' } as CSSProperties}>
+        {amount > 0 && <div role="img" aria-label={amountLabel} aria-description={sizeLabel} title={sizeLabel ? amountLabel + ' · ' + sizeLabel : amountLabel} className="seat-chips" style={{ '--bet-x': x, '--top': betTop + '%' } as CSSProperties}>
           <ChipStack count={Math.min(5, chipLayers(amount, blindCents))} color={awards ? 'ivory' : 'red'} />
-          <span className="seat-chip-amount">{awards && '+'}{chips(amount)}</span>
+          <span className="seat-chip-amount">
+            <span>{awards && '+'}{chips(amount)}</span>
+            {size && <span className="seat-chip-size">{size.kind === 'bet' ? 'B' : 'R'}{size.percent}</span>}
+          </span>
         </div>}
         <div className={'table-seat' + (seat.folded ? ' folded' : '') + (active === seat.seat ? ' acting' : '')} style={{ '--left': (50 + x * 41) + '%', '--top': (50 + y * 36) + '%' } as CSSProperties}>
           <div className="hole-cards"><PlayingCard card={seat.hole[0]} back /><PlayingCard card={seat.hole[1]} back /></div>
