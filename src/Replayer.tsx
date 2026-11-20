@@ -21,7 +21,10 @@ function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: 
     <div className="table-center">
       <div className="pot-display">
         <PotChips amount={pot - paidOut} bigBlind={blindCents} />
-        <div className="pot-total"><span>{awards ? 'Total pot' : 'Pot'}</span><strong>{chips(pot)}</strong></div>
+        <dl className="pot-total">
+          <div><dt>Main pot</dt><dd>{chips(collectedPots[0]?.amount ?? 0)}</dd></div>
+          <div><dt>Total pot</dt><dd>{chips(frame.pot)}</dd></div>
+        </dl>
       </div>
       <div className="board-cards">{Array.from({ length: 5 }, (_, index) => <PlayingCard key={index} card={board[index]} />)}</div>
     </div>
