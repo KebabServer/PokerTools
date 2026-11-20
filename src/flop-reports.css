@@ -1,0 +1,151 @@
+.flop-report-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+  padding: 14px;
+}
+.flop-pot-types {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #212121;
+}
+.flop-pot-types button {
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: .82rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.flop-pot-types button:hover { color: #fff; }
+.flop-pot-types button[aria-pressed="true"] { background: #383838; color: #fff; }
+.flop-report-status { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.flop-report-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 5px 14px;
+  margin-top: 16px;
+}
+.flop-report-summary > span, .flop-chart-heading > span, .flop-report-hint, .flop-inspector-nav > span {
+  color: var(--muted);
+  font-size: .78rem;
+  font-variant-numeric: tabular-nums;
+}
+.flop-report-hint { margin: 4px 0 10px; }
+.flop-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 13px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: .8rem;
+}
+.flop-action { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.flop-action-color { flex: 0 0 9px; height: 9px; border-radius: 2px; }
+.flop-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+.flop-chart { padding: 12px; }
+.flop-chart-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.flop-chart-heading h2 { font-size: .95rem; }
+.flop-chart-heading > span { white-space: nowrap; }
+.flop-chart-axes { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px; }
+.flop-chart-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: end;
+  margin-bottom: 20px;
+  color: var(--muted);
+  font-size: .65rem;
+  line-height: 1;
+}
+.flop-plot {
+  position: relative;
+  display: block;
+  border: 0;
+  padding: 0;
+  border-radius: 2px;
+  background: transparent;
+  touch-action: pan-y pinch-zoom;
+}
+.flop-plot canvas { display: block; width: 100%; height: 128px; }
+.flop-chart-marker {
+  position: absolute;
+  top: 0;
+  bottom: 20px;
+  width: 2px;
+  transform: translateX(-50%);
+  background: #fff;
+  box-shadow: 0 0 0 1px #161616a0;
+  pointer-events: none;
+}
+.flop-inspector { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 6px; }
+.flop-inspector-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.flop-inspector-nav > div { display: flex; gap: 3px; }
+.flop-inspector-nav .icon-button { border-color: transparent; }
+.flop-board { display: flex; align-items: center; gap: 9px; font-size: .82rem; font-weight: 650; }
+.flop-board-cards { display: flex; gap: 3px; }
+.flop-board-cards .card-face { width: 27px; height: 34px; --rank-size: 1.2rem; --watermark-size: 2.3rem; border-radius: 4px; }
+.flop-ev {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 9px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .77rem;
+  font-variant-numeric: tabular-nums;
+}
+.flop-ev > div, .flop-board-actions li { display: flex; justify-content: space-between; gap: 4px; }
+.flop-ev dd { margin: 0; color: #ececec; }
+.flop-board-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: .77rem;
+  font-variant-numeric: tabular-nums;
+}
+.flop-tooltip {
+  position: fixed;
+  z-index: 2;
+  width: 216px;
+  padding: 11px;
+  border: 1px solid #565656;
+  border-radius: 9px;
+  background: #191919;
+  box-shadow: 0 5px 18px #0008;
+  pointer-events: none;
+}
+
+@media (max-width: 680px) {
+  .flop-report-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; }
+  .flop-pot-types { grid-column: 1 / -1; }
+  .flop-charts { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+  .flop-chart { padding: 10px; }
+  .flop-plot canvas { height: 116px; }
+}

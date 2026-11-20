@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BookOpen, Calculator, Spade } from 'lucide-react'
+import { BookOpen, Calculator, ChartColumn, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
@@ -8,9 +8,12 @@ import { Library } from './Library.tsx'
 import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type SavedHand } from './library.ts'
 import './styles.css'
 
+const FlopReports = lazy(() => import('./FlopReports.tsx'))
+
 const tabs = [
   { id: 'replayer', label: 'Replayer', name: 'Hand Replayer', Icon: Spade },
   { id: 'equity', label: 'Equity', name: 'Equity Calculator', Icon: Calculator },
+  { id: 'flop-reports', label: 'Flop Reports', name: 'Flop Reports', Icon: ChartColumn },
   { id: 'library', label: 'Library', name: 'Library', Icon: BookOpen },
 ] as const
 
@@ -20,6 +23,7 @@ function tabFromHash() {
 
 function Workspace({ session }: { session: Session | null }) {
   const [tool, setTool] = useState(tabFromHash)
+  const [reportsOpened, setReportsOpened] = useState(tool === 'flop-reports')
   const [hand, setHand] = useState<SavedHand | null>(null)
   const [calculation, setCalculation] = useState<SavedCalculation | null>(null)
   const [handVersion, resetHand] = useState(0)
@@ -29,7 +33,9 @@ function Workspace({ session }: { session: Session | null }) {
 
   useEffect(() => {
     const change = () => {
-      setTool(tabFromHash())
+      const tab = tabFromHash()
+      setTool(tab)
+      if (tab === 'flop-reports') setReportsOpened(true)
       window.scrollTo(0, 0)
     }
     window.addEventListener('hashchange', change)
@@ -72,6 +78,9 @@ function Workspace({ session }: { session: Session | null }) {
     <main className={tool === 'equity' ? 'main-wrap equity-view' : 'main-wrap'}>
       <div hidden={tool !== 'replayer'}><Replayer key={handVersion} userId={session?.user.id} initialHand={hand} deletedHandId={deletedHandId} /></div>
       <div hidden={tool !== 'equity'}><EquityCalculator key={calculationVersion} userId={session?.user.id} initialCalculation={calculation} deletedCalculationId={deletedCalculationId} /></div>
+      {reportsOpened && <div hidden={tool !== 'flop-reports'}>
+        <Suspense fallback={<p role="status">Loading flop reports…</p>}><FlopReports /></Suspense>
+      </div>}
       {tool === 'library' && <Library session={session} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />}
     </main>
   </>
