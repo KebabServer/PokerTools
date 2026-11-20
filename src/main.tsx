@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BookOpen, Calculator, ChartColumn, Grid3X3, Layers3, Spade } from 'lucide-react'
+import { BookOpen, Calculator, ChartColumn, Grid3X3, Layers3, NotebookPen, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
@@ -10,6 +10,7 @@ import './styles.css'
 
 const FlopReports = lazy(() => import('./FlopReports.tsx'))
 const FlopViewer = lazy(() => import('./FlopViewer.tsx'))
+const Notes = lazy(() => import('./Notes.tsx'))
 const PreflopViewer = lazy(() => import('./PreflopViewer.tsx'))
 
 const tabs = [
@@ -18,6 +19,7 @@ const tabs = [
   { id: 'preflop', label: 'Preflop', name: 'Preflop Viewer', Icon: Grid3X3 },
   { id: 'flop-viewer', label: 'Flop Viewer', compactLabel: 'Flop', name: 'Flop Viewer', Icon: Layers3 },
   { id: 'flop-reports', label: 'Flop Reports', compactLabel: 'Reports', name: 'Flop Reports', Icon: ChartColumn },
+  { id: 'notes', label: 'Notes', name: 'Notes', Icon: NotebookPen },
   { id: 'library', label: 'Library', name: 'Library', Icon: BookOpen },
 ] as const
 
@@ -39,7 +41,7 @@ function Workspace({ session }: { session: Session | null }) {
     const change = () => {
       const tab = tabFromHash()
       setTool(tab)
-      if (tab === 'preflop' || tab === 'flop-reports' || tab === 'flop-viewer') {
+      if (tab === 'preflop' || tab === 'flop-reports' || tab === 'flop-viewer' || tab === 'notes') {
         setOpenedTabs(opened => opened.has(tab) ? opened : new Set(opened).add(tab))
       }
       window.scrollTo(0, 0)
@@ -97,6 +99,9 @@ function Workspace({ session }: { session: Session | null }) {
       </div>}
       {openedTabs.has('flop-reports') && <div hidden={tool !== 'flop-reports'}>
         <Suspense fallback={<p role="status">Loading flop reports…</p>}><FlopReports /></Suspense>
+      </div>}
+      {openedTabs.has('notes') && <div hidden={tool !== 'notes'}>
+        <Suspense fallback={<p role="status">Loading notes…</p>}><Notes userId={session?.user.id} /></Suspense>
       </div>}
       {tool === 'library' && <Library session={session} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />}
     </main>

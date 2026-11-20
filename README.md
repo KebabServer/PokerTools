@@ -1,6 +1,6 @@
 # PokerTools
 
-PokerTools is a static React and Vite site for No-Limit Texas Hold’em cash games. It runs at [kebabserver.github.io/PokerTools/](https://kebabserver.github.io/PokerTools/). Hand Replayer, Equity Calculator, Preflop Viewer, Flop Reports, and the Flop Viewer example are open to visitors. Supabase provides email/password sign-in and private storage for saved hands, notes, equity calculations, and imported flop ranges.
+PokerTools is a static React and Vite site for No-Limit Texas Hold’em cash games. It runs at [kebabserver.github.io/PokerTools/](https://kebabserver.github.io/PokerTools/). Hand Replayer, Equity Calculator, Preflop Viewer, Flop Reports, and the Flop Viewer example are open to visitors. Supabase provides email/password sign-in and private storage for saved hands, standalone notes, equity calculations, and imported flop ranges.
 
 ## Local setup
 
@@ -36,6 +36,7 @@ Open **Library** to sign in. Use **Save hand** in Replayer to save a completed h
 - In **Preflop Viewer**, choose a preset and select a spot to see its range on the 13×13 grid. Select a hand to compare its frequencies across the RFI, 3-bet, and 4-bet position matrices. Gray marks the share without a listed action. The viewer loads the four presets from [preflop-ranges.tsv](public/preflop-ranges.tsv).
 - In **Flop Reports**, choose the pot type, positional matchup, and action line. Each bar shows the action mix for one solver flop, grouped by board texture. Hover over a bar for a preview, or tap it to open the flop, its IP and OOP EV, and its action frequencies. Use the arrow buttons in the details to step through boards. The site loads the selected report from the 86 CSVs in [public/flop-reports](public/flop-reports).
 - In **Flop Viewer**, select a configuration, flop, and decision node. Select a hand on the 13×13 grid to see exact combos, action frequencies, and available EVs. The chart removes board blockers and weights the action and hand-class totals by each exact combo's range weight. Gray in the grid includes available combos that do not reach the selected node. The migration adds an illustrative example so you can try the viewer before importing ranges.
+- In **Notes**, sign in through **Library** to write and reopen private plain-text notes. Use **Save**, Ctrl+S, or Cmd+S to save your changes. Your first line becomes the title if you leave the title blank.
 
 ## Import flop ranges
 
