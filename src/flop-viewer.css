@@ -1,0 +1,108 @@
+.flop-viewer {
+  --flop-unreached: #2e2e2e;
+  max-width: 1060px;
+  margin-inline: auto;
+}
+.flop-viewer-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, .68fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.flop-viewer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+.flop-viewer-main, .flop-viewer-side { display: grid; gap: 10px; }
+.flop-viewer-matrix, .flop-viewer-combos, .flop-viewer-breakdown, .flop-viewer-import { padding: 12px; }
+.flop-viewer-board, .flop-viewer-combo-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.flop-viewer-board > span, .flop-viewer-combo-heading > span, .flop-viewer-combo-cards > span {
+  color: var(--muted);
+  font-size: .8rem;
+  font-variant-numeric: tabular-nums;
+}
+.flop-viewer-cards { display: flex; gap: 4px; }
+.flop-viewer-cards .card-face { width: 28px; height: 35px; --rank-size: 1.18rem; --watermark-size: 2.25rem; border-radius: 4px; }
+.flop-viewer-grid {
+  display: grid;
+  grid-template-columns: repeat(13, minmax(0, 1fr));
+  gap: 2px;
+}
+.flop-viewer-grid button {
+  min-width: 0;
+  width: 100%;
+  aspect-ratio: 1.14;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background-color: var(--flop-unreached);
+  color: #fff;
+  font-size: .78rem;
+  font-weight: 680;
+  line-height: 1;
+  text-shadow: 0 1px 2px #000;
+  white-space: nowrap;
+}
+.flop-viewer-grid button:hover { box-shadow: inset 0 0 0 1px #ededed; }
+.flop-viewer-grid button[aria-pressed="true"] { box-shadow: inset 0 0 0 2px #ededed; }
+.flop-viewer-grid button:focus-visible { outline-offset: -2px; }
+.flop-viewer-totals, .flop-viewer-breakdown ul, .flop-viewer-combo-list, .flop-viewer-combo-actions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-variant-numeric: tabular-nums;
+}
+.flop-viewer-totals, .flop-viewer-combo-actions { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: .78rem; }
+.flop-viewer-totals { margin-top: 10px; }
+.flop-viewer-totals li, .flop-viewer-combo-actions li { display: flex; align-items: center; gap: 5px; }
+.flop-viewer-muted { color: var(--muted); }
+.flop-viewer-swatch { width: 9px; height: 9px; flex: 0 0 9px; border: 1px solid #ffffff26; border-radius: 2px; }
+.flop-viewer-breakdown ul { display: grid; gap: 9px; margin-top: 10px; }
+.flop-viewer-breakdown-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 3px; font-size: .8rem; }
+.flop-viewer-breakdown-head > :last-child { color: var(--muted); }
+.flop-viewer-bar { height: 9px; border-radius: 3px; background-color: var(--flop-unreached); }
+.flop-viewer-combo-list > li {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding-block: 7px;
+  border-top: 1px solid var(--border);
+}
+.flop-viewer-combo-cards { display: grid; justify-items: start; gap: 3px; }
+.flop-viewer-note { margin-top: 8px; font-size: .86rem; }
+.flop-viewer-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.flop-viewer-login, .flop-viewer-import { margin-top: 12px; }
+.flop-viewer-import summary { cursor: pointer; font-weight: 650; }
+.flop-viewer-import form { display: grid; justify-items: start; gap: 10px; margin-top: 10px; }
+.flop-viewer-import form label { width: 100%; }
+.flop-viewer-import form > p { font-size: .86rem; overflow-wrap: anywhere; }
+
+@media (max-width: 720px) {
+  .flop-viewer-layout { grid-template-columns: minmax(0, 1fr); }
+  .flop-viewer-side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}
+
+@media (max-width: 440px) {
+  .main-wrap[data-tool="flop-viewer"] { padding-top: 13px; }
+  .flop-viewer h1 { font-size: 1.55rem; }
+  .flop-viewer .tool-heading { margin-bottom: 9px; }
+  .flop-viewer-controls { grid-template-columns: minmax(0, .75fr) minmax(0, 1fr); gap: 7px; padding: 8px; }
+  .flop-viewer-controls label:first-child { grid-column: 1 / -1; }
+  .flop-viewer-controls label { gap: 3px; font-size: .78rem; }
+  .flop-viewer-matrix, .flop-viewer-combos, .flop-viewer-breakdown { padding: 6px; }
+  .flop-viewer-grid { gap: 1px; }
+  .flop-viewer-grid button { aspect-ratio: auto; min-height: 23px; border-radius: 3px; font-size: .625rem; letter-spacing: -.025em; }
+  .flop-viewer-combo-list > li { grid-template-columns: 69px minmax(0, 1fr); }
+  .flop-viewer-breakdown h2 { font-size: .95rem; }
+}

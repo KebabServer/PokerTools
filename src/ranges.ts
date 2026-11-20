@@ -8,13 +8,17 @@ export const cardMask = (cards: number[]) => cards.reduce((mask, card) => mask |
 const combosByClass = new Map<string, Combo[]>()
 const allCombos: Combo[] = []
 
+export function startingHandName(a: number, b: number) {
+  const [highRank, highSuit] = cardText(Math.max(a, b))
+  const [lowRank, lowSuit] = cardText(Math.min(a, b))
+  return highRank + lowRank + (highRank === lowRank ? '' : highSuit === lowSuit ? 's' : 'o')
+}
+
 for (const low of deck) {
   for (let high = low + 1; high < 52; high++) {
     const combo: Combo = { cards: [low, high], mask: cardBits[low] | cardBits[high] }
     allCombos.push(combo)
-    const [highRank, highSuit] = cardText(high)
-    const [lowRank, lowSuit] = cardText(low)
-    const name = highRank + lowRank + (highRank === lowRank ? '' : highSuit === lowSuit ? 's' : 'o')
+    const name = startingHandName(high, low)
     const set = combosByClass.get(name) ?? []
     set.push(combo)
     combosByClass.set(name, set)

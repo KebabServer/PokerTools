@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BookOpen, Calculator, ChartColumn, Grid3X3, Spade } from 'lucide-react'
+import { BookOpen, Calculator, ChartColumn, Grid3X3, Layers3, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
@@ -9,13 +9,15 @@ import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type 
 import './styles.css'
 
 const FlopReports = lazy(() => import('./FlopReports.tsx'))
+const FlopViewer = lazy(() => import('./FlopViewer.tsx'))
 const PreflopViewer = lazy(() => import('./PreflopViewer.tsx'))
 
 const tabs = [
   { id: 'replayer', label: 'Replayer', name: 'Hand Replayer', Icon: Spade },
   { id: 'equity', label: 'Equity', name: 'Equity Calculator', Icon: Calculator },
   { id: 'preflop', label: 'Preflop', name: 'Preflop Viewer', Icon: Grid3X3 },
-  { id: 'flop-reports', label: 'Flop Reports', name: 'Flop Reports', Icon: ChartColumn },
+  { id: 'flop-viewer', label: 'Flop Viewer', compactLabel: 'Flop', name: 'Flop Viewer', Icon: Layers3 },
+  { id: 'flop-reports', label: 'Flop Reports', compactLabel: 'Reports', name: 'Flop Reports', Icon: ChartColumn },
   { id: 'library', label: 'Library', name: 'Library', Icon: BookOpen },
 ] as const
 
@@ -37,7 +39,7 @@ function Workspace({ session }: { session: Session | null }) {
     const change = () => {
       const tab = tabFromHash()
       setTool(tab)
-      if (tab === 'preflop' || tab === 'flop-reports') {
+      if (tab === 'preflop' || tab === 'flop-reports' || tab === 'flop-viewer') {
         setOpenedTabs(opened => opened.has(tab) ? opened : new Set(opened).add(tab))
       }
       window.scrollTo(0, 0)
@@ -73,10 +75,15 @@ function Workspace({ session }: { session: Session | null }) {
   return <>
     <header className="site-header">
       <nav className="app-nav" aria-label="Poker tools">
-        {tabs.map(({ id, label, name, Icon }) => <a key={id} className={tool === id ? 'active' : ''} aria-current={tool === id ? 'page' : undefined} href={'#' + id} aria-label={name}>
-          <Icon size={18} aria-hidden="true" />
-          <span>{label}</span>
-        </a>)}
+        {tabs.map(tab => {
+          const { id, label, name, Icon } = tab
+          const compactLabel = 'compactLabel' in tab ? tab.compactLabel : undefined
+          return <a key={id} className={tool === id ? 'active' : ''} aria-current={tool === id ? 'page' : undefined} href={'#' + id} aria-label={name}>
+            <Icon size={18} aria-hidden="true" />
+            <span className={compactLabel ? 'app-nav-wide-label' : undefined}>{label}</span>
+            {compactLabel && <span className="app-nav-compact-label">{compactLabel}</span>}
+          </a>
+        })}
       </nav>
     </header>
     <main className={tool === 'equity' ? 'main-wrap equity-view' : 'main-wrap'} data-tool={tool}>
@@ -84,6 +91,9 @@ function Workspace({ session }: { session: Session | null }) {
       <div hidden={tool !== 'equity'}><EquityCalculator key={calculationVersion} userId={session?.user.id} initialCalculation={calculation} deletedCalculationId={deletedCalculationId} /></div>
       {openedTabs.has('preflop') && <div hidden={tool !== 'preflop'}>
         <Suspense fallback={<p role="status">Loading preflop viewer…</p>}><PreflopViewer /></Suspense>
+      </div>}
+      {openedTabs.has('flop-viewer') && <div hidden={tool !== 'flop-viewer'}>
+        <Suspense fallback={<p role="status">Loading flop viewer…</p>}><FlopViewer userId={session?.user.id} /></Suspense>
       </div>}
       {openedTabs.has('flop-reports') && <div hidden={tool !== 'flop-reports'}>
         <Suspense fallback={<p role="status">Loading flop reports…</p>}><FlopReports /></Suspense>

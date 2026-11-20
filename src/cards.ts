@@ -39,6 +39,8 @@ function score(category: number, ...kickers: number[]) {
   return value
 }
 
+export const handCategory = (handScore: number) => Math.floor(handScore / 13 ** 5)
+
 // Evaluate the best five-card hand from a complete Hold'em board and two hole cards.
 export function evaluate(cards: number[]) {
   const counts = Array<number>(13).fill(0)
