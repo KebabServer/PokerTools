@@ -1,7 +1,7 @@
-export type NoteFormat = 'paragraph' | 'bold' | 'italic' | 'bullet' | 'checklist' | 'quote' | 'heading' | 'link'
+export type NoteFormat = 'title' | 'bold' | 'italic' | 'bullet' | 'checklist' | 'quote' | 'heading' | 'link'
 
 const blockFormats = {
-  paragraph: '',
+  title: '### ',
   bullet: '- ',
   checklist: '- [ ] ',
   quote: '> ',

@@ -12,7 +12,7 @@ const blankNote = (): Editor => ({ id: crypto.randomUUID(), saved: null, title: 
 const openEditor = (note: SavedNote): Editor => ({ id: note.id, saved: note, title: note.title, body: note.body })
 const editedDate = new Intl.DateTimeFormat('en', { dateStyle: 'medium' })
 const formatting = [
-  { format: 'paragraph', label: 'Paragraph', Icon: Type },
+  { format: 'title', label: 'Title', Icon: Type },
   { format: 'bold', label: 'Bold', Icon: Bold },
   { format: 'italic', label: 'Italic', Icon: Italic },
   { format: 'bullet', label: 'Bulleted list', Icon: List },

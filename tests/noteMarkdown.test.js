@@ -2,6 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { countNoteWords, formatNote } from '../src/noteMarkdown.ts'
 
+test('Title applies a level-three heading and toggles it off', () => {
+  const title = formatNote('## Study plan\nNext line', 5, 5, 'title')
+  assert.deepEqual(title, { text: '### Study plan\nNext line', start: 6, end: 6 })
+  assert.equal(formatNote(title.text, title.start, title.end, 'title').text, 'Study plan\nNext line')
+  assert.deepEqual(formatNote('', 0, 0, 'title'), { text: '### ', start: 4, end: 4 })
+})
+
 test('inline formatting preserves the selection and toggles off without removing text', () => {
   const formatted = formatNote('  River lead ', 0, 13, 'bold')
   assert.deepEqual(formatted, { text: '  **River lead** ', start: 4, end: 14 })
