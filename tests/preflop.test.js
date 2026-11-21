@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { mixBackground, mixForHand, parsePreflopPresets, preflopHands, preflopSpotGroups } from '../src/preflop.ts'
+import { readStudySnapshot } from './studySnapshot.js'
 
-const source = readFileSync(new URL('../public/preflop-ranges.tsv', import.meta.url), 'utf8')
+const source = readStudySnapshot('preflop-ranges.tsv')
 const presets = parsePreflopPresets(source)
 const dataFor = (preset, spot, hand) => mixForHand(
   presets.find(item => item.name === preset).ranges.get(spot),

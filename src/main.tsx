@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BookOpen, Calculator, ChartColumn, Grid3X3, Layers3, NotebookPen, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
 import { Library } from './Library.tsx'
+import { SignIn } from './SignIn.tsx'
 import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type SavedHand } from './library.ts'
 import './styles.css'
 
@@ -27,7 +28,7 @@ function tabFromHash() {
   return tabs.find(tab => '#' + tab.id === window.location.hash)?.id ?? 'replayer'
 }
 
-function Workspace({ session }: { session: Session | null }) {
+function Workspace({ session }: { session: Session }) {
   const [tool, setTool] = useState(tabFromHash)
   const [openedTabs, setOpenedTabs] = useState(() => new Set([tool]))
   const [hand, setHand] = useState<SavedHand | null>(null)
@@ -109,20 +110,53 @@ function Workspace({ session }: { session: Session | null }) {
 }
 
 function App() {
-  const [session, setSession] = useState<Session | null>(null)
-  const previousUser = useRef<string | undefined>(undefined)
-  const [workspaceKey, resetWorkspace] = useState(0)
+  const [session, setSession] = useState<Session | null | undefined>(supabase ? undefined : null)
+  const [accessProblem, setAccessProblem] = useState('')
   useEffect(() => {
-    if (!supabase) return
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
-      if (previousUser.current && previousUser.current !== next?.user.id) resetWorkspace(key => key + 1)
-      previousUser.current = next?.user.id
-      setSession(next)
+    const client = supabase
+    if (!client) return
+    let checkedUser: string | undefined
+    let revision = 0
+    const { data: { subscription } } = client.auth.onAuthStateChange((_event, next) => {
+      const request = ++revision
+      if (!next || next.user.is_anonymous) {
+        checkedUser = undefined
+        setAccessProblem('')
+        setSession(null)
+        return
+      }
+      if (checkedUser === next.user.id) {
+        setSession(next)
+        return
+      }
+      setSession(undefined)
+      setAccessProblem('')
+      async function checkAccess() {
+        if (!next) return
+        const { data, error } = await client!.auth.getUser(next.access_token)
+        if (request !== revision) return
+        const valid = !error && data.user?.id === next.user.id && !data.user.is_anonymous
+        if (!valid) {
+          setSession(null)
+          return
+        }
+        const { data: member, error: membershipError } = await client!.from('pokertools_members')
+          .select('user_id').eq('user_id', next.user.id).maybeSingle()
+        if (request !== revision) return
+        checkedUser = member && !membershipError ? next.user.id : undefined
+        if (!checkedUser) setAccessProblem(membershipError ? 'Couldn’t check access. Please sign in again.' : 'This account doesn’t have access to PokerTools.')
+        setSession(checkedUser ? next : null)
+      }
+      void checkAccess().catch(() => {
+        if (request !== revision) return
+        setAccessProblem('Couldn’t check access. Please sign in again.')
+        setSession(null)
+      })
     })
-    return () => subscription.unsubscribe()
+    return () => { revision++; subscription.unsubscribe() }
   }, [])
 
-  return <Workspace key={workspaceKey} session={session} />
+  return session ? <Workspace key={session.user.id} session={session} /> : <SignIn loading={session === undefined} accessProblem={accessProblem} />
 }
 
 createRoot(document.getElementById('root')!).render(<App />)

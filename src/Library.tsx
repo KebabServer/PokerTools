@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { Trash2 } from 'lucide-react'
 import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type SavedHand } from './library.ts'
@@ -53,22 +53,18 @@ function SavedItems<Row extends Entry>({ title, empty, collection, open }: {
 }
 
 export function Library({ session, openHand, openCalculation, removeHand, removeCalculation }: {
-  session: Session | null; openHand: (hand: SavedHand) => void; openCalculation: (calculation: SavedCalculation) => void
+  session: Session; openHand: (hand: SavedHand) => void; openCalculation: (calculation: SavedCalculation) => void
   removeHand: (id: string) => Promise<void>; removeCalculation: (id: string) => Promise<void>
 }) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
 
-  async function authenticate(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault()
+  async function signOut() {
     if (!supabase || busy) return
     setBusy(true)
     setProblem('')
     try {
-      const data = event && new FormData(event.currentTarget)
-      const { error } = data
-        ? await supabase.auth.signInWithPassword({ email: String(data.get('email')), password: String(data.get('password')) })
-        : await supabase.auth.signOut()
+      const { error } = await supabase.auth.signOut()
       if (error) throw error
     } catch (error) {
       setProblem((error as Error).message)
@@ -78,20 +74,9 @@ export function Library({ session, openHand, openCalculation, removeHand, remove
   }
 
   return <div className="library-workspace">
-    <div className="tool-heading"><h1>Library</h1>{session && <button className="button small" disabled={busy} onClick={() => void authenticate()}>Sign out</button>}</div>
+    <div className="tool-heading"><h1>Library</h1><button className="button small" disabled={busy} onClick={() => void signOut()}>Sign out</button></div>
     {problem && <p className="error" role="alert">{problem}</p>}
-    {session
-      ? <LibraryItems key={session.user.id} userId={session.user.id} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />
-      : <section className="panel review-panel">
-        <h2>Sign in</h2>
-        {supabase
-          ? <form onSubmit={authenticate} className="signin-form">
-            <label>Email<input type="email" name="email" autoComplete="username" required /></label>
-            <label>Password<input type="password" name="password" autoComplete="current-password" required /></label>
-            <button className="button primary" disabled={busy}>Sign in</button>
-          </form>
-          : <p>Supabase setup is required to sign in.</p>}
-      </section>}
+    <LibraryItems userId={session.user.id} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />
   </div>
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FlopActionLabel, FlopReportChart } from './FlopReportChart.tsx'
 import { parseFlopReport } from './flopReport.ts'
+import { readStudyFile } from './studyFiles.ts'
 import { flopReportGroups, flopReportLines, type FlopReportLine } from './flopReportCatalog.ts'
 import './flop-reports.css'
 
@@ -23,9 +24,7 @@ export default function FlopReports() {
     const controller = new AbortController()
     async function load() {
       try {
-        const response = await fetch(`${import.meta.env.BASE_URL}flop-reports/${file}`, { signal: controller.signal })
-        if (!response.ok) throw new Error('Report unavailable.')
-        const data = parseFlopReport(await response.text())
+        const data = parseFlopReport(await readStudyFile('flop-reports/' + file, controller.signal))
         if (!controller.signal.aborted) setLoaded({ file, data })
       } catch {
         if (!controller.signal.aborted) setLoaded({ file, data: null })

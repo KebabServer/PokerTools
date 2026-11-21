@@ -1,21 +1,20 @@
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { readCards } from '../src/cards.ts'
 import { flopTexture, parseFlopReport } from '../src/flopReport.ts'
 import { flopReportGroups } from '../src/flopReportCatalog.ts'
+import { readStudySnapshot, reportSnapshotNames } from './studySnapshot.js'
 
-const directory = new URL('../public/flop-reports/', import.meta.url)
-const readReport = file => parseFlopReport(readFileSync(new URL(file + '.csv', directory), 'utf8'))
+const readReport = file => parseFlopReport(readStudySnapshot('flop-reports/' + file + '.csv'))
 
 test('each matchup and line has a complete report of 1,755 distinct solver flops', () => {
   const files = flopReportGroups.flatMap(group => group.matchups.flatMap(matchup =>
     matchup.lines.map(line => `${group.id}-${matchup.id}-${line}.csv`)
   ))
   assert.equal(files.length, 86)
-  assert.deepEqual(files.sort(), readdirSync(directory).sort())
+  assert.deepEqual(files.sort(), reportSnapshotNames().sort())
   for (const file of files) {
-    const report = parseFlopReport(readFileSync(new URL(file, directory), 'utf8'))
+    const report = parseFlopReport(readStudySnapshot('flop-reports/' + file))
     const boards = report.groups.flatMap(group => group.boards)
     assert.equal(report.boardCount, 1755, file)
     assert.equal(new Set(boards.map(board => board.code)).size, 1755, file)

@@ -185,6 +185,10 @@ p { color: var(--muted); line-height: 1.5; }
 .step-pot { color: var(--soft); font-size: .76rem; font-variant-numeric: tabular-nums; }
 .history-empty { padding: 17px; }
 .library-workspace { max-width: 760px; margin-inline: auto; }
+.login-page { max-width: 390px; padding-top: clamp(32px, 13vh, 110px); }
+.login-panel { padding: 20px; }
+.login-form { display: grid; gap: 12px; margin-top: 18px; }
+.login-form button { margin-top: 3px; }
 .library-sections { display: grid; gap: 13px; }
 .review-panel { padding: 17px 19px; }
 .review-panel p { margin-top: 9px; font-size: .88rem; overflow-wrap: anywhere; }
@@ -199,7 +203,6 @@ input:not([type="range"]), select, textarea { min-width: 0; width: 100%; border:
 textarea { resize: vertical; }
 input::placeholder, textarea::placeholder { color: #9a9a9a; opacity: 1; }
 .notes-label { margin: 12px 0 8px; }
-.signin-form { margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 8px; }
 .saved-list { list-style: none; padding: 0; margin: 10px 0; }
 .saved-list li { display: flex; gap: 7px; align-items: center; margin: 6px 0; }
 .saved-entry { flex: 1; justify-content: start; text-align: left; overflow-wrap: anywhere; min-width: 0; }
@@ -228,8 +231,6 @@ input::placeholder, textarea::placeholder { color: #9a9a9a; opacity: 1; }
   .table-stage { margin-inline: 18px; }
   .table-seat { width: 84px; }
   .many-seats .seat-chip-amount { display: none; }
-  .signin-form { grid-template-columns: 1fr 1fr; }
-  .signin-form button { justify-self: start; }
 }
 @media (max-width: 740px) {
   .main-wrap { width: calc(100% - 26px); }

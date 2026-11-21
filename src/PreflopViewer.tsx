@@ -4,6 +4,7 @@ import {
   mixBackground, mixForHand, parsePreflopPresets, preflopColors, preflopHands, preflopPositionRows, preflopSpotGroups,
   type PreflopPreset, type PreflopSpot,
 } from './preflop.ts'
+import { readStudyFile } from './studyFiles.ts'
 import './preflop.css'
 
 const percent = new Intl.NumberFormat('en', { style: 'percent', maximumFractionDigits: 1 })
@@ -150,9 +151,7 @@ export default function PreflopViewer() {
     const controller = new AbortController()
     async function load() {
       try {
-        const response = await fetch(`${import.meta.env.BASE_URL}preflop-ranges.tsv`, { signal: controller.signal })
-        if (!response.ok) throw new Error('Preflop ranges unavailable.')
-        const data = parsePreflopPresets(await response.text())
+        const data = parsePreflopPresets(await readStudyFile('preflop-ranges.tsv', controller.signal))
         if (!controller.signal.aborted) setPresets(data)
       } catch {
         if (!controller.signal.aborted) setPresets(null)
