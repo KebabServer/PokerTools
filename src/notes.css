@@ -1,64 +1,122 @@
-.notes-workspace { max-width: 970px; margin-inline: auto; }
-.notes-layout {
+.notes-workspace { max-width: 880px; margin-inline: auto; }
+.notes-switcher {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(0, 2.5fr);
-  gap: 14px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  width: min(100%, 350px);
 }
-.notes-sidebar { padding: 12px; }
-.notes-saved-list ul {
-  display: grid;
-  gap: 4px;
-  margin: 8px 0 0;
-  padding: 0;
-  max-height: min(62vh, 540px);
-  overflow: auto;
-  scrollbar-color: #565656 transparent;
-  list-style: none;
-}
-.notes-saved-list p { margin-top: 8px; font-size: .85rem; }
-.notes-saved-list button {
-  width: 100%;
-  min-height: 44px;
-  padding: 7px 9px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: #ececec;
-  text-align: left;
-  overflow-wrap: anywhere;
-  font-size: .86rem;
-}
-.notes-saved-list button:hover, .notes-saved-list button[aria-current] { background: #343434; }
-.notes-saved-list button[aria-current] { border-color: var(--border); }
-.notes-picker { display: none; }
-.notepad { display: grid; padding: 12px; gap: 8px; }
-.notepad-title input {
-  border-color: transparent;
-  background: transparent;
-  font-weight: 660;
-}
-.notepad textarea {
-  display: block;
-  min-height: clamp(15rem, 49dvh, 34rem);
-  background: #1d1d1d;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-weight: 400;
-  line-height: 1.55;
-  resize: vertical;
-}
-.notepad-footer, .notepad-actions { display: flex; align-items: center; gap: 8px; }
-.notepad-footer { justify-content: space-between; }
-.notepad-status { font-size: .8rem; }
-.notepad-actions { flex-wrap: wrap; }
-.notepad-problem { display: grid; gap: 8px; }
+.notes-switcher button { white-space: nowrap; }
 .notes-retry { margin-top: 10px; }
 
-@media (max-width: 660px) {
-  .notes-layout { grid-template-columns: minmax(0, 1fr); gap: 9px; }
-  .notes-sidebar { padding: 0; border: 0; background: transparent; }
-  .notes-saved-list { display: none; }
-  .notes-picker { display: grid; }
-  .notepad { padding: 8px; }
+.notepad { display: grid; min-width: 0; }
+.notepad-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: .75rem;
+}
+.notepad-title input {
+  margin: 13px 0 19px;
+  border: 0;
+  background: transparent;
+  padding: 3px 0;
+  font-size: clamp(1.9rem, 6vw, 2.8rem);
+  font-weight: 650;
+  line-height: 1.14;
+  letter-spacing: -.045em;
+}
+.notepad-toolbar, .notepad-format, .notepad-mode {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.notepad-toolbar {
+  justify-content: space-between;
+  gap: 4px;
+  border-block: 1px solid var(--border);
+  padding-block: 3px;
+  color: var(--muted);
+}
+.notepad-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 6px;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: 7px;
+}
+.notepad-tool:hover:not(:disabled), .notepad-tool[aria-pressed="true"] { background: #373737; color: #fff; }
+.notepad-mode { margin-inline-start: auto; }
+.notepad-mode button { font-size: .77rem; font-weight: 650; padding-inline: 8px; }
+.notepad-format button { position: relative; }
+.notepad-format button:nth-child(1), .notepad-format button:nth-child(3), .notepad-format button:nth-child(6) { margin-right: 7px; }
+.notepad-format button:nth-child(1)::after, .notepad-format button:nth-child(3)::after, .notepad-format button:nth-child(6)::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  height: 16px;
+  border-right: 1px solid var(--border);
+  pointer-events: none;
+}
+.notepad textarea, .notepad-preview {
+  display: block;
+  min-height: clamp(16rem, calc(100dvh - 400px), 38rem);
+  padding: 22px 2px;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.62;
+  color: #ececec;
+  overflow-wrap: anywhere;
+}
+.notepad textarea { background: transparent; border: 0; border-radius: 0; resize: vertical; }
+.notepad textarea:focus-visible { outline-offset: -2px; }
+.notepad-preview { overflow-x: auto; }
+.notepad-preview > :first-child { margin-top: 0; }
+.notepad-preview p { color: inherit; line-height: inherit; }
+.notepad-preview h1, .notepad-preview h2, .notepad-preview h3 { margin-block: .95em .4em; }
+.notepad-preview p, .notepad-preview ul, .notepad-preview ol, .notepad-preview blockquote, .notepad-preview pre, .notepad-preview table {
+  margin-block: 0 .9em;
+}
+.notepad-preview ul, .notepad-preview ol { padding-inline-start: 1.45em; }
+.notepad-preview .contains-task-list { list-style: none; padding-inline-start: 0; }
+.notepad-preview .task-list-item { list-style: none; }
+.notepad-preview .task-list-item input { width: auto; min-height: 0; accent-color: var(--accent); }
+.notepad-preview blockquote { padding-inline-start: 13px; margin-inline: 0; border-inline-start: 3px solid #666; color: var(--muted); }
+.notepad-preview a { color: var(--accent); text-decoration: underline; }
+.notepad-preview pre { padding: 10px; background: var(--surface); overflow-x: auto; }
+.notepad-preview code { background: var(--surface); border-radius: 3px; }
+.notepad-preview table { border-collapse: collapse; }
+.notepad-preview th, .notepad-preview td { border: 1px solid var(--border); padding: 4px 8px; }
+.notepad-preview .notepad-empty { color: var(--muted); }
+.notepad-info, .notepad-footer, .notepad-actions { display: flex; align-items: center; gap: 8px; }
+.notepad-info, .notepad-footer { justify-content: space-between; }
+.notepad-info {
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .74rem;
+}
+.notepad-footer { margin-top: 10px; }
+.notepad-status { font-size: .8rem; }
+.notepad-actions { flex-wrap: wrap; }
+.notepad-problem { display: grid; gap: 8px; margin-top: 7px; }
+
+@media (max-width: 540px) {
   .main-wrap[data-tool="notes"] { padding-top: 15px; }
+  .notes-switcher { margin-inline: 0; width: 100%; }
+  .notepad-title input { margin: 10px 0 14px; }
+  .notepad-format { display: contents; }
+  .notepad-format button:nth-child(n) { margin-right: 0; }
+  .notepad-format button::after { display: none; }
+  .notepad-toolbar { justify-content: start; gap: 2px; }
+  .notepad textarea, .notepad-preview { padding: 15px 2px; }
 }
