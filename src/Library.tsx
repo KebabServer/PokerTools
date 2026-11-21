@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { Trash2 } from 'lucide-react'
-import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type SavedHand } from './library.ts'
+import { calculationLibrary, handLibrary, type SavedCalculation, type SavedHand } from './library.ts'
 
 type Entry = { id: string; title: string }
 
@@ -52,29 +52,24 @@ function SavedItems<Row extends Entry>({ title, empty, collection, open }: {
   </section>
 }
 
-export function Library({ session, openHand, openCalculation, removeHand, removeCalculation }: {
+export function Library({ session, openHand, openCalculation, removeHand, removeCalculation, signOut, signingOut }: {
   session: Session; openHand: (hand: SavedHand) => void; openCalculation: (calculation: SavedCalculation) => void
   removeHand: (id: string) => Promise<void>; removeCalculation: (id: string) => Promise<void>
+  signOut: () => Promise<void>; signingOut: boolean
 }) {
-  const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
 
-  async function signOut() {
-    if (!supabase || busy) return
-    setBusy(true)
+  async function leave() {
     setProblem('')
     try {
-      const { error } = await supabase.auth.signOut()
-      if (error) throw error
+      await signOut()
     } catch (error) {
       setProblem((error as Error).message)
-    } finally {
-      setBusy(false)
     }
   }
 
   return <div className="library-workspace">
-    <div className="tool-heading"><h1>Library</h1><button className="button small" disabled={busy} onClick={() => void signOut()}>Sign out</button></div>
+    <div className="tool-heading"><h1>Library</h1><button className="button small" disabled={signingOut} onClick={() => void leave()}>Sign out</button></div>
     {problem && <p className="error" role="alert">{problem}</p>}
     <LibraryItems userId={session.user.id} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />
   </div>

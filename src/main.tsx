@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BookOpen, Calculator, ChartColumn, Grid3X3, Layers3, NotebookPen, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
@@ -37,6 +37,8 @@ function Workspace({ session }: { session: Session }) {
   const [calculationVersion, resetCalculation] = useState(0)
   const [deletedHandId, setDeletedHandId] = useState<string | null>(null)
   const [deletedCalculationId, setDeletedCalculationId] = useState<string | null>(null)
+  const [signingOut, setSigningOut] = useState(false)
+  const flushNotes = useRef<(() => Promise<void>) | null>(null)
 
   useEffect(() => {
     const change = () => {
@@ -75,6 +77,20 @@ function Workspace({ session }: { session: Session }) {
     setDeletedCalculationId(id)
   }
 
+  async function signOut() {
+    if (!supabase || signingOut) return
+    setSigningOut(true)
+    try {
+      await flushNotes.current?.().catch(() => {
+        throw new Error('A note couldn’t be saved. Open Notes to retry or save a copy, then sign out again.')
+      })
+      const { error } = await supabase.auth.signOut()
+      if (error) throw error
+    } finally {
+      setSigningOut(false)
+    }
+  }
+
   return <>
     <header className="site-header">
       <nav className="app-nav" aria-label="Poker tools">
@@ -102,9 +118,12 @@ function Workspace({ session }: { session: Session }) {
         <Suspense fallback={<p role="status">Loading flop reports…</p>}><FlopReports /></Suspense>
       </div>}
       {openedTabs.has('notes') && <div hidden={tool !== 'notes'}>
-        <Suspense fallback={<p role="status">Loading notes…</p>}><Notes userId={session?.user.id} /></Suspense>
+        <Suspense fallback={<p role="status">Loading notes…</p>}>
+          <Notes userId={session.user.id} active={tool === 'notes'} locked={signingOut} flushRef={flushNotes} />
+        </Suspense>
       </div>}
-      {tool === 'library' && <Library session={session} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />}
+      {tool === 'library' && <Library session={session} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand}
+        removeCalculation={removeCalculation} signOut={signOut} signingOut={signingOut} />}
     </main>
   </>
 }

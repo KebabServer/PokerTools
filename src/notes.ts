@@ -1,13 +1,10 @@
 import { supabase } from './library.ts'
+import { NoteChangedError } from './noteAutosave.ts'
 
-export type NoteSummary = { id: string; title: string; updated_at: string }
-export type SavedNote = NoteSummary & { body: string }
-type NoteText = Pick<SavedNote, 'title' | 'body'>
+export type SavedNote = { id: string; title: string; body: string; pinned: boolean; updated_at: string }
+export type NoteText = Pick<SavedNote, 'title' | 'body' | 'pinned'>
 
-const summaryColumns = 'id,title,updated_at'
-const noteColumns = summaryColumns + ',body'
-
-export class NoteChangedError extends Error {}
+const noteColumns = 'id,title,body,pinned,updated_at'
 
 export function privateNotes(userId: string) {
   const table = () => {
@@ -23,16 +20,18 @@ export function privateNotes(userId: string) {
   }
 
   return {
-    async list(signal: AbortSignal) {
-      const notes = new Map<string, NoteSummary>()
+    async list(signal?: AbortSignal) {
+      const notes: SavedNote[] = []
       const pageSize = 500
-      for (let offset = 0; ; offset += pageSize) {
-        const { data, error } = await table().select(summaryColumns).eq('owner_id', userId)
-          .order('updated_at', { ascending: false }).order('id', { ascending: false })
-          .range(offset, offset + pageSize - 1).abortSignal(signal).overrideTypes<NoteSummary[], { merge: false }>()
+      for (;;) {
+        let request = table().select(noteColumns).eq('owner_id', userId).order('id').limit(pageSize)
+        const last = notes.at(-1)
+        if (last) request = request.gt('id', last.id)
+        if (signal) request = request.abortSignal(signal)
+        const { data, error } = await request.overrideTypes<SavedNote[], { merge: false }>()
         if (error) throw error
-        for (const note of data) notes.set(note.id, note)
-        if (data.length < pageSize) return [...notes.values()]
+        notes.push(...data)
+        if (data.length < pageSize) return notes
       }
     },
     read,
@@ -46,7 +45,7 @@ export function privateNotes(userId: string) {
 
       // A previous save can have committed even when the browser missed its response.
       const current = await read(id)
-      if (current?.title === text.title && current.body === text.body) return current
+      if (current?.title === text.title && current.body === text.body && current.pinned === text.pinned) return current
       throw new NoteChangedError('The saved note changed. Save a copy to keep your edits.')
     },
     async remove(note: SavedNote) {

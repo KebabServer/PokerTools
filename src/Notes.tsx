@@ -1,238 +1,263 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Bold, Eye, FileText, Hash, Italic, Link2, List, ListChecks, Pencil, Plus, Quote, Trash2, Type } from 'lucide-react'
-import Markdown from 'react-markdown'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
+import { Bold, ChevronLeft, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Search, Trash2, Type, X } from 'lucide-react'
+import { format, formatDistanceToNow, parseISO } from 'date-fns'
+import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { supabase } from './library.ts'
+import { createNoteStore, NoteChangedError } from './noteAutosave.ts'
 import { countNoteWords, formatNote, type NoteFormat } from './noteMarkdown.ts'
-import { NoteChangedError, privateNotes, type NoteSummary, type SavedNote } from './notes.ts'
+import { privateNotes, type SavedNote } from './notes.ts'
 import './notes.css'
 
-type Editor = { id: string; saved: SavedNote | null; title: string; body: string }
-const blankNote = (): Editor => ({ id: crypto.randomUUID(), saved: null, title: '', body: '' })
-const openEditor = (note: SavedNote): Editor => ({ id: note.id, saved: note, title: note.title, body: note.body })
-const editedDate = new Intl.DateTimeFormat('en', { dateStyle: 'medium' })
 const formatting = [
-  { format: 'title', label: 'Title', Icon: Type },
+  { format: 'heading', label: 'Heading', Icon: Type, divider: true },
   { format: 'bold', label: 'Bold', Icon: Bold },
-  { format: 'italic', label: 'Italic', Icon: Italic },
-  { format: 'bullet', label: 'Bulleted list', Icon: List },
+  { format: 'italic', label: 'Italic', Icon: Italic, divider: true },
+  { format: 'bullet', label: 'Bullet list', Icon: List },
   { format: 'checklist', label: 'Checklist', Icon: ListChecks },
-  { format: 'quote', label: 'Quote', Icon: Quote },
-  { format: 'heading', label: 'Heading', Icon: Hash },
-  { format: 'link', label: 'Link', Icon: Link2 },
+  { format: 'quote', label: 'Quote', Icon: Quote, divider: true },
+  { format: 'heading3', label: 'Heading 3', Icon: Hash },
+  { format: 'link', label: 'Insert link', Icon: Link2 },
 ] as const
 
-function NoteWorkspace({ userId }: { userId: string }) {
-  const [library] = useState(() => privateNotes(userId))
-  const [notes, setNotes] = useState<NoteSummary[] | null>(null)
-  const [loadError, setLoadError] = useState(false)
-  const [retry, setRetry] = useState(0)
-  const [editor, setEditor] = useState(blankNote)
-  const [preview, setPreview] = useState(false)
-  const [pending, setPending] = useState('')
-  const [problem, setProblem] = useState<{ text: string; conflict?: boolean; canCopy?: boolean }>()
-  const inFlight = useRef(false)
-  const paper = useRef<HTMLTextAreaElement>(null)
-  const selectionToRestore = useRef<{ start: number; end: number } | null>(null)
-  const dirty = editor.title !== (editor.saved?.title ?? '') || editor.body !== (editor.saved?.body ?? '')
-  const wordCount = useMemo(() => countNoteWords(editor.body), [editor.body])
+const markdownComponents: Components = {
+  a: ({ node: _node, href, children, ...props }) => {
+    if (!href) return children
+    if (/^https?:\/\//i.test(href)) return <a {...props} href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+    if (href.startsWith('//')) return <a {...props} href={'https:' + href} target="_blank" rel="noopener noreferrer">{children}</a>
+    return <a {...props} href={href}>{children}</a>
+  },
+}
 
-  useLayoutEffect(() => {
-    const selection = selectionToRestore.current
-    selectionToRestore.current = null
-    if (!selection || !paper.current || preview) return
-    paper.current.focus()
-    paper.current.setSelectionRange(selection.start, selection.end)
-  }, [editor, preview])
+const noteTitle = (note: SavedNote) => note.title.trim() || 'Untitled note'
+const noteSnippet = (note: SavedNote) => note.body.replace(/[#*`>\-[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 95) || 'Empty note'
+
+export default function Notes({ userId, active, locked, flushRef }: {
+  userId: string; active: boolean; locked: boolean; flushRef: RefObject<(() => Promise<void>) | null>
+}) {
+  const [store] = useState(() => createNoteStore(privateNotes(userId)))
+  const entries = useSyncExternalStore(store.subscribe, store.getSnapshot)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [preview, setPreview] = useState(true)
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<'all' | 'pinned'>('all')
+  const [showActions, setShowActions] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [problem, setProblem] = useState('')
+  const paper = useRef<HTMLTextAreaElement>(null)
+  const editorPane = useRef<HTMLElement>(null)
+  const selection = useRef<{ start: number; end: number } | null>(null)
+  const entry = entries.find(item => item.note.id === selectedId)
+  const note = entry?.note
+  const hasUnsaved = entries.some(item => item.dirty)
+  const disabled = locked || !!entry?.busy
+
+  const visible = useMemo(() => {
+    const query = search.toLowerCase()
+    return entries.map(item => item.note).filter(item =>
+      (filter === 'all' || item.pinned) && (item.title + ' ' + item.body).toLowerCase().includes(query),
+    ).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
+  }, [entries, filter, search])
 
   useEffect(() => {
     const controller = new AbortController()
-    void library.list(controller.signal).then(rows => {
-      if (!controller.signal.aborted) setNotes(rows)
-    }, () => {
-      if (!controller.signal.aborted) setLoadError(true)
-    })
-    return () => controller.abort()
-  }, [library, retry])
+    const refresh = () => {
+      void store.refresh(controller.signal).then(() => {
+        if (controller.signal.aborted) return
+        setLoadFailed(false)
+        setLoading(false)
+      }).catch(() => {
+        if (controller.signal.aborted) return
+        setLoadFailed(true)
+        setLoading(false)
+      })
+    }
+    const syncOnReturn = () => { if (!document.hidden) refresh() }
+    const channel = supabase?.channel('pokertools-notes:' + userId, { config: { private: true } })
+      .on('broadcast', { event: 'changed' }, refresh)
+      .subscribe(status => { if (status === 'SUBSCRIBED') refresh() })
+    refresh()
+    window.addEventListener('focus', syncOnReturn)
+    window.addEventListener('online', syncOnReturn)
+    document.addEventListener('visibilitychange', syncOnReturn)
+    flushRef.current = store.flush
+    return () => {
+      controller.abort()
+      store.cancelTimers()
+      flushRef.current = null
+      window.removeEventListener('focus', syncOnReturn)
+      window.removeEventListener('online', syncOnReturn)
+      document.removeEventListener('visibilitychange', syncOnReturn)
+      if (channel) void supabase?.removeChannel(channel)
+    }
+  }, [store, userId, flushRef])
 
   useEffect(() => {
-    if (!dirty) return
+    if (!hasUnsaved) return
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault()
       event.returnValue = ''
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty])
+  }, [hasUnsaved])
 
-  async function run(label: string, failure: string, action: () => Promise<void>) {
-    if (inFlight.current) return
-    inFlight.current = true
-    setPending(label)
-    setProblem(undefined)
+  useLayoutEffect(() => {
+    if (active) setPreview(true)
+  }, [active])
+
+  useLayoutEffect(() => {
+    setShowActions(false)
+    editorPane.current?.scrollTo(0, 0)
+  }, [selectedId])
+
+  useLayoutEffect(() => {
+    const caret = selection.current
+    selection.current = null
+    if (!caret || !paper.current || preview || !active) return
+    paper.current.focus()
+    paper.current.setSelectionRange(caret.start, caret.end)
+  }, [note, preview, active])
+
+  function select(id: string | null, showPreview = true) {
+    setSelectedId(id)
+    setPreview(showPreview)
+    setProblem('')
+  }
+
+  async function create() {
+    if (creating || locked) return
+    setCreating(true)
+    setProblem('')
     try {
-      await action()
-    } catch (error) {
-      setProblem(error instanceof NoteChangedError
-        ? { text: error.message, conflict: true, canCopy: label === 'Saving…' }
-        : { text: failure })
+      const created = await store.create()
+      setFilter('all')
+      setSearch('')
+      select(created.id, false)
+    } catch {
+      setProblem('Couldn’t create a note. Try again.')
     } finally {
-      inFlight.current = false
-      setPending('')
+      setCreating(false)
     }
   }
 
-  function canLeave() {
-    return !inFlight.current && (!dirty || window.confirm('Discard unsaved changes to this note?'))
+  async function remove() {
+    if (!note || disabled || !window.confirm('Delete this note? This cannot be undone.')) return
+    setShowActions(false)
+    try {
+      await store.remove(note.id)
+      setSelectedId(current => current === note.id ? null : current)
+    } catch {
+      setProblem('Couldn’t delete this note. It may have changed elsewhere.')
+    }
   }
 
-  function newNote() {
-    if (!canLeave()) return
-    selectionToRestore.current = { start: 0, end: 0 }
-    setEditor(blankNote())
+  async function copy() {
+    if (!note || disabled) return
+    try {
+      const created = await store.copy(note.id)
+      if (!created) return
+      setFilter('all')
+      setSearch('')
+      select(created.id, false)
+    } catch {
+      setProblem('Couldn’t save a copy. Your draft is still here.')
+    }
+  }
+
+  function insertMarkdown(command: NoteFormat) {
+    if (!note || disabled) return
+    const start = paper.current?.selectionStart ?? note.body.length
+    const change = formatNote(note.body, start, paper.current?.selectionEnd ?? start, command)
+    selection.current = change
     setPreview(false)
-    setProblem(undefined)
+    store.edit(note.id, { body: change.text })
   }
 
-  function openNote(id: string) {
-    if ((!problem?.conflict && id === editor.saved?.id) || !canLeave()) return
-    void run('Opening…', 'Couldn’t open this note.', async () => {
-      const note = await library.read(id)
-      if (!note) throw new Error('Note unavailable.')
-      setEditor(openEditor(note))
-      setPreview(false)
-    })
-  }
+  const saveStatus = !entry?.dirty ? 'Autosaved' : entry.problem ? 'Not saved' : 'Saving...'
 
-  function save(copy = false) {
-    if (!dirty || inFlight.current) return
-    const baseTitle = editor.title.trim() || editor.body.split('\n').find(line => line.trim())?.trim() || 'Untitled note'
-    const suffix = copy ? ' (copy)' : ''
-    const title = Array.from(baseTitle).slice(0, 120 - suffix.length).join('').trimEnd() + suffix
-    const target = copy ? { ...editor, id: crypto.randomUUID(), saved: null, title } : editor
-    if (copy) setEditor(target)
-    void run('Saving…', 'Couldn’t save this note. Your edits are still here.', async () => {
-      const note = await library.save(target.id, { title, body: target.body }, target.saved?.updated_at ?? null)
-      const { id, updated_at } = note
-      setNotes(rows => [{ id, title: note.title, updated_at }, ...(rows ?? []).filter(row => row.id !== id)])
-      setEditor(openEditor(note))
-    })
-  }
-
-  function remove() {
-    const note = editor.saved
-    if (!note || inFlight.current || !window.confirm('Delete this note?')) return
-    void run('Deleting…', 'Couldn’t delete this note.', async () => {
-      await library.remove(note)
-      setNotes(rows => rows?.filter(row => row.id !== note.id) ?? [])
-      setEditor(blankNote())
-      setPreview(false)
-    })
-  }
-
-  function shortcut(event: KeyboardEvent) {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault()
-      save()
-    }
-  }
-
-  function applyFormat(format: NoteFormat) {
-    const textarea = paper.current
-    if (!textarea || preview || inFlight.current) return
-    const change = formatNote(editor.body, textarea.selectionStart, textarea.selectionEnd, format)
-    selectionToRestore.current = change
-    setEditor({ ...editor, body: change.text })
-  }
-
-  return <div className="notes-workspace" onKeyDown={shortcut}>
-    <div className="tool-heading">
-      <h1 className={notes ? 'sr-only' : undefined}>Notes</h1>
-      {notes && <div className="notes-switcher">
-        <label>
-          <span className="sr-only">Saved notes</span>
-          <select aria-label="Saved notes" value={editor.saved?.id ?? ''} disabled={!!pending || !notes.length}
-            onChange={event => openNote(event.target.value)}>
-            <option value="" disabled>{notes.length ? 'Open a saved note' : 'No saved notes yet'}</option>
-            {notes.map(note => <option value={note.id} key={note.id}>{note.title}</option>)}
-          </select>
-        </label>
-        <button type="button" className="button" disabled={!!pending} onClick={newNote}>
-          <Plus size={16} />New note
-        </button>
-      </div>}
-    </div>
-    {loadError && <section className="panel review-panel">
-      <p className="error" role="alert">Couldn’t load your notes.</p>
-      <button type="button" className="button notes-retry" onClick={() => { setLoadError(false); setRetry(value => value + 1) }}>Retry</button>
-    </section>}
-    {!loadError && !notes && <p role="status">Loading notes…</p>}
-    {notes && <form className="notepad" aria-label="Note editor" onSubmit={event => { event.preventDefault(); save() }}>
-        <div className="notepad-meta">
-          <FileText size={14} aria-hidden="true" />
-          {editor.saved ? <span>Edited <time dateTime={editor.saved.updated_at}>{editedDate.format(new Date(editor.saved.updated_at))}</time></span> : <span>Draft</span>}
-        </div>
-        <label className="notepad-title">
-          <span className="sr-only">Note title</span>
-          <input name="title" placeholder="Untitled note" maxLength={120} value={editor.title} readOnly={!!pending}
-            onChange={event => setEditor({ ...editor, title: event.target.value })} />
-        </label>
-        <div className="notepad-toolbar">
-          <div className="notepad-format" role="group" aria-label="Markdown formatting">
-            {formatting.map(({ format, label, Icon }) => <button type="button" className="notepad-tool"
-              key={format} title={label} aria-label={label} disabled={preview || !!pending}
-              onMouseDown={event => event.preventDefault()} onClick={() => applyFormat(format)}>
-              <Icon size={17} aria-hidden="true" />
-            </button>)}
-          </div>
-          <div className="notepad-mode" role="group" aria-label="Note view">
-            <button type="button" className="notepad-tool" aria-pressed={!preview} onClick={() => setPreview(false)}><Pencil size={15} aria-hidden="true" />Edit</button>
-            <button type="button" className="notepad-tool" aria-pressed={preview} onClick={() => setPreview(true)}><Eye size={16} aria-hidden="true" />Preview</button>
-          </div>
-        </div>
-        <label hidden={preview}>
-          <span className="sr-only">Note text</span>
-          <textarea name="body" placeholder="Write a note…" ref={paper} value={editor.body} readOnly={!!pending} spellCheck={false}
-            onChange={event => setEditor({ ...editor, body: event.target.value })} />
-        </label>
-        {preview && <section className="notepad-preview" aria-label="Markdown preview">
-          {editor.body.trim() ? <Markdown remarkPlugins={[remarkGfm]} disallowedElements={['img']}
-            components={{ a: ({ node: _node, children, ...props }) => props.href
-              ? <a {...props} target="_blank" rel="noreferrer">{children}</a>
-              : <span>{children}</span> }}>
-            {editor.body}
-          </Markdown> : <p className="notepad-empty">Nothing to preview yet.</p>}
-        </section>}
-        <div className="notepad-info">
-          <span>Markdown supported</span><span>{wordCount} {wordCount === 1 ? 'word' : 'words'}</span>
-        </div>
-        <div className="notepad-footer">
-          <p className="notepad-status" role="status">{pending || (dirty ? 'Unsaved changes' : editor.saved ? 'Saved to Supabase' : '')}</p>
-          <div className="notepad-actions">
-            {editor.saved && <button type="button" className="icon-button" aria-label="Delete note" disabled={!!pending} onClick={remove}><Trash2 size={16} /></button>}
-            <button type="submit" className="button primary" disabled={!dirty || !!pending}>Save</button>
-          </div>
-        </div>
-        {problem && <div className="notepad-problem">
-          <p className="error" role="alert">{problem.text}</p>
-          {problem.conflict && <div className="notepad-actions">
-            {problem.canCopy && <button type="button" className="button" onClick={() => save(true)}>Save a copy</button>}
-            <button type="button" className="button" onClick={() => openNote(editor.id)}>Reopen saved note</button>
+  return <div className={'notes-layout' + (note ? ' note-open-mobile' : '')}>
+    <aside className="notes-list-pane" aria-label="Saved notes">
+      <div className="notes-list-heading">
+        <h1>Notes<span className="title-count" aria-label={entries.length + ' notes'}>{entries.length}</span></h1>
+        <button type="button" className="icon-button accent" aria-label="Create note" title="Create note" disabled={creating || locked} onClick={() => void create()}><Plus size={20} /></button>
+      </div>
+      <div className="notes-search">
+        <Search size={17} aria-hidden="true" />
+        <input aria-label="Search your notes" placeholder="Search your notes..." value={search} onChange={event => setSearch(event.target.value)} />
+        {search && <button type="button" aria-label="Clear search" onClick={() => setSearch('')}><X size={17} /></button>}
+      </div>
+      <div className="note-filter-row" aria-label="Filter notes" role="group">
+        <button type="button" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}><ListFilter size={14} /> All notes</button>
+        <button type="button" aria-pressed={filter === 'pinned'} onClick={() => setFilter('pinned')}><Pin size={13} /> Pinned</button>
+      </div>
+      <div className="notes-scroll">
+        {loadFailed && <p className="error notes-list-message" role="alert">Couldn’t refresh your notes.</p>}
+        {loading ? <p role="status" className="notes-list-message">Loading notes...</p>
+          : visible.length ? visible.map(item => <button type="button" key={item.id} onClick={() => select(item.id)}
+            className="note-list-card" aria-current={item.id === selectedId ? 'true' : undefined}>
+            <span className="note-list-top"><strong>{noteTitle(item)}</strong>{item.pinned && <Pin size={13} className="pin-small" aria-label="Pinned" />}</span>
+            <span className="note-list-preview">{noteSnippet(item)}</span>
+            <time className="note-list-date" dateTime={item.updated_at}><FileText size={12} />{formatDistanceToNow(parseISO(item.updated_at), { addSuffix: true })}</time>
+          </button>) : <div className="notes-empty-list">
+            <List size={22} /><strong>No notes found</strong>
+            <p>{search ? 'Try another search.' : filter === 'pinned' ? 'Pin a note to see it here.' : 'Create your first note.'}</p>
+            {!search && <button type="button" className="button" disabled={creating || locked} onClick={() => void create()}>New note</button>}
           </div>}
+        {problem && !note && <p className="error notes-list-message" role="alert">{problem}</p>}
+      </div>
+    </aside>
+    <section className="notes-editor-pane" aria-label="Note editor" ref={editorPane}>
+      {entry && note ? <>
+        <div className="editor-toolbar-top">
+          <button type="button" className="editor-back" onClick={() => select(null)}><ChevronLeft size={17} /> All notes</button>
+          <div className="editor-top-right">
+            <span className="save-indicator" data-status={saveStatus} role="status"><span />{saveStatus}</span>
+            {saveStatus === 'Not saved' && <button type="button" className="retry-save" disabled={disabled} onClick={() => store.retry(note.id)}>Retry</button>}
+            <button type="button" className={'icon-button' + (note.pinned ? ' pin-active' : '')} disabled={disabled}
+              onClick={() => store.edit(note.id, { pinned: !note.pinned })} aria-label={note.pinned ? 'Unpin note' : 'Pin note'}
+              title={note.pinned ? 'Unpin note' : 'Pin note'}><Pin size={18} /></button>
+            <div className="note-actions" onKeyDown={event => { if (event.key === 'Escape') setShowActions(false) }}>
+              <button type="button" className="icon-button" disabled={disabled} onClick={() => setShowActions(open => !open)}
+                aria-label="Note actions" aria-expanded={showActions}><MoreHorizontal size={20} /></button>
+              {showActions && <div className="notes-floating-menu"><button type="button" className="delete-action" onClick={() => void remove()}><Trash2 size={15} /> Delete note</button></div>}
+            </div>
+          </div>
+        </div>
+        {(problem || entry.problem instanceof NoteChangedError) && <div className="editor-alert" role="alert">
+          <p className="error">{problem || 'This note changed or was deleted elsewhere. Your draft is still here.'}</p>
+          {entry.problem instanceof NoteChangedError && entry.dirty && <button type="button" className="button small" disabled={disabled} onClick={() => void copy()}>Save a copy</button>}
         </div>}
-      </form>}
-  </div>
-}
-
-export default function Notes({ userId }: { userId?: string }) {
-  if (userId && supabase) return <NoteWorkspace key={userId} userId={userId} />
-  return <div className="notes-workspace">
-    <div className="tool-heading"><h1>Notes</h1></div>
-    <section className="panel review-panel">
-      {supabase ? <>
-        <p>Sign in to write and open your notes.</p>
-        <a className="button primary notes-retry" href="#library">Sign in</a>
-      </> : <p className="error">Configure Supabase to use Notes.</p>}
+        <div className="editor-body">
+          <div className="editor-meta"><FileText size={14} /> NOTE <span>·</span> Edited {format(parseISO(note.updated_at), 'MMM d, yyyy')}</div>
+          <input className="note-title-input" placeholder="Untitled note" aria-label="Note title" maxLength={120} value={note.title} readOnly={disabled}
+            onChange={event => store.edit(note.id, { title: event.target.value })} />
+          <div className="editor-format-toolbar" role="group" aria-label="Markdown formatting">
+            {formatting.map(tool => <span className="notes-tool-group" key={tool.format}>
+              <button type="button" title={tool.label} aria-label={tool.label} disabled={disabled || (preview && tool.format === 'link')}
+                onMouseDown={event => event.preventDefault()} onClick={() => insertMarkdown(tool.format)}><tool.Icon size={17} /></button>
+              {'divider' in tool && <span className="toolbar-divider" />}
+            </span>)}
+            <span className="toolbar-spacer" />
+            <button type="button" className="editor-mode" aria-pressed={!preview} aria-label="Edit" title="Edit Markdown" onClick={() => setPreview(false)}><Pencil size={16} /><span>Edit</span></button>
+            <button type="button" className="editor-mode" aria-pressed={preview} aria-label="Preview" title="Preview formatted note" onClick={() => setPreview(true)}><Eye size={16} /><span>Preview</span></button>
+          </div>
+          <textarea ref={paper} hidden={preview} className="note-content-input" placeholder="Write a note..." aria-label="Note content"
+            value={note.body} readOnly={disabled} onChange={event => store.edit(note.id, { body: event.target.value })} />
+          {preview && <div className="markdown-preview" aria-label="Markdown preview" role="region">
+            <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents} disallowedElements={['img']}>
+              {note.body || '*Nothing here yet. Switch to Edit and start writing.*'}
+            </Markdown>
+          </div>}
+          <div className="editor-bottom-meta"><span>Markdown supported</span><span>{countNoteWords(note.body)} words</span></div>
+        </div>
+      </> : <div className="editor-placeholder">
+        <span className="placeholder-art"><FileText size={38} /></span>
+        <h2>Select a note</h2><p>Choose a note or create one.</p>
+        <button type="button" className="button primary" disabled={creating || locked} onClick={() => void create()}><Plus size={17} /> Create a note</button>
+      </div>}
     </section>
   </div>
 }
