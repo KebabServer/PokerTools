@@ -1,4 +1,4 @@
-export type FlopReportGroup = 'srp' | '3bet-ip' | '3bet-oop'
+export type FlopReportGroup = 'srp' | '3bet-ip' | '3bet-oop' | '4bet-ip' | '4bet-oop'
 
 export const flopReportLines = {
   'cbet': 'C-bet',
@@ -44,6 +44,29 @@ export const flopReportGroups: { id: FlopReportGroup; label: string; matchups: M
       { id: 'mp-sb', label: 'MP vs SB', lines: ['cbet', 'vs-b33', 'vs-b66', 'vs-check', 'x-vs-b33', 'x-vs-b66'] },
       { id: 'co-sb', label: 'CO vs SB', lines: ['cbet', 'vs-b33', 'vs-b66', 'vs-check', 'x-vs-b33', 'x-vs-b66'] },
       { id: 'bu-sb', label: 'BU vs SB', lines: ['cbet', 'vs-b33', 'vs-b66', 'vs-check', 'x-vs-b33', 'x-vs-b66'] },
+    ],
+  },
+  {
+    id: '4bet-ip', label: '4-bet IP', matchups: [
+      { id: 'utg-bb', label: 'UTG vs BB', lines: ['cbet'] },
+      { id: 'utg-sb', label: 'UTG vs SB', lines: ['cbet'] },
+      { id: 'mp-bb', label: 'MP vs BB', lines: ['cbet'] },
+      { id: 'mp-sb', label: 'MP vs SB', lines: ['cbet'] },
+      { id: 'co-bb', label: 'CO vs BB', lines: ['cbet'] },
+      { id: 'co-sb', label: 'CO vs SB', lines: ['cbet'] },
+      { id: 'bu-bb', label: 'BU vs BB', lines: ['cbet'] },
+      { id: 'bu-sb', label: 'BU vs SB', lines: ['cbet'] },
+    ],
+  },
+  {
+    id: '4bet-oop', label: '4-bet OOP', matchups: [
+      { id: 'utg-mp', label: 'UTG vs MP', lines: ['cbet'] },
+      { id: 'utg-co', label: 'UTG vs CO', lines: ['cbet'] },
+      { id: 'utg-bu', label: 'UTG vs BU', lines: ['cbet'] },
+      { id: 'mp-co', label: 'MP vs CO', lines: ['cbet'] },
+      { id: 'mp-bu', label: 'MP vs BU', lines: ['cbet'] },
+      { id: 'co-bu', label: 'CO vs BU', lines: ['cbet'] },
+      { id: 'sb-bb', label: 'SB vs BB', lines: ['cbet'] },
     ],
   },
 ]

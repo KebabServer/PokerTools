@@ -3,12 +3,14 @@ import { test } from 'node:test'
 import { readCards } from '../src/cards.ts'
 import { flopTexture, parseFlopReport } from '../src/flopReport.ts'
 import { flopReportGroups } from '../src/flopReportCatalog.ts'
+import { convertFourBetReport } from '../scripts/convert-4bet-reports.mjs'
 import { readStudySnapshot, reportSnapshotNames } from './studySnapshot.js'
 
 const readReport = file => parseFlopReport(readStudySnapshot('flop-reports/' + file + '.csv'))
 
-test('each matchup and line has a complete report of 1,755 distinct solver flops', () => {
-  const files = flopReportGroups.flatMap(group => group.matchups.flatMap(matchup =>
+test('each original matchup and line has a complete report of 1,755 distinct solver flops', () => {
+  const groups = flopReportGroups.filter(group => !group.id.startsWith('4bet-'))
+  const files = groups.flatMap(group => group.matchups.flatMap(matchup =>
     matchup.lines.map(line => `${group.id}-${matchup.id}-${line}.csv`)
   ))
   assert.equal(files.length, 86)
@@ -50,4 +52,54 @@ test('3-bet IP facing B66 loads the selected matchup and preserves missing EVs',
   assert.equal(missing.ipEv, null)
   assert.equal(missing.oopEv, null)
   assert.equal(missing.frequencies[0], .50551)
+})
+
+function fourBetExport({ actor, ip, oop, bets }) {
+  const actions = [
+    { code: 'X', display_name: 'CHECK' },
+    ...bets.map(([code, ratio]) => ({ code, display_name: 'BET', betsize_by_pot: ratio })),
+    { code: 'RAI', display_name: 'ALLIN' },
+  ]
+  return {
+    status: 'done',
+    players: [{ position: ip, relative_position: 'IP' }, { position: oop, relative_position: 'OOP' }],
+    game_point: {
+      game: { active_position: actor, current_street: { type: 'FLOP' } },
+      available_actions: actions.map(action => ({ action })),
+    },
+    solutions: [{
+      name: '2h2d2c',
+      player_solutions: [{ position: ip, ev: 28, eq: .6, eqr: 1.2 }, { position: oop, ev: 14, eq: .4, eqr: .9 }],
+      action_solutions: actions.map(({ code }, index) => ({
+        action_code: code, frequency: index === 1 ? .875 : index === actions.length - 1 ? .125 : 0,
+      })).reverse(),
+    }],
+  }
+}
+
+test('4-bet conversion keeps legacy columns, solver sizing, and IP/OOP EVs', () => {
+  const exportData = fourBetExport({
+    actor: 'UTG', ip: 'UTG', oop: 'BB', bets: [['R14.7', '0.3303'], ['R29.35', '0.65955']],
+  })
+  const { file, csv } = convertFourBetReport(exportData)
+  assert.equal(file, '4bet-ip-utg-bb-cbet.csv')
+  const [header, row] = csv.trim().split('\n')
+  assert.equal(header, 'oop_ev,oop_eq,ip_ev,ip_eq,oop_eqr,ip_eqr,actions/0/action_code,Check,actions/1/action_code,B33,actions/2/action_code,B66,actions/3/action_code,AI,flop')
+  assert.equal(row, '14,0.4,28,0.6,0.9,1.2,X,0,R14.7,0.875,R29.35,0,RAI,0.125,2h2d2c')
+  const parsed = parseFlopReport(csv)
+  const board = parsed.groups.find(group => group.id === 'trips').boards[0]
+  assert.deepEqual([board.ipEv, board.oopEv, board.frequencies], [28, 14, [0, .875, 0, .125]])
+})
+
+test('4-bet conversion recognizes OOP position aliases and keeps adjacent bet sizes distinct', () => {
+  const exportData = fourBetExport({
+    actor: 'HJ', ip: 'BTN', oop: 'HJ', bets: [['R4.15', '.1'], ['R10.4', '.2506'], ['R20.75', '.5'], ['R31.1', '.7494']],
+  })
+  const { file, csv } = convertFourBetReport(exportData)
+  assert.equal(file, '4bet-oop-mp-bu-cbet.csv')
+  const { actions } = parseFlopReport(csv)
+  assert.deepEqual(actions.map(action => action.label), ['Check', 'B10', 'B25', 'B50', 'B75', 'AI'])
+  assert.equal(new Set(actions.map(action => action.color)).size, actions.length)
+  exportData.solutions[0].action_solutions.pop()
+  assert.throws(() => convertFourBetReport(exportData), /Unexpected actions/)
 })

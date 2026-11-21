@@ -34,7 +34,7 @@ Sign in at the site entrance. You can sign out from **Library**. Use **Save hand
 - In **Hand Replayer**, enter seats in clockwise order and identify the dealer. Enter blinds, an optional per-seat ante, and any known cards. Record each acting player's action in order. A raise amount is the player’s total commitment for the current street. Chip amounts support up to two decimals. The replay returns unmatched chips and shows each side pot separately. At a showdown with unknown cards, any pot whose winner depends on those cards stays unresolved.
 - In **Equity Calculator**, enter `AsKd` or a comma-separated range such as `77+, AJs+, KQo, A5s-A2s`. Use `random` for all starting hands. The grid adds or removes whole starting-hand classes. The board takes 0, 3, 4, or 5 cards and the dead-card field is optional. Exact mode counts legal matchups and board runouts. Estimated mode samples legal matchups and runouts in a cancellable Web Worker. Wins are outright wins and ties are outcomes where the player shares first place. Equity credits the player with their fraction of the pot. Calculations run in the browser. Inputs and results are stored in your private library when you save them.
 - In **Preflop Viewer**, choose a preset and select a spot to see its range on the 13×13 grid. Select a hand to compare its frequencies across the RFI, 3-bet, and 4-bet position matrices. Gray marks the share without a listed action. The viewer loads the four presets from Supabase.
-- In **Flop Reports**, choose the pot type, positional matchup, and action line. Each bar shows the action mix for one solver flop, grouped by board texture. Hover over a bar for a preview, or tap it to open the flop, its IP and OOP EV, and its action frequencies. Use the arrow buttons in the details to step through boards. The site loads the selected report from Supabase.
+- In **Flop Reports**, choose the pot type, positional matchup, and action line. **4-bet IP** and **4-bet OOP** show the supplied C-bet reports. Each bar shows the action mix for one solver flop, grouped by board texture. Hover over a bar for a preview, or tap it to open the flop, its IP and OOP EV, and its action frequencies. Use the arrow buttons in the details to step through boards. The site loads the selected report from Supabase.
 - In **Flop Viewer**, select a configuration, flop, and decision node. Select a hand on the 13×13 grid to see exact combos, action frequencies, and available EVs. The chart removes board blockers and weights the action and hand-class totals by each exact combo's range weight. Gray in the grid includes available combos that do not reach the selected node. The migration adds an illustrative example so you can try the viewer before importing ranges.
 - In **Notes**, search titles and note text, pin important notes, and use the toolbar to write Markdown. Existing notes open in **Preview**. Title, text, and pin changes autosave. If a save fails, use **Retry**. If another device changed or deleted the note, use **Save a copy** to keep your draft.
 
@@ -61,3 +61,14 @@ A JSON file takes one spot object or an array of spots. Give each action a label
 ```
 
 The legacy import reads `Configuration`, `Board`, and the numbered `NodeName`, `PreflopRange`, `RangeColors`, and `Freqs` columns. Legacy action labels follow the source color order and display as **Action 1**, **Action 2**, and so on.
+
+## Import 4-bet flop reports into a new project
+
+Run the repository migrations first. From the repository root, extract the supplied ZIP and convert its solver exports to the legacy CSV format.
+
+```sh
+unzip /path/to/4Bet.zip -d /tmp/pokertools-exports
+node scripts/convert-4bet-reports.mjs /tmp/pokertools-exports/4Bet /tmp/pokertools-reports
+```
+
+The output contains the CSVs and an `import-4bet-reports.sql` file. Run the SQL with an administrative Postgres connection to the new project to load `study_files`. Store the generated files outside the public repository and site build.

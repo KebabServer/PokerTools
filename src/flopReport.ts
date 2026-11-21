@@ -30,6 +30,8 @@ const actionColors: Record<string, string> = {
   Call: '#278352',
   Check: '#278352',
   AI: '#7d90a8',
+  B10: '#e9ac57',
+  B50: '#f47481',
 }
 const raiseColors = ['#a83a91', '#d954ac', '#f67eca', '#ffaddf']
 
@@ -37,7 +39,7 @@ function colorForAction(label: string, raiseIndex: number) {
   if (label.startsWith('R')) return raiseColors[raiseIndex % raiseColors.length]
   if (label.startsWith('B')) {
     const percent = Number(label.slice(1))
-    return percent <= 40 ? '#d47c29' : percent <= 100 ? '#cc4152' : '#9462cc'
+    return actionColors[label] ?? (percent <= 40 ? '#d47c29' : percent <= 100 ? '#cc4152' : '#9462cc')
   }
   return actionColors[label]
 }
