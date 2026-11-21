@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BookOpen, Calculator, ChartColumn, Grid3X3, Layers3, NotebookPen, Spade } from 'lucide-react'
+import { BookOpen, Calculator, ChartColumn, Cpu, Grid3X3, Layers3, NotebookPen, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
@@ -13,13 +13,15 @@ const FlopReports = lazy(() => import('./FlopReports.tsx'))
 const FlopViewer = lazy(() => import('./FlopViewer.tsx'))
 const Notes = lazy(() => import('./Notes.tsx'))
 const PreflopViewer = lazy(() => import('./PreflopViewer.tsx'))
+const TurnRiverLab = lazy(() => import('./TurnRiverLab.tsx'))
 
 const tabs = [
-  { id: 'replayer', label: 'Replayer', name: 'Hand Replayer', Icon: Spade },
+  { id: 'replayer', label: 'Replayer', compactLabel: 'Replay', name: 'Hand Replayer', Icon: Spade },
   { id: 'equity', label: 'Equity', name: 'Equity Calculator', Icon: Calculator },
   { id: 'preflop', label: 'Preflop', name: 'Preflop Viewer', Icon: Grid3X3 },
   { id: 'flop-viewer', label: 'Flop Viewer', compactLabel: 'Flop', name: 'Flop Viewer', Icon: Layers3 },
   { id: 'flop-reports', label: 'Flop Reports', compactLabel: 'Reports', name: 'Flop Reports', Icon: ChartColumn },
+  { id: 'solver', label: 'Solver', name: 'Solver', Icon: Cpu },
   { id: 'notes', label: 'Notes', name: 'Notes', Icon: NotebookPen },
   { id: 'library', label: 'Library', name: 'Library', Icon: BookOpen },
 ] as const
@@ -44,7 +46,7 @@ function Workspace({ session }: { session: Session }) {
     const change = () => {
       const tab = tabFromHash()
       setTool(tab)
-      if (tab === 'preflop' || tab === 'flop-reports' || tab === 'flop-viewer' || tab === 'notes') {
+      if (tab === 'preflop' || tab === 'flop-reports' || tab === 'flop-viewer' || tab === 'notes' || tab === 'solver') {
         setOpenedTabs(opened => opened.has(tab) ? opened : new Set(opened).add(tab))
       }
       window.scrollTo(0, 0)
@@ -116,6 +118,9 @@ function Workspace({ session }: { session: Session }) {
       </div>}
       {openedTabs.has('flop-reports') && <div hidden={tool !== 'flop-reports'}>
         <Suspense fallback={<p role="status">Loading flop reports…</p>}><FlopReports /></Suspense>
+      </div>}
+      {openedTabs.has('solver') && <div hidden={tool !== 'solver'}>
+        <Suspense fallback={<p role="status">Loading solver…</p>}><TurnRiverLab userId={session.user.id} /></Suspense>
       </div>}
       {openedTabs.has('notes') && <div hidden={tool !== 'notes'}>
         <Suspense fallback={<p role="status">Loading notes…</p>}>
