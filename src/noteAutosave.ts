@@ -1,7 +1,9 @@
 import type { NoteText, privateNotes, SavedNote } from './notes.ts'
+import { insertNoteLink } from './noteMarkdown.ts'
 
 export class NoteChangedError extends Error {}
 type Repository = ReturnType<typeof privateNotes>
+export type NoteLinkSource = { id: string; body: string; range: { start: number; end: number } | null }
 
 type Entry = {
   note: SavedNote
@@ -122,10 +124,23 @@ export function createNoteStore(repository: Repository) {
     return operation
   }
 
-  function create() {
+  function link(source: NoteLinkSource, targetId: string) {
+    const entry = entries.get(source.id)
+    const target = entries.get(targetId)
+    if (!entry || !target || entry.busy || target.busy || source.id === targetId) {
+      throw new Error('That note is unavailable.')
+    }
+    const range = entry.note.body === source.body ? source.range : null
+    const change = insertNoteLink(entry.note.body, range, targetId, target.note.title)
+    edit(source.id, { body: change.text })
+    return change
+  }
+
+  function create(title = '', source?: NoteLinkSource) {
     return mutate(async () => {
-      const note = await repository.save(crypto.randomUUID(), { title: '', body: '', pinned: false }, null)
+      const note = await repository.save(crypto.randomUUID(), { title, body: '', pinned: false }, null)
       entries.set(note.id, clean(note))
+      if (source) link(source, note.id)
       return note
     })
   }
@@ -190,7 +205,7 @@ export function createNoteStore(repository: Repository) {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    refresh, edit, create, remove, copy, flush,
+    refresh, edit, create, link, remove, copy, flush,
     retry(id: string) {
       const entry = entries.get(id)
       if (!entry) return

@@ -69,3 +69,28 @@ test('refresh keeps a draft when the saved revision changed or was deleted', asy
     await store.flush()
   }
 })
+
+test('creating a linked note keeps parent edits made during creation and flushes both', async () => {
+  const writes = []
+  const { promise, resolve } = Promise.withResolvers()
+  const store = createNoteStore({
+    list: async () => [original],
+    save: async (id, text, revision) => {
+      writes.push({ id, text, revision })
+      if (revision === null) await promise
+      return { id, ...text, updated_at: '2026-11-20T12:00:01Z' }
+    },
+  })
+  await store.refresh()
+  const creation = store.create('Big blind notes', { id: original.id, body: original.body, range: { start: 0, end: 8 } })
+  store.edit(original.id, { body: 'Edits made while waiting' })
+  const flush = store.flush()
+  resolve()
+  const child = await creation
+  await flush
+
+  assert.equal(writes.length, 2)
+  assert.deepEqual(writes[0], { id: child.id, text: { title: 'Big blind notes', body: '', pinned: false }, revision: null })
+  assert.equal(writes[1].revision, original.updated_at)
+  assert.equal(writes[1].text.body, 'Edits made while waiting\n\n[Big blind notes](#notes/' + child.id + ')')
+})

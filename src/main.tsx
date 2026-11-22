@@ -7,6 +7,7 @@ import { EquityCalculator } from './EquityCalculator.tsx'
 import { Library } from './Library.tsx'
 import { SignIn } from './SignIn.tsx'
 import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type SavedHand } from './library.ts'
+import { noteIdFromHref } from './noteMarkdown.ts'
 import './styles.css'
 
 const FlopReports = lazy(() => import('./FlopReports.tsx'))
@@ -27,6 +28,7 @@ const tabs = [
 ] as const
 
 function tabFromHash() {
+  if (noteIdFromHref(window.location.hash)) return 'notes'
   return tabs.find(tab => '#' + tab.id === window.location.hash)?.id ?? 'replayer'
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { countNoteWords, formatNote, insertNoteTable } from '../src/noteMarkdown.ts'
+import { countNoteWords, formatNote, insertNoteLink, insertNoteTable, noteHref, noteIdFromHref } from '../src/noteMarkdown.ts'
 
 test('the Daymark heading buttons insert their matching levels and select the placeholder', () => {
   assert.deepEqual(formatNote('', 0, 0, 'heading'), { text: '## Heading', start: 3, end: 10 })
@@ -32,4 +32,18 @@ test('table insertion preserves surrounding paragraphs and escapes pipes in the 
   const table = insertNoteTable(before + selected + '\n\nAfter', before.length, before.length + selected.length, { columns: 1, rows: 1 })
   assert.equal(table.text, 'Before\n\n| Pot \\| odds and equity |\n| --- |\n|  |\n\nAfter')
   assert.equal(table.text.slice(table.start, table.end), 'Pot \\| odds and equity')
+})
+
+test('note links use a stable note ID and preserve an inline selection as the label', () => {
+  const id = '80000000-0000-4000-8000-000000000001'
+  const href = noteHref(id)
+  assert.equal(noteIdFromHref(href), id)
+  assert.equal(noteIdFromHref('#notes/other'), null)
+  assert.equal(noteIdFromHref('https://example.com/' + href), null)
+
+  const inline = insertNoteLink('See [A|B] next.', { start: 4, end: 9 }, id, 'A note')
+  assert.equal(inline.text, 'See [\\[A\\|B\\]](' + href + ') next.')
+  assert.equal(inline.text.slice(inline.start), ' next.')
+  assert.equal(inline.start, inline.end)
+  assert.equal(insertNoteLink('Start\n', null, id, 'My sub-note').text, 'Start\n\n[My sub-note](' + href + ')')
 })
