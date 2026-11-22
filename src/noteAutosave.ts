@@ -4,6 +4,10 @@ import { insertNoteLink } from './noteMarkdown.ts'
 export class NoteChangedError extends Error {}
 type Repository = ReturnType<typeof privateNotes>
 export type NoteLinkSource = { id: string; body: string; range: { start: number; end: number } | null }
+type Range = { start: number; end: number }
+type BodySnapshot = { body: string; range?: Range }
+type BodyEdit = { before: BodySnapshot; after: BodySnapshot; inputType?: string; time: number }
+type BodyEditOptions = { before?: Range; after?: Range; inputType?: string }
 
 type Entry = {
   note: SavedNote
@@ -13,11 +17,13 @@ type Entry = {
   timer?: ReturnType<typeof setTimeout>
   writing?: Promise<void>
   busy?: boolean
+  undo: BodyEdit[]
+  redo: BodyEdit[]
 }
 
 const delay = 650
 const conflict = () => new NoteChangedError('This note changed or was deleted elsewhere. Save a copy to keep your draft.')
-const clean = (note: SavedNote): Entry => ({ note, acknowledged: note, dirty: false })
+const clean = (note: SavedNote): Entry => ({ note, acknowledged: note, dirty: false, undo: [], redo: [] })
 const content = ({ title, body, pinned }: NoteText): NoteText => ({ title, body, pinned })
 const sameContent = (a: NoteText, b: NoteText) => a.title === b.title && a.body === b.body && a.pinned === b.pinned
 
@@ -55,7 +61,12 @@ export function createNoteStore(repository: Repository) {
       if (!entry.dirty || (received && sameContent(entry.note, received))) {
         if (received) {
           cancelTimer(entry)
-          entries.set(id, clean(received))
+          const next = clean(received)
+          if (received.body === entry.note.body) {
+            next.undo = entry.undo
+            next.redo = entry.redo
+          }
+          entries.set(id, next)
         } else entries.delete(id)
       } else if (received?.updated_at !== entry.acknowledged.updated_at) {
         cancelTimer(entry)
@@ -95,11 +106,7 @@ export function createNoteStore(repository: Repository) {
     return entry.writing
   }
 
-  function edit(id: string, patch: Partial<NoteText>) {
-    const entry = entries.get(id)
-    if (!entry || entry.busy) return
-    const updated = { ...entry.note, ...patch }
-    if (sameContent(entry.note, updated)) return
+  function applyEdit(entry: Entry, updated: SavedNote) {
     entry.note = { ...updated, updated_at: new Date().toISOString() }
     entry.dirty = true
     if (!(entry.problem instanceof NoteChangedError)) {
@@ -111,6 +118,43 @@ export function createNoteStore(repository: Repository) {
       }, delay)
     }
     publish()
+  }
+
+  function edit(id: string, patch: Partial<NoteText>, options?: BodyEditOptions) {
+    const entry = entries.get(id)
+    if (!entry || entry.busy) return
+    const updated = { ...entry.note, ...patch }
+    if (sameContent(entry.note, updated)) return
+    if (entry.note.body !== updated.body) {
+      const before = { body: entry.note.body, range: options?.before }
+      const after = { body: updated.body, range: options?.after }
+      const previous = entry.undo.at(-1)
+      const inputType = options?.inputType
+      const time = Date.now()
+      const cursor = before.range
+      if (inputType && previous?.inputType === inputType && time - previous.time < 750 && cursor
+        && cursor.start === cursor.end && previous.after.range?.start === cursor.start && previous.after.range.end === cursor.end) {
+        previous.after = after
+        previous.time = time
+      } else {
+        entry.undo.push({ before, after, inputType, time })
+        if (entry.undo.length > 100) entry.undo.shift()
+      }
+      entry.redo = []
+    }
+    applyEdit(entry, updated)
+  }
+
+  function navigateHistory(id: string, action: 'undo' | 'redo') {
+    const entry = entries.get(id)
+    if (!entry || entry.busy) return
+    const change = entry[action].pop()
+    if (!change) return
+    change.inputType = undefined
+    entry[action === 'undo' ? 'redo' : 'undo'].push(change)
+    const target = action === 'undo' ? change.before : change.after
+    applyEdit(entry, { ...entry.note, body: target.body })
+    return target.range ?? { start: target.body.length, end: target.body.length }
   }
 
   function mutate<T>(work: () => Promise<T>) {
@@ -132,7 +176,8 @@ export function createNoteStore(repository: Repository) {
     }
     const range = entry.note.body === source.body ? source.range : null
     const change = insertNoteLink(entry.note.body, range, targetId, target.note.title)
-    edit(source.id, { body: change.text })
+    const before = range ?? { start: entry.note.body.length, end: entry.note.body.length }
+    edit(source.id, { body: change.text }, { before, after: change })
     return change
   }
 
@@ -205,7 +250,7 @@ export function createNoteStore(repository: Repository) {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    refresh, edit, create, link, remove, copy, flush,
+    refresh, edit, navigateHistory, create, link, remove, copy, flush,
     retry(id: string) {
       const entry = entries.get(id)
       if (!entry) return

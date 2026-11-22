@@ -94,3 +94,35 @@ test('creating a linked note keeps parent edits made during creation and flushes
   assert.equal(writes[1].revision, original.updated_at)
   assert.equal(writes[1].text.body, 'Edits made while waiting\n\n[Big blind notes](#notes/' + child.id + ')')
 })
+
+test('undo and redo a sub-note link after autosave and refresh', async () => {
+  const saved = new Map([[original.id, original]])
+  const store = createNoteStore({
+    list: async () => [...saved.values()],
+    save: async (id, text) => {
+      const note = { id, ...text, updated_at: new Date().toISOString() }
+      saved.set(id, note)
+      return note
+    },
+  })
+  await store.refresh()
+  const range = { start: 0, end: original.body.length }
+  const child = await store.create('Sub-note', { id: original.id, body: original.body, range })
+  await store.flush()
+  await store.refresh()
+  const linkedText = '[Original](#notes/' + child.id + ')'
+  assert.equal(saved.get(original.id).body, linkedText)
+  assert.equal(store.navigateHistory(child.id, 'undo'), undefined)
+
+  assert.deepEqual(store.navigateHistory(original.id, 'undo'), range)
+  await store.flush()
+  assert.equal(saved.get(original.id).body, original.body)
+  assert.deepEqual(saved.get(child.id), child)
+  assert.equal(store.navigateHistory(original.id, 'redo').end, linkedText.length)
+  await store.flush()
+  assert.equal(saved.get(original.id).body, linkedText)
+
+  saved.set(original.id, { ...original, body: 'Edited in another tab' })
+  await store.refresh()
+  assert.equal(store.navigateHistory(original.id, 'undo'), undefined)
+})

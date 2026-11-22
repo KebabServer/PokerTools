@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type MouseEvent, type RefObject } from 'react'
-import { Bold, ChevronLeft, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Search, Table2, Trash2, Type, X } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type FormEvent, type KeyboardEvent, type MouseEvent, type RefObject } from 'react'
+import { Bold, ChevronLeft, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Redo2, Search, Table2, Trash2, Type, Undo2, X } from 'lucide-react'
 import { format, formatDistanceToNow, parseISO } from 'date-fns'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -64,6 +64,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const actionsButton = useRef<HTMLButtonElement>(null)
   const editorPane = useRef<HTMLElement>(null)
   const selection = useRef<{ start: number; end: number } | null>(null)
+  const cursor = useRef<{ start: number; end: number } | undefined>(undefined)
   const entry = entries.find(item => item.note.id === selectedId)
   const note = entry?.note
   const parentId = trail.at(-1)
@@ -148,6 +149,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
   }, [navigation])
 
   useLayoutEffect(() => {
+    cursor.current = undefined
     setShowActions(false)
     setShowTable(false)
     setLinkSource(null)
@@ -160,6 +162,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
     if (!caret || !paper.current || preview || !active) return
     paper.current.focus()
     paper.current.setSelectionRange(caret.start, caret.end)
+    cursor.current = caret
   }, [note, preview, active])
 
   function select(id: string | null, showPreview = true, noteTrail: string[] = [], push = false) {
@@ -237,7 +240,35 @@ export default function Notes({ userId, active, locked, flushRef }: {
     const change = typeof command === 'string' ? formatNote(note.body, start, end, command) : insertNoteTable(note.body, start, end, command)
     selection.current = change
     setPreview(false)
-    store.edit(note.id, { body: change.text })
+    store.edit(note.id, { body: change.text }, { before: { start, end }, after: change })
+  }
+
+  function navigateHistory(action: 'undo' | 'redo') {
+    if (!note || disabled) return
+    const caret = store.navigateHistory(note.id, action)
+    if (caret && !preview) selection.current = caret
+  }
+
+  function editBody(event: ChangeEvent<HTMLTextAreaElement>) {
+    if (!note || disabled) return
+    const { inputType, isComposing } = event.nativeEvent as InputEvent
+    if (inputType === 'historyUndo' || inputType === 'historyRedo') {
+      navigateHistory(inputType === 'historyUndo' ? 'undo' : 'redo')
+      return
+    }
+    const area = event.currentTarget
+    const after = { start: area.selectionStart, end: area.selectionEnd }
+    const typing = !isComposing && /^(insertText|deleteContentBackward|deleteContentForward)$/.test(inputType)
+    store.edit(note.id, { body: area.value }, { before: cursor.current, after, inputType: typing ? inputType : undefined })
+    cursor.current = after
+  }
+
+  function historyShortcut(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.altKey || event.nativeEvent.isComposing || !(event.ctrlKey || event.metaKey)) return
+    const key = event.key.toLowerCase()
+    if (key !== 'z' && !(event.ctrlKey && !event.metaKey && key === 'y')) return
+    event.preventDefault()
+    navigateHistory(event.shiftKey || key === 'y' ? 'redo' : 'undo')
   }
 
   function addTable(event: FormEvent<HTMLFormElement>) {
@@ -354,6 +385,8 @@ export default function Notes({ userId, active, locked, flushRef }: {
               <button ref={actionsButton} type="button" className="icon-button" disabled={disabled} onClick={() => setShowActions(open => !open)}
                 aria-label="Note actions" aria-expanded={showActions}><MoreHorizontal size={20} /></button>
               {showActions && <div className="notes-floating-menu">
+                <button type="button" disabled={!entry.undo.length || disabled} onClick={() => { navigateHistory('undo'); setShowActions(false) }}><Undo2 size={15} /> Undo</button>
+                <button type="button" disabled={!entry.redo.length || disabled} onClick={() => { navigateHistory('redo'); setShowActions(false) }}><Redo2 size={15} /> Redo</button>
                 <button type="button" disabled={linking} onClick={startNoteLink}><Link2 size={15} /> Link note</button>
                 <button type="button" className="delete-action" onClick={() => void remove()}><Trash2 size={15} /> Delete note</button>
               </div>}
@@ -404,8 +437,9 @@ export default function Notes({ userId, active, locked, flushRef }: {
               <button type="submit" className="button small primary" disabled={disabled}>Insert</button>
             </div>
           </form>}
-          <textarea ref={paper} hidden={preview} className="note-content-input" placeholder="Write a note..." aria-label="Note content"
-            value={note.body} readOnly={disabled} onChange={event => store.edit(note.id, { body: event.target.value })} />
+          <textarea key={note.id} ref={paper} hidden={preview} className="note-content-input" placeholder="Write a note..." aria-label="Note content"
+            value={note.body} readOnly={disabled} onChange={editBody} onKeyDown={historyShortcut}
+            onSelect={event => { cursor.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }} />
           {preview && <div className="markdown-preview" aria-label="Markdown preview" role="region" onClick={followLink}>
             <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents} disallowedElements={['img']}>
               {note.body || '*Nothing here yet. Switch to Edit and start writing.*'}
