@@ -40,6 +40,9 @@ function navigationFromHash() {
   return { id, trail: id && Array.isArray(trail) ? trail.filter((item): item is string => typeof item === 'string') : [] }
 }
 
+type EditorScroll = { paneTop: number; textTop: number; textLeft: number }
+type EditorSelection = { start: number; end: number }
+
 export default function Notes({ userId, active, locked, flushRef }: {
   userId: string; active: boolean; locked: boolean; flushRef: RefObject<(() => Promise<void>) | null>
 }) {
@@ -63,7 +66,8 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const tableButton = useRef<HTMLButtonElement>(null)
   const actionsButton = useRef<HTMLButtonElement>(null)
   const editorPane = useRef<HTMLElement>(null)
-  const selection = useRef<{ start: number; end: number } | null>(null)
+  const editorRestore = useRef<{ caret?: EditorSelection; scroll?: EditorScroll } | null>(null)
+  const pickerScroll = useRef<EditorScroll | undefined>(undefined)
   const cursor = useRef<{ start: number; end: number } | undefined>(undefined)
   const entry = entries.find(item => item.note.id === selectedId)
   const note = entry?.note
@@ -150,6 +154,8 @@ export default function Notes({ userId, active, locked, flushRef }: {
 
   useLayoutEffect(() => {
     cursor.current = undefined
+    editorRestore.current = null
+    pickerScroll.current = undefined
     setShowActions(false)
     setShowTable(false)
     setLinkSource(null)
@@ -157,13 +163,30 @@ export default function Notes({ userId, active, locked, flushRef }: {
   }, [selectedId])
 
   useLayoutEffect(() => {
-    const caret = selection.current
-    selection.current = null
-    if (!caret || !paper.current || preview || !active) return
-    paper.current.focus()
-    paper.current.setSelectionRange(caret.start, caret.end)
-    cursor.current = caret
+    const restore = editorRestore.current
+    editorRestore.current = null
+    const area = paper.current
+    if (!restore || !area || !active) return
+    if (restore.caret && !preview) {
+      area.focus({ preventScroll: true })
+      area.setSelectionRange(restore.caret.start, restore.caret.end)
+      cursor.current = restore.caret
+    }
+    // Updating a textarea's value moves its scroll position to the end.
+    if (restore.scroll) {
+      area.scrollTop = restore.scroll.textTop
+      area.scrollLeft = restore.scroll.textLeft
+      if (editorPane.current) editorPane.current.scrollTop = restore.scroll.paneTop
+    }
   }, [note, preview, active])
+
+  function editorScroll(): EditorScroll {
+    return {
+      paneTop: editorPane.current?.scrollTop ?? 0,
+      textTop: paper.current?.scrollTop ?? 0,
+      textLeft: paper.current?.scrollLeft ?? 0,
+    }
+  }
 
   function select(id: string | null, showPreview = true, noteTrail: string[] = [], push = false) {
     const href = id ? noteHref(id) : '#notes'
@@ -232,21 +255,22 @@ export default function Notes({ userId, active, locked, flushRef }: {
     }
   }
 
-  function insertMarkdown(command: NoteFormat | NoteTableSize) {
+  function insertMarkdown(command: NoteFormat | NoteTableSize, scroll = editorScroll()) {
     if (!note || disabled) return
     const area = preview && typeof command !== 'string' ? null : paper.current
     const start = area?.selectionStart ?? note.body.length
     const end = area?.selectionEnd ?? start
     const change = typeof command === 'string' ? formatNote(note.body, start, end, command) : insertNoteTable(note.body, start, end, command)
-    selection.current = change
+    editorRestore.current = { caret: change, scroll: preview ? undefined : scroll }
     setPreview(false)
     store.edit(note.id, { body: change.text }, { before: { start, end }, after: change })
   }
 
   function navigateHistory(action: 'undo' | 'redo') {
     if (!note || disabled) return
+    const scroll = editorScroll()
     const caret = store.navigateHistory(note.id, action)
-    if (caret && !preview) selection.current = caret
+    if (caret) editorRestore.current = { caret, scroll }
   }
 
   function editBody(event: ChangeEvent<HTMLTextAreaElement>) {
@@ -275,17 +299,20 @@ export default function Notes({ userId, active, locked, flushRef }: {
     event.preventDefault()
     if (disabled) return
     const size = new FormData(event.currentTarget)
-    insertMarkdown({ columns: Number(size.get('columns')), rows: Number(size.get('rows')) })
+    insertMarkdown({ columns: Number(size.get('columns')), rows: Number(size.get('rows')) }, pickerScroll.current)
+    pickerScroll.current = undefined
     setShowTable(false)
   }
 
   function closeTable() {
+    pickerScroll.current = undefined
     setShowTable(false)
     tableButton.current?.focus()
   }
 
   function startNoteLink() {
     if (!note || disabled || linking) return
+    pickerScroll.current = editorScroll()
     const area = preview ? null : paper.current
     const range = area ? { start: area.selectionStart, end: area.selectionEnd } : null
     setLinkSource({ id: note.id, body: note.body, range })
@@ -296,6 +323,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
   }
 
   function closeNoteLink() {
+    pickerScroll.current = undefined
     setLinkSource(null)
     setProblem('')
     actionsButton.current?.focus()
@@ -307,8 +335,10 @@ export default function Notes({ userId, active, locked, flushRef }: {
     setProblem('')
     if (linkTarget) {
       try {
+        const scroll = pickerScroll.current ?? editorScroll()
         const change = store.link(linkSource, linkTarget)
-        if (!preview) selection.current = change
+        editorRestore.current = { caret: preview ? undefined : change, scroll }
+        pickerScroll.current = undefined
         setLinkSource(null)
       } catch {
         setProblem('That note is unavailable.')
@@ -409,7 +439,11 @@ export default function Notes({ userId, active, locked, flushRef }: {
             </span>)}
             <button ref={tableButton} type="button" title="Insert table" aria-label="Insert table" aria-expanded={showTable}
               aria-controls={showTable ? 'note-table-size' : undefined} disabled={disabled}
-              onMouseDown={event => event.preventDefault()} onClick={() => { setLinkSource(null); setShowTable(open => !open) }}><Table2 size={17} /></button>
+              onMouseDown={event => event.preventDefault()} onClick={() => {
+                pickerScroll.current = showTable ? undefined : editorScroll()
+                setLinkSource(null)
+                setShowTable(!showTable)
+              }}><Table2 size={17} /></button>
             <span className="toolbar-spacer" />
             <button type="button" className="editor-mode" aria-pressed={!preview} aria-label="Edit" title="Edit Markdown" onClick={() => setPreview(false)}><Pencil size={16} /><span>Edit</span></button>
             <button type="button" className="editor-mode" aria-pressed={preview} aria-label="Preview" title="Preview formatted note" onClick={() => setPreview(true)}><Eye size={16} /><span>Preview</span></button>
