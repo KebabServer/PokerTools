@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
-import { Bold, ChevronLeft, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Search, Trash2, Type, X } from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type RefObject } from 'react'
+import { Bold, ChevronLeft, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Search, Table2, Trash2, Type, X } from 'lucide-react'
 import { format, formatDistanceToNow, parseISO } from 'date-fns'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { supabase } from './library.ts'
 import { createNoteStore, NoteChangedError } from './noteAutosave.ts'
-import { countNoteWords, formatNote, type NoteFormat } from './noteMarkdown.ts'
+import { countNoteWords, formatNote, insertNoteTable, type NoteFormat, type NoteTableSize } from './noteMarkdown.ts'
 import { privateNotes, type SavedNote } from './notes.ts'
 import './notes.css'
 
@@ -42,11 +42,13 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'pinned'>('all')
   const [showActions, setShowActions] = useState(false)
+  const [showTable, setShowTable] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
   const [creating, setCreating] = useState(false)
   const [problem, setProblem] = useState('')
   const paper = useRef<HTMLTextAreaElement>(null)
+  const tableButton = useRef<HTMLButtonElement>(null)
   const editorPane = useRef<HTMLElement>(null)
   const selection = useRef<{ start: number; end: number } | null>(null)
   const entry = entries.find(item => item.note.id === selectedId)
@@ -106,10 +108,12 @@ export default function Notes({ userId, active, locked, flushRef }: {
 
   useLayoutEffect(() => {
     if (active) setPreview(true)
+    else setShowTable(false)
   }, [active])
 
   useLayoutEffect(() => {
     setShowActions(false)
+    setShowTable(false)
     editorPane.current?.scrollTo(0, 0)
   }, [selectedId])
 
@@ -167,13 +171,28 @@ export default function Notes({ userId, active, locked, flushRef }: {
     }
   }
 
-  function insertMarkdown(command: NoteFormat) {
+  function insertMarkdown(command: NoteFormat | NoteTableSize) {
     if (!note || disabled) return
-    const start = paper.current?.selectionStart ?? note.body.length
-    const change = formatNote(note.body, start, paper.current?.selectionEnd ?? start, command)
+    const area = preview && typeof command !== 'string' ? null : paper.current
+    const start = area?.selectionStart ?? note.body.length
+    const end = area?.selectionEnd ?? start
+    const change = typeof command === 'string' ? formatNote(note.body, start, end, command) : insertNoteTable(note.body, start, end, command)
     selection.current = change
     setPreview(false)
     store.edit(note.id, { body: change.text })
+  }
+
+  function addTable(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (disabled) return
+    const size = new FormData(event.currentTarget)
+    insertMarkdown({ columns: Number(size.get('columns')), rows: Number(size.get('rows')) })
+    setShowTable(false)
+  }
+
+  function closeTable() {
+    setShowTable(false)
+    tableButton.current?.focus()
   }
 
   const saveStatus = !entry?.dirty ? 'Autosaved' : entry.problem ? 'Not saved' : 'Saving...'
@@ -240,10 +259,22 @@ export default function Notes({ userId, active, locked, flushRef }: {
                 onMouseDown={event => event.preventDefault()} onClick={() => insertMarkdown(tool.format)}><tool.Icon size={17} /></button>
               {'divider' in tool && <span className="toolbar-divider" />}
             </span>)}
+            <button ref={tableButton} type="button" title="Insert table" aria-label="Insert table" aria-expanded={showTable}
+              aria-controls={showTable ? 'note-table-size' : undefined} disabled={disabled}
+              onMouseDown={event => event.preventDefault()} onClick={() => setShowTable(open => !open)}><Table2 size={17} /></button>
             <span className="toolbar-spacer" />
             <button type="button" className="editor-mode" aria-pressed={!preview} aria-label="Edit" title="Edit Markdown" onClick={() => setPreview(false)}><Pencil size={16} /><span>Edit</span></button>
             <button type="button" className="editor-mode" aria-pressed={preview} aria-label="Preview" title="Preview formatted note" onClick={() => setPreview(true)}><Eye size={16} /><span>Preview</span></button>
           </div>
+          {showTable && <form className="note-table-form" id="note-table-size" aria-label="Table size" onSubmit={addTable}
+            onKeyDown={event => { if (event.key === 'Escape') closeTable() }}>
+            <label>Columns<input name="columns" type="number" required min={1} max={20} defaultValue={3} autoFocus /></label>
+            <label>Body rows<input name="rows" type="number" required min={1} max={100} defaultValue={2} /></label>
+            <div className="note-table-actions">
+              <button type="button" className="button small" onClick={closeTable}>Cancel</button>
+              <button type="submit" className="button small primary" disabled={disabled}>Insert</button>
+            </div>
+          </form>}
           <textarea ref={paper} hidden={preview} className="note-content-input" placeholder="Write a note..." aria-label="Note content"
             value={note.body} readOnly={disabled} onChange={event => store.edit(note.id, { body: event.target.value })} />
           {preview && <div className="markdown-preview" aria-label="Markdown preview" role="region">
