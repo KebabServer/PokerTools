@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { countNoteWords, formatNote, insertNoteLink, insertNoteTable, noteHref, noteIdFromHref } from '../src/noteMarkdown.ts'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { continueTableBullet, countNoteWords, formatNote, insertNoteLink, insertNoteTable, noteHref, noteIdFromHref } from '../src/noteMarkdown.ts'
+import { noteTableLists } from '../src/noteTableLists.ts'
 
 test('the Daymark heading buttons insert their matching levels and select the placeholder', () => {
   assert.deepEqual(formatNote('', 0, 0, 'heading'), { text: '## Heading', start: 3, end: 10 })
@@ -46,4 +51,25 @@ test('note links use a stable note ID and preserve an inline selection as the la
   assert.equal(inline.text.slice(inline.start), ' next.')
   assert.equal(inline.start, inline.end)
   assert.equal(insertNoteLink('Start\n', null, id, 'My sub-note').text, 'Start\n\n[My sub-note](' + href + ')')
+})
+
+test('the bullet toolbar and Enter keep a table cell on a single source line', () => {
+  const note = '| Plan | Result |\n| --- | --- |\n| A \\| B | Ready |'
+  const start = note.indexOf('B |')
+  const first = formatNote(note, start, start + 1, 'bullet')
+  assert.equal(first.text, note.replace('A \\| B', '- A \\| B'))
+  assert.equal(first.text.slice(first.start, first.end), 'B')
+
+  const next = continueTableBullet(first.text, first.end, first.end)
+  assert.equal(next.text, first.text.replace('B |', 'B<br>-  |'))
+  assert.equal(next.text.slice(next.start), ' | Ready |')
+  assert.equal(continueTableBullet(next.text, next.start, next.end).text, first.text)
+  assert.equal(continueTableBullet('- ordinary list', 15, 15), undefined)
+  assert.equal(formatNote(first.text, first.end, first.end, 'bullet').text, first.text.replace('B |', 'B<br>- List item |'))
+})
+
+test('table bullets render as a list and preserve inline formatting and neighboring cells', () => {
+  const text = '| Plan | Result |\n| --- | --- |\n| - **One**<br>- [Two](https://example.com) | Ready |'
+  const html = renderToStaticMarkup(createElement(Markdown, { remarkPlugins: [remarkGfm], rehypePlugins: [noteTableLists] }, text))
+  assert.match(html, /<td><ul><li><strong>One<\/strong><\/li><li><a href="https:\/\/example\.com">Two<\/a><\/li><\/ul><\/td><td>Ready<\/td>/)
 })

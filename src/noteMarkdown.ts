@@ -24,6 +24,17 @@ export function noteIdFromHref(href: string) {
 }
 
 export function formatNote(text: string, start: number, end: number, format: NoteFormat) {
+  if (format === 'bullet') {
+    const cell = tableCellAt(text, start, end)
+    if (cell && cell.text.trim()) {
+      if (/^[-+*]\s/.test(cell.text)) {
+        const position = cell.start + cell.text.trimEnd().length
+        const bullet = '<br>- List item'
+        return { text: text.slice(0, position) + bullet + text.slice(position), start: position + 6, end: position + bullet.length }
+      }
+      return { text: text.slice(0, cell.start) + '- ' + text.slice(cell.start), start: Math.max(start, cell.start) + 2, end: Math.max(end, cell.start) + 2 }
+    }
+  }
   const [prefix, suffix, placeholder] = formats[format]
   const selection = text.slice(start, end) || placeholder
   const label = format === 'link' ? escapeLinkLabel(selection) : selection
@@ -33,6 +44,42 @@ export function formatNote(text: string, start: number, end: number, format: Not
     start: position,
     end: position + (format === 'link' ? 'https://'.length : label.length),
   }
+}
+
+function tableCellAt(text: string, start: number, end: number) {
+  const lineStart = start ? text.lastIndexOf('\n', start - 1) + 1 : 0
+  const lineEnd = text.indexOf('\n', start)
+  const line = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd)
+  const boundaries = [...line.matchAll(/\|/g)].map(pipe => pipe.index).filter(index =>
+    (line.slice(0, index).match(/\\+$/)?.[0].length ?? 0) % 2 === 0,
+  )
+  if (!boundaries.length) return
+  const divider = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/
+  const before = text.slice(0, lineStart).split('\n').slice(0, -1)
+  const after = lineEnd === -1 ? '' : text.slice(lineEnd + 1).split('\n', 1)[0]
+  if (divider.test(line)) return
+  while (before.length && !divider.test(before.at(-1)!) && before.at(-1)!.includes('|')) before.pop()
+  if (!divider.test(after) && !(divider.test(before.at(-1) ?? '') && before.at(-2)?.includes('|'))) return
+  const left = boundaries.filter(index => lineStart + index < start).at(-1) ?? -1
+  const right = boundaries.find(index => lineStart + index >= start) ?? line.length
+  if (end > lineStart + right || (left === -1 && line.startsWith('|')) || (right === line.length && line.endsWith('|'))) return
+  const contents = line.slice(left + 1, right).trimStart()
+  return { text: contents, start: lineStart + right - contents.length }
+}
+
+export function continueTableBullet(text: string, start: number, end: number) {
+  const cell = tableCellAt(text, start, end)
+  if (!cell || start < cell.start) return
+  const before = cell.text.slice(0, start - cell.start)
+  const item = before.split(/<br\s*\/?\s*>/i).at(-1)!
+  if (/^[-+*]\s*$/.test(item) && !cell.text.slice(end - cell.start).trim()) {
+    const marker = before.match(/(?:<br\s*\/?\s*>)?[-+*]\s*$/i)![0]
+    const position = start - marker.length
+    return { text: text.slice(0, position) + text.slice(end), start: position, end: position }
+  }
+  if (!/^[-+*]\s+\S/.test(item)) return
+  const position = start + '<br>- '.length
+  return { text: text.slice(0, start) + '<br>- ' + text.slice(end), start: position, end: position }
 }
 
 export function insertNoteLink(text: string, range: { start: number; end: number } | null, id: string, title: string) {

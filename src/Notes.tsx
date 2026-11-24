@@ -5,7 +5,8 @@ import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { supabase } from './library.ts'
 import { createNoteStore, NoteChangedError, type NoteLinkSource } from './noteAutosave.ts'
-import { countNoteWords, formatNote, insertNoteTable, noteHref, noteIdFromHref, type NoteFormat, type NoteTableSize } from './noteMarkdown.ts'
+import { continueTableBullet, countNoteWords, formatNote, insertNoteTable, noteHref, noteIdFromHref, type NoteFormat, type NoteTableSize } from './noteMarkdown.ts'
+import { noteTableLists } from './noteTableLists.ts'
 import { pagesForNote } from './notePages.ts'
 import { privateNotes, type SavedNote } from './notes.ts'
 import './notes.css'
@@ -331,6 +332,16 @@ export default function Notes({ userId, active, locked, flushRef }: {
   }
 
   function historyShortcut(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && note && page && !disabled) {
+      const { selectionStart: start, selectionEnd: end } = event.currentTarget
+      const change = continueTableBullet(page.body, start, end)
+      if (change) {
+        event.preventDefault()
+        editorRestore.current = { caret: change, scroll: editorScroll() }
+        store.editPage(note.id, page.id, { body: change.text }, { before: { start, end }, after: change })
+      }
+      return
+    }
     if (event.altKey || event.nativeEvent.isComposing || !(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
     if (key !== 'z' && !(event.ctrlKey && !event.metaKey && key === 'y')) return
@@ -537,7 +548,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
             value={page.body} readOnly={disabled} onChange={editBody} onKeyDown={historyShortcut}
             onSelect={event => { cursor.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }} />
           {preview && <div className="markdown-preview" aria-label="Markdown preview" role="region" onClick={followLink}>
-            <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents} disallowedElements={['img']}>
+            <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[noteTableLists]} components={markdownComponents} disallowedElements={['img']}>
               {page.body || '*Nothing here yet. Switch to Edit and start writing.*'}
             </Markdown>
           </div>}

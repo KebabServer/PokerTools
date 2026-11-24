@@ -110,6 +110,7 @@
 .note-table-scroll :is(th, td) { padding: 7px; border: solid var(--border); border-width: 0 1px 1px 0; }
 .note-table-scroll tr > :first-child { border-inline-start-width: 1px; }
 .note-table-scroll th { border-top-width: 1px; background: var(--surface); }
+.note-table-scroll :is(th, td) > ul { margin: 0; padding-inline-start: 1.15em; text-align: start; }
 .editor-bottom-meta { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--soft); font-size: 10px; }
 .editor-placeholder { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; }
 .editor-placeholder h2 { font-size: 24px; }
