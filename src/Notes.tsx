@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type FormEvent, type KeyboardEvent, type MouseEvent, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent, type RefObject } from 'react'
 import { Bold, ChevronLeft, ChevronRight, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Redo2, Search, Table2, Trash2, Type, Undo2, X } from 'lucide-react'
 import { format, formatDistanceToNow, parseISO } from 'date-fns'
 import Markdown, { type Components } from 'react-markdown'
@@ -29,6 +29,19 @@ const markdownComponents: Components = {
     if (href.startsWith('//')) return <a {...props} href={'https:' + href} target="_blank" rel="noopener noreferrer">{children}</a>
     return <a {...props} href={href}>{children}</a>
   },
+  table: ({ node, ...props }) => {
+    const heading = node?.children.find(child => child.type === 'element' && child.tagName === 'thead')
+    const row = heading?.type === 'element' ? heading.children.find(child => child.type === 'element' && child.tagName === 'tr') : undefined
+    const columns = row?.type === 'element' ? row.children.filter(child => child.type === 'element' && child.tagName === 'th').length : 0
+    return <div className="note-table-scroll" role="region" aria-label="Table" tabIndex={0}>
+      <table {...props} role="table" style={{ '--note-table-columns': Math.max(1, columns) } as CSSProperties} />
+    </div>
+  },
+  thead: ({ node: _node, ...props }) => <thead {...props} role="rowgroup" />,
+  tbody: ({ node: _node, ...props }) => <tbody {...props} role="rowgroup" />,
+  tr: ({ node: _node, ...props }) => <tr {...props} role="row" />,
+  th: ({ node: _node, ...props }) => <th {...props} role="columnheader" />,
+  td: ({ node: _node, ...props }) => <td {...props} role="cell" />,
 }
 
 const noteTitle = (note: SavedNote) => note.title.trim() || 'Untitled note'
@@ -138,11 +151,16 @@ export default function Notes({ userId, active, locked, flushRef }: {
 
   useLayoutEffect(() => {
     if (active) setPreview(true)
-    else {
+  }, [active])
+
+  useLayoutEffect(() => {
+    if (preview || !active) {
+      setShowActions(false)
       setShowTable(false)
       setLinkSource(null)
+      pickerScroll.current = undefined
     }
-  }, [active])
+  }, [preview, active])
 
   useLayoutEffect(() => {
     function syncNavigation() {
@@ -283,12 +301,11 @@ export default function Notes({ userId, active, locked, flushRef }: {
 
   function insertMarkdown(command: NoteFormat | NoteTableSize, scroll = editorScroll()) {
     if (!note || !page || disabled) return
-    const area = preview && typeof command !== 'string' ? null : paper.current
+    const area = paper.current
     const start = area?.selectionStart ?? page.body.length
     const end = area?.selectionEnd ?? start
     const change = typeof command === 'string' ? formatNote(page.body, start, end, command) : insertNoteTable(page.body, start, end, command)
-    editorRestore.current = { caret: change, scroll: preview ? undefined : scroll }
-    setPreview(false)
+    editorRestore.current = { caret: change, scroll }
     store.editPage(note.id, page.id, { body: change.text }, { before: { start, end }, after: change })
   }
 
@@ -339,7 +356,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
   function startNoteLink() {
     if (!note || !page || disabled || linking) return
     pickerScroll.current = editorScroll()
-    const area = preview ? null : paper.current
+    const area = paper.current
     const range = area ? { start: area.selectionStart, end: area.selectionEnd } : null
     setLinkSource({ id: note.id, pageId: page.id, body: page.body, range })
     setLinkTarget('')
@@ -363,7 +380,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
       try {
         const scroll = pickerScroll.current ?? editorScroll()
         const change = store.link(linkSource, linkTarget)
-        editorRestore.current = { caret: preview ? undefined : change, scroll }
+        editorRestore.current = { caret: change, scroll }
         pickerScroll.current = undefined
         setLinkSource(null)
       } catch {
@@ -443,24 +460,29 @@ export default function Notes({ userId, active, locked, flushRef }: {
               <button ref={actionsButton} type="button" className="icon-button" disabled={disabled} onClick={() => setShowActions(open => !open)}
                 aria-label="Note actions" aria-expanded={showActions}><MoreHorizontal size={20} /></button>
               {showActions && <div className="notes-floating-menu">
-                <button type="button" disabled={!history?.undo.length || disabled} onClick={() => { navigateHistory('undo'); setShowActions(false) }}><Undo2 size={15} /> Undo</button>
-                <button type="button" disabled={!history?.redo.length || disabled} onClick={() => { navigateHistory('redo'); setShowActions(false) }}><Redo2 size={15} /> Redo</button>
-                <button type="button" disabled={linking} onClick={startNoteLink}><Link2 size={15} /> Link note</button>
+                {!preview && <>
+                  <button type="button" disabled={!history?.undo.length || disabled} onClick={() => { navigateHistory('undo'); setShowActions(false) }}><Undo2 size={15} /> Undo</button>
+                  <button type="button" disabled={!history?.redo.length || disabled} onClick={() => { navigateHistory('redo'); setShowActions(false) }}><Redo2 size={15} /> Redo</button>
+                  <button type="button" disabled={linking} onClick={startNoteLink}><Link2 size={15} /> Link note</button>
+                </>}
                 <button type="button" className="delete-action" onClick={() => void remove()}><Trash2 size={15} /> Delete note</button>
               </div>}
             </div>
           </div>
         </div>
-        <div className="note-pages" role="group" aria-label="Note pages">
-          <button type="button" className="icon-button" aria-label="Previous page" title="Previous page" disabled={pageIndex === 0}
-            onClick={() => selectPage(pages[pageIndex - 1].id)}><ChevronLeft size={18} /></button>
-          <button type="button" className="icon-button" aria-label="Next page" title="Next page" disabled={pageIndex === pages.length - 1}
-            onClick={() => selectPage(pages[pageIndex + 1].id)}><ChevronRight size={18} /></button>
-          <input ref={pageName} data-page-id={page.id} className="note-page-name" aria-label="Page name" title="Page name" maxLength={120}
-            value={page.title} placeholder={'Page ' + (pageIndex + 1)} readOnly={disabled}
-            onChange={event => store.editPage(note.id, page.id, { title: event.target.value })} />
-          <span className="note-page-count" role="status" aria-label={'Page ' + (pageIndex + 1) + ' of ' + pages.length}>{pageIndex + 1} / {pages.length}</span>
-          <button type="button" className="icon-button" aria-label="Add page" title="Add page" disabled={disabled} onClick={addPage}><Plus size={19} /></button>
+        <div className="note-view-bar">
+          {preview && <div className="note-pages" role="group" aria-label="Note pages">
+            <button type="button" className="icon-button" aria-label="Previous page" title="Previous page" disabled={pageIndex === 0}
+              onClick={() => selectPage(pages[pageIndex - 1].id)}><ChevronLeft size={18} /></button>
+            <span className="note-page-count" role="status" aria-label={'Page ' + (pageIndex + 1) + ' of ' + pages.length}>{pageIndex + 1} / {pages.length}</span>
+            <button type="button" className="icon-button" aria-label="Next page" title="Next page" disabled={pageIndex === pages.length - 1}
+              onClick={() => selectPage(pages[pageIndex + 1].id)}><ChevronRight size={18} /></button>
+            <button type="button" className="icon-button" aria-label="Add page" title="Add page" disabled={disabled} onClick={addPage}><Plus size={19} /></button>
+          </div>}
+          <div className="note-modes" role="group" aria-label="Note view">
+            <button type="button" className="editor-mode" aria-pressed={!preview} aria-label="Edit" title="Edit Markdown" onClick={() => setPreview(false)}><Pencil size={16} />Edit</button>
+            <button type="button" className="editor-mode" aria-pressed={preview} aria-label="Preview" title="Preview formatted note" onClick={() => setPreview(true)}><Eye size={16} />Preview</button>
+          </div>
         </div>
         {(problem || entry.problem instanceof NoteChangedError) && <div className="editor-alert" role="alert">
           <p className="error">{problem || 'This note changed or was deleted elsewhere. Your draft is still here.'}</p>
@@ -468,11 +490,15 @@ export default function Notes({ userId, active, locked, flushRef }: {
         </div>}
         <div className="editor-body">
           <div className="editor-meta"><FileText size={14} /> NOTE <span>·</span> Edited {format(parseISO(note.updated_at), 'MMM d, yyyy')}</div>
-          <input className="note-title-input" placeholder="Untitled note" aria-label="Note title" maxLength={120} value={note.title} readOnly={disabled}
+          <input className="note-title-input" placeholder="Untitled note" aria-label="Note title" maxLength={120} value={note.title} readOnly={disabled || preview}
             onChange={event => store.edit(note.id, { title: event.target.value })} />
-          <div className="editor-format-toolbar" role="group" aria-label="Markdown formatting">
+          {preview ? (page.title.trim() && <h2 className="note-page-title">{page.title}</h2>)
+            : <input ref={pageName} data-page-id={page.id} className="note-page-name" aria-label="Page name" maxLength={120}
+              value={page.title} placeholder={'Page ' + (pageIndex + 1) + ' name'} readOnly={disabled}
+              onChange={event => store.editPage(note.id, page.id, { title: event.target.value })} />}
+          {!preview && <div className="editor-format-toolbar" role="group" aria-label="Markdown formatting">
             {formatting.map(tool => <span className="notes-tool-group" key={tool.format}>
-              <button type="button" title={tool.label} aria-label={tool.label} disabled={disabled || (preview && tool.format === 'link')}
+              <button type="button" title={tool.label} aria-label={tool.label} disabled={disabled}
                 onMouseDown={event => event.preventDefault()} onClick={() => insertMarkdown(tool.format)}><tool.Icon size={17} /></button>
               {'divider' in tool && <span className="toolbar-divider" />}
             </span>)}
@@ -483,11 +509,8 @@ export default function Notes({ userId, active, locked, flushRef }: {
                 setLinkSource(null)
                 setShowTable(!showTable)
               }}><Table2 size={17} /></button>
-            <span className="toolbar-spacer" />
-            <button type="button" className="editor-mode" aria-pressed={!preview} aria-label="Edit" title="Edit Markdown" onClick={() => setPreview(false)}><Pencil size={16} /><span>Edit</span></button>
-            <button type="button" className="editor-mode" aria-pressed={preview} aria-label="Preview" title="Preview formatted note" onClick={() => setPreview(true)}><Eye size={16} /><span>Preview</span></button>
-          </div>
-          {linkSource && <form className="note-link-form" aria-label="Link note" onSubmit={event => void addNoteLink(event)}
+          </div>}
+          {!preview && linkSource && <form className="note-link-form" aria-label="Link note" onSubmit={event => void addNoteLink(event)}
             onKeyDown={event => { if (event.key === 'Escape' && !linking) closeNoteLink() }}>
             <label>Link to<select value={linkTarget} autoFocus onChange={event => { setLinkTarget(event.target.value); setProblem('') }} disabled={linking || disabled}>
               <option value="">New sub-note</option>
@@ -501,7 +524,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
               </button>
             </div>
           </form>}
-          {showTable && <form className="note-table-form" id="note-table-size" aria-label="Table size" onSubmit={addTable}
+          {!preview && showTable && <form className="note-table-form" id="note-table-size" aria-label="Table size" onSubmit={addTable}
             onKeyDown={event => { if (event.key === 'Escape') closeTable() }}>
             <label>Columns<input name="columns" type="number" required min={1} max={20} defaultValue={3} autoFocus /></label>
             <label>Body rows<input name="rows" type="number" required min={1} max={100} defaultValue={2} /></label>
