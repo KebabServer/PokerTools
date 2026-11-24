@@ -1,13 +1,15 @@
 import type { NoteText, privateNotes, SavedNote } from './notes.ts'
 import { insertNoteLink } from './noteMarkdown.ts'
+import { emptyNotePages, firstPageId, pagesForNote, sameNoteText, type NotePageText } from './notePages.ts'
 
 export class NoteChangedError extends Error {}
 type Repository = ReturnType<typeof privateNotes>
-export type NoteLinkSource = { id: string; body: string; range: { start: number; end: number } | null }
+export type NoteLinkSource = { id: string; pageId: string; body: string; range: { start: number; end: number } | null }
 type Range = { start: number; end: number }
 type BodySnapshot = { body: string; range?: Range }
 type BodyEdit = { before: BodySnapshot; after: BodySnapshot; inputType?: string; time: number }
 type BodyEditOptions = { before?: Range; after?: Range; inputType?: string }
+type BodyHistory = { undo: BodyEdit[]; redo: BodyEdit[] }
 
 type Entry = {
   note: SavedNote
@@ -17,15 +19,21 @@ type Entry = {
   timer?: ReturnType<typeof setTimeout>
   writing?: Promise<void>
   busy?: boolean
-  undo: BodyEdit[]
-  redo: BodyEdit[]
+  history: Map<string, BodyHistory>
 }
 
 const delay = 650
 const conflict = () => new NoteChangedError('This note changed or was deleted elsewhere. Save a copy to keep your draft.')
-const clean = (note: SavedNote): Entry => ({ note, acknowledged: note, dirty: false, undo: [], redo: [] })
-const content = ({ title, body, pinned }: NoteText): NoteText => ({ title, body, pinned })
-const sameContent = (a: NoteText, b: NoteText) => a.title === b.title && a.body === b.body && a.pinned === b.pinned
+const clean = (note: SavedNote): Entry => ({ note, acknowledged: note, dirty: false, history: new Map() })
+const content = ({ title, body, pinned, pages }: NoteText): NoteText => ({ title, body, pinned, pages })
+
+function updatePage(note: SavedNote, pageId: string, patch: Partial<NotePageText>): SavedNote {
+  if (pageId === firstPageId) {
+    return { ...note, body: patch.body ?? note.body, pages: { ...note.pages, firstTitle: patch.title ?? note.pages.firstTitle } }
+  }
+  const extra = note.pages.extra.map(page => page.id === pageId ? { ...page, ...patch } : page)
+  return { ...note, pages: { ...note.pages, extra } }
+}
 
 export function createNoteStore(repository: Repository) {
   const entries = new Map<string, Entry>()
@@ -58,13 +66,14 @@ export function createNoteStore(repository: Repository) {
       remote.delete(id)
       if (entry.writing) pending.add(entry.writing)
       if (entry.writing || entry.busy) continue
-      if (!entry.dirty || (received && sameContent(entry.note, received))) {
+      if (!entry.dirty || (received && sameNoteText(entry.note, received))) {
         if (received) {
           cancelTimer(entry)
           const next = clean(received)
-          if (received.body === entry.note.body) {
-            next.undo = entry.undo
-            next.redo = entry.redo
+          const previousPages = new Map(pagesForNote(entry.note).map(page => [page.id, page.body]))
+          for (const page of pagesForNote(received)) {
+            const history = entry.history.get(page.id)
+            if (history && previousPages.get(page.id) === page.body) next.history.set(page.id, history)
           }
           entries.set(id, next)
         } else entries.delete(id)
@@ -120,15 +129,34 @@ export function createNoteStore(repository: Repository) {
     publish()
   }
 
-  function edit(id: string, patch: Partial<NoteText>, options?: BodyEditOptions) {
+  function edit(id: string, patch: Partial<Pick<NoteText, 'title' | 'pinned'>>) {
     const entry = entries.get(id)
     if (!entry || entry.busy) return
     const updated = { ...entry.note, ...patch }
-    if (sameContent(entry.note, updated)) return
-    if (entry.note.body !== updated.body) {
-      const before = { body: entry.note.body, range: options?.before }
+    if (!sameNoteText(entry.note, updated)) applyEdit(entry, updated)
+  }
+
+  function addPage(id: string) {
+    const entry = entries.get(id)
+    if (!entry || entry.busy) return
+    const page = { id: crypto.randomUUID(), title: '', body: '' }
+    const pages = { ...entry.note.pages, extra: [...entry.note.pages.extra, page] }
+    applyEdit(entry, { ...entry.note, pages })
+    return page.id
+  }
+
+  function editPage(id: string, pageId: string, patch: Partial<NotePageText>, options?: BodyEditOptions) {
+    const entry = entries.get(id)
+    if (!entry || entry.busy) return
+    const page = pagesForNote(entry.note).find(page => page.id === pageId)
+    if (!page) return
+    const updated = { ...page, ...patch }
+    if (page.title === updated.title && page.body === updated.body) return
+    if (page.body !== updated.body) {
+      const history = entry.history.get(pageId) ?? { undo: [], redo: [] }
+      const before = { body: page.body, range: options?.before }
       const after = { body: updated.body, range: options?.after }
-      const previous = entry.undo.at(-1)
+      const previous = history.undo.at(-1)
       const inputType = options?.inputType
       const time = Date.now()
       const cursor = before.range
@@ -137,23 +165,26 @@ export function createNoteStore(repository: Repository) {
         previous.after = after
         previous.time = time
       } else {
-        entry.undo.push({ before, after, inputType, time })
-        if (entry.undo.length > 100) entry.undo.shift()
+        history.undo.push({ before, after, inputType, time })
+        if (history.undo.length > 100) history.undo.shift()
       }
-      entry.redo = []
+      history.redo = []
+      entry.history.set(pageId, history)
     }
-    applyEdit(entry, updated)
+    applyEdit(entry, updatePage(entry.note, pageId, patch))
   }
 
-  function navigateHistory(id: string, action: 'undo' | 'redo') {
+  function navigateHistory(id: string, pageId: string, action: 'undo' | 'redo') {
     const entry = entries.get(id)
     if (!entry || entry.busy) return
-    const change = entry[action].pop()
+    const history = entry.history.get(pageId)
+    if (!history) return
+    const change = history[action].pop()
     if (!change) return
     change.inputType = undefined
-    entry[action === 'undo' ? 'redo' : 'undo'].push(change)
+    history[action === 'undo' ? 'redo' : 'undo'].push(change)
     const target = action === 'undo' ? change.before : change.after
-    applyEdit(entry, { ...entry.note, body: target.body })
+    applyEdit(entry, updatePage(entry.note, pageId, { body: target.body }))
     return target.range ?? { start: target.body.length, end: target.body.length }
   }
 
@@ -171,19 +202,20 @@ export function createNoteStore(repository: Repository) {
   function link(source: NoteLinkSource, targetId: string) {
     const entry = entries.get(source.id)
     const target = entries.get(targetId)
-    if (!entry || !target || entry.busy || target.busy || source.id === targetId) {
+    const page = entry && pagesForNote(entry.note).find(page => page.id === source.pageId)
+    if (!entry || !target || !page || entry.busy || target.busy || source.id === targetId) {
       throw new Error('That note is unavailable.')
     }
-    const range = entry.note.body === source.body ? source.range : null
-    const change = insertNoteLink(entry.note.body, range, targetId, target.note.title)
-    const before = range ?? { start: entry.note.body.length, end: entry.note.body.length }
-    edit(source.id, { body: change.text }, { before, after: change })
+    const range = page.body === source.body ? source.range : null
+    const change = insertNoteLink(page.body, range, targetId, target.note.title)
+    const before = range ?? { start: page.body.length, end: page.body.length }
+    editPage(source.id, source.pageId, { body: change.text }, { before, after: change })
     return change
   }
 
   function create(title = '', source?: NoteLinkSource) {
     return mutate(async () => {
-      const note = await repository.save(crypto.randomUUID(), { title, body: '', pinned: false }, null)
+      const note = await repository.save(crypto.randomUUID(), { title, body: '', pinned: false, pages: emptyNotePages }, null)
       entries.set(note.id, clean(note))
       if (source) link(source, note.id)
       return note
@@ -250,7 +282,7 @@ export function createNoteStore(repository: Repository) {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    refresh, edit, navigateHistory, create, link, remove, copy, flush,
+    refresh, edit, addPage, editPage, navigateHistory, create, link, remove, copy, flush,
     retry(id: string) {
       const entry = entries.get(id)
       if (!entry) return

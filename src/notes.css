@@ -55,10 +55,14 @@
 .editor-back.linked-note-back { display: flex; }
 .editor-back span { overflow: hidden; text-overflow: ellipsis; }
 .note-actions { position: relative; }
-.notes-floating-menu { position: absolute; z-index: 1; top: 41px; right: 0; width: 165px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); box-shadow: 0 8px 28px #0007; }
+.notes-floating-menu { position: absolute; z-index: 2; top: 41px; right: 0; width: 165px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); box-shadow: 0 8px 28px #0007; }
 .notes-floating-menu button { width: 100%; padding: 10px; display: flex; gap: 9px; align-items: center; border-radius: 7px; font-size: 12px; text-align: left; }
 .notes-floating-menu button:hover:not(:disabled) { background: var(--surface); }
 .notes-floating-menu .delete-action { color: #ffb8be; }
+.note-pages { position: sticky; top: 0; z-index: 1; display: grid; flex: none; grid-template-columns: auto auto minmax(0, 20rem) auto auto; justify-content: start; align-items: center; gap: 5px; padding: 5px 31px; border-bottom: 1px solid var(--border); background: #212121; }
+.note-pages .icon-button { width: 44px; min-height: 44px; }
+.notes-layout .note-page-name { min-height: 36px; padding: 5px 9px; background: var(--surface); font-size: 14px; }
+.note-page-count { color: var(--muted); white-space: nowrap; font-size: 12px; font-variant-numeric: tabular-nums; }
 .editor-alert { margin: 16px 25px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .editor-body { display: flex; flex: 1; flex-direction: column; min-height: 500px; width: 100%; max-width: 1000px; margin: 0 auto; padding: 54px clamp(30px, 5vw, 90px) 30px; }
 .editor-body > :not(.note-content-input, .markdown-preview) { flex-shrink: 0; }
@@ -118,10 +122,11 @@
   .notes-editor-pane, .note-open-mobile .notes-list-pane { display: none; }
   .note-open-mobile .notes-editor-pane { display: flex; flex: 1; }
   .editor-toolbar-top { height: 55px; padding: 0 16px; }
+  .note-pages { gap: 3px; padding-inline: 16px; }
   .editor-back { display: flex; }
   .editor-body { padding: 30px 23px 25px; }
   .notes-layout .note-title-input { margin: 18px 0; font-size: 33px; }
-  .notes-layout .notes-search input, .note-content-input { font-size: 16px; }
+  .notes-layout .notes-search input, .notes-layout .note-page-name, .note-content-input { font-size: 16px; }
   .note-content-input { min-height: 250px; }
 }
 @media (max-width: 420px) {

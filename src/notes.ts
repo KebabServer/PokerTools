@@ -1,10 +1,11 @@
 import { supabase } from './library.ts'
 import { NoteChangedError } from './noteAutosave.ts'
+import { sameNoteText, type NotePages } from './notePages.ts'
 
-export type SavedNote = { id: string; title: string; body: string; pinned: boolean; updated_at: string }
-export type NoteText = Pick<SavedNote, 'title' | 'body' | 'pinned'>
+export type SavedNote = { id: string; title: string; body: string; pinned: boolean; pages: NotePages; updated_at: string }
+export type NoteText = Pick<SavedNote, 'title' | 'body' | 'pinned' | 'pages'>
 
-const noteColumns = 'id,title,body,pinned,updated_at'
+const noteColumns = 'id,title,body,pinned,pages,updated_at'
 
 export function privateNotes(userId: string) {
   const table = () => {
@@ -45,7 +46,7 @@ export function privateNotes(userId: string) {
 
       // A previous save can have committed even when the browser missed its response.
       const current = await read(id)
-      if (current?.title === text.title && current.body === text.body && current.pinned === text.pinned) return current
+      if (current && sameNoteText(current, text)) return current
       throw new NoteChangedError('The saved note changed. Save a copy to keep your edits.')
     },
     async remove(note: SavedNote) {

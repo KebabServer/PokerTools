@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type FormEvent, type KeyboardEvent, type MouseEvent, type RefObject } from 'react'
-import { Bold, ChevronLeft, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Redo2, Search, Table2, Trash2, Type, Undo2, X } from 'lucide-react'
+import { Bold, ChevronLeft, ChevronRight, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Redo2, Search, Table2, Trash2, Type, Undo2, X } from 'lucide-react'
 import { format, formatDistanceToNow, parseISO } from 'date-fns'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { supabase } from './library.ts'
 import { createNoteStore, NoteChangedError, type NoteLinkSource } from './noteAutosave.ts'
 import { countNoteWords, formatNote, insertNoteTable, noteHref, noteIdFromHref, type NoteFormat, type NoteTableSize } from './noteMarkdown.ts'
+import { pagesForNote } from './notePages.ts'
 import { privateNotes, type SavedNote } from './notes.ts'
 import './notes.css'
 
@@ -31,7 +32,7 @@ const markdownComponents: Components = {
 }
 
 const noteTitle = (note: SavedNote) => note.title.trim() || 'Untitled note'
-const noteSnippet = (note: SavedNote) => note.body.replace(/\]\(#notes\/[0-9a-f-]+\)/gi, ']')
+const noteSnippet = (note: SavedNote) => (pagesForNote(note).find(page => page.body.trim())?.body ?? '').replace(/\]\(#notes\/[0-9a-f-]+\)/gi, ']')
   .replace(/[#*`>\-[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 95) || 'Empty note'
 
 function navigationFromHash() {
@@ -50,6 +51,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const entries = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const [navigation, setNavigation] = useState(navigationFromHash)
   const { id: selectedId, trail } = navigation
+  const [lastPages, setLastPages] = useState<Record<string, string>>({})
   const [preview, setPreview] = useState(true)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'pinned'>('all')
@@ -63,6 +65,8 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const [creating, setCreating] = useState(false)
   const [problem, setProblem] = useState('')
   const paper = useRef<HTMLTextAreaElement>(null)
+  const pageName = useRef<HTMLInputElement>(null)
+  const nameNewPage = useRef<string | null>(null)
   const tableButton = useRef<HTMLButtonElement>(null)
   const actionsButton = useRef<HTMLButtonElement>(null)
   const editorPane = useRef<HTMLElement>(null)
@@ -71,6 +75,10 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const cursor = useRef<{ start: number; end: number } | undefined>(undefined)
   const entry = entries.find(item => item.note.id === selectedId)
   const note = entry?.note
+  const pages = note ? pagesForNote(note) : []
+  const pageIndex = note ? Math.max(0, pages.findIndex(item => item.id === lastPages[note.id])) : 0
+  const page = pages[pageIndex]
+  const history = page && entry?.history.get(page.id)
   const parentId = trail.at(-1)
   const parent = entries.find(item => item.note.id === parentId)?.note
   const parentTitle = parent ? noteTitle(parent) : 'Previous note'
@@ -80,7 +88,8 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const visible = useMemo(() => {
     const query = search.toLowerCase()
     return entries.map(item => item.note).filter(item =>
-      (filter === 'all' || item.pinned) && (item.title + ' ' + item.body).toLowerCase().includes(query),
+      (filter === 'all' || item.pinned) && (!query || [item.title, ...pagesForNote(item).flatMap(page => [page.title, page.body])]
+        .join(' ').toLowerCase().includes(query)),
     ).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
   }, [entries, filter, search])
 
@@ -160,7 +169,11 @@ export default function Notes({ userId, active, locked, flushRef }: {
     setShowTable(false)
     setLinkSource(null)
     editorPane.current?.scrollTo(0, 0)
-  }, [selectedId])
+    if (page?.id && page.id === nameNewPage.current) {
+      nameNewPage.current = null
+      pageName.current?.focus({ preventScroll: true })
+    }
+  }, [selectedId, page?.id])
 
   useLayoutEffect(() => {
     const restore = editorRestore.current
@@ -195,6 +208,19 @@ export default function Notes({ userId, active, locked, flushRef }: {
     setNavigation({ id, trail: noteTrail })
     setPreview(showPreview)
     setProblem('')
+  }
+
+  function selectPage(id: string) {
+    if (note) setLastPages(previous => ({ ...previous, [note.id]: id }))
+  }
+
+  function addPage() {
+    if (!note || disabled) return
+    const id = store.addPage(note.id)
+    if (!id) return
+    nameNewPage.current = id
+    selectPage(id)
+    setPreview(false)
   }
 
   function openLinked(id: string, showPreview = true) {
@@ -256,25 +282,25 @@ export default function Notes({ userId, active, locked, flushRef }: {
   }
 
   function insertMarkdown(command: NoteFormat | NoteTableSize, scroll = editorScroll()) {
-    if (!note || disabled) return
+    if (!note || !page || disabled) return
     const area = preview && typeof command !== 'string' ? null : paper.current
-    const start = area?.selectionStart ?? note.body.length
+    const start = area?.selectionStart ?? page.body.length
     const end = area?.selectionEnd ?? start
-    const change = typeof command === 'string' ? formatNote(note.body, start, end, command) : insertNoteTable(note.body, start, end, command)
+    const change = typeof command === 'string' ? formatNote(page.body, start, end, command) : insertNoteTable(page.body, start, end, command)
     editorRestore.current = { caret: change, scroll: preview ? undefined : scroll }
     setPreview(false)
-    store.edit(note.id, { body: change.text }, { before: { start, end }, after: change })
+    store.editPage(note.id, page.id, { body: change.text }, { before: { start, end }, after: change })
   }
 
   function navigateHistory(action: 'undo' | 'redo') {
-    if (!note || disabled) return
+    if (!note || !page || disabled) return
     const scroll = editorScroll()
-    const caret = store.navigateHistory(note.id, action)
+    const caret = store.navigateHistory(note.id, page.id, action)
     if (caret) editorRestore.current = { caret, scroll }
   }
 
   function editBody(event: ChangeEvent<HTMLTextAreaElement>) {
-    if (!note || disabled) return
+    if (!note || !page || disabled) return
     const { inputType, isComposing } = event.nativeEvent as InputEvent
     if (inputType === 'historyUndo' || inputType === 'historyRedo') {
       navigateHistory(inputType === 'historyUndo' ? 'undo' : 'redo')
@@ -283,7 +309,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
     const area = event.currentTarget
     const after = { start: area.selectionStart, end: area.selectionEnd }
     const typing = !isComposing && /^(insertText|deleteContentBackward|deleteContentForward)$/.test(inputType)
-    store.edit(note.id, { body: area.value }, { before: cursor.current, after, inputType: typing ? inputType : undefined })
+    store.editPage(note.id, page.id, { body: area.value }, { before: cursor.current, after, inputType: typing ? inputType : undefined })
     cursor.current = after
   }
 
@@ -311,11 +337,11 @@ export default function Notes({ userId, active, locked, flushRef }: {
   }
 
   function startNoteLink() {
-    if (!note || disabled || linking) return
+    if (!note || !page || disabled || linking) return
     pickerScroll.current = editorScroll()
     const area = preview ? null : paper.current
     const range = area ? { start: area.selectionStart, end: area.selectionEnd } : null
-    setLinkSource({ id: note.id, body: note.body, range })
+    setLinkSource({ id: note.id, pageId: page.id, body: page.body, range })
     setLinkTarget('')
     setShowActions(false)
     setShowTable(false)
@@ -349,13 +375,15 @@ export default function Notes({ userId, active, locked, flushRef }: {
     setLinking(true)
     try {
       const created = await store.create(title, linkSource)
-      if (noteIdFromHref(window.location.hash) === linkSource.id) {
+      if (noteIdFromHref(window.location.hash) === linkSource.id && pageName.current?.dataset.pageId === linkSource.pageId) {
         setFilter('all')
         setSearch('')
         openLinked(created.id, false)
       }
     } catch {
-      if (noteIdFromHref(window.location.hash) === linkSource.id) setProblem('Couldn’t create a linked note. Try again.')
+      if (noteIdFromHref(window.location.hash) === linkSource.id && pageName.current?.dataset.pageId === linkSource.pageId) {
+        setProblem('Couldn’t create a linked note. Try again.')
+      }
     } finally {
       setLinking(false)
     }
@@ -399,7 +427,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
       </div>
     </aside>
     <section className="notes-editor-pane" aria-label="Note editor" ref={editorPane}>
-      {entry && note ? <>
+      {entry && note && page ? <>
         <div className="editor-toolbar-top">
           <button type="button" className={'editor-back' + (parentId ? ' linked-note-back' : '')}
             aria-label={parentId ? 'Back to ' + parentTitle : undefined} onClick={goBack}>
@@ -415,13 +443,24 @@ export default function Notes({ userId, active, locked, flushRef }: {
               <button ref={actionsButton} type="button" className="icon-button" disabled={disabled} onClick={() => setShowActions(open => !open)}
                 aria-label="Note actions" aria-expanded={showActions}><MoreHorizontal size={20} /></button>
               {showActions && <div className="notes-floating-menu">
-                <button type="button" disabled={!entry.undo.length || disabled} onClick={() => { navigateHistory('undo'); setShowActions(false) }}><Undo2 size={15} /> Undo</button>
-                <button type="button" disabled={!entry.redo.length || disabled} onClick={() => { navigateHistory('redo'); setShowActions(false) }}><Redo2 size={15} /> Redo</button>
+                <button type="button" disabled={!history?.undo.length || disabled} onClick={() => { navigateHistory('undo'); setShowActions(false) }}><Undo2 size={15} /> Undo</button>
+                <button type="button" disabled={!history?.redo.length || disabled} onClick={() => { navigateHistory('redo'); setShowActions(false) }}><Redo2 size={15} /> Redo</button>
                 <button type="button" disabled={linking} onClick={startNoteLink}><Link2 size={15} /> Link note</button>
                 <button type="button" className="delete-action" onClick={() => void remove()}><Trash2 size={15} /> Delete note</button>
               </div>}
             </div>
           </div>
+        </div>
+        <div className="note-pages" role="group" aria-label="Note pages">
+          <button type="button" className="icon-button" aria-label="Previous page" title="Previous page" disabled={pageIndex === 0}
+            onClick={() => selectPage(pages[pageIndex - 1].id)}><ChevronLeft size={18} /></button>
+          <button type="button" className="icon-button" aria-label="Next page" title="Next page" disabled={pageIndex === pages.length - 1}
+            onClick={() => selectPage(pages[pageIndex + 1].id)}><ChevronRight size={18} /></button>
+          <input ref={pageName} data-page-id={page.id} className="note-page-name" aria-label="Page name" title="Page name" maxLength={120}
+            value={page.title} placeholder={'Page ' + (pageIndex + 1)} readOnly={disabled}
+            onChange={event => store.editPage(note.id, page.id, { title: event.target.value })} />
+          <span className="note-page-count" role="status" aria-label={'Page ' + (pageIndex + 1) + ' of ' + pages.length}>{pageIndex + 1} / {pages.length}</span>
+          <button type="button" className="icon-button" aria-label="Add page" title="Add page" disabled={disabled} onClick={addPage}><Plus size={19} /></button>
         </div>
         {(problem || entry.problem instanceof NoteChangedError) && <div className="editor-alert" role="alert">
           <p className="error">{problem || 'This note changed or was deleted elsewhere. Your draft is still here.'}</p>
@@ -471,15 +510,15 @@ export default function Notes({ userId, active, locked, flushRef }: {
               <button type="submit" className="button small primary" disabled={disabled}>Insert</button>
             </div>
           </form>}
-          <textarea key={note.id} ref={paper} hidden={preview} className="note-content-input" placeholder="Write a note..." aria-label="Note content"
-            value={note.body} readOnly={disabled} onChange={editBody} onKeyDown={historyShortcut}
+          <textarea key={note.id + '/' + page.id} ref={paper} hidden={preview} className="note-content-input" placeholder="Write a note..." aria-label="Note content"
+            value={page.body} readOnly={disabled} onChange={editBody} onKeyDown={historyShortcut}
             onSelect={event => { cursor.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }} />
           {preview && <div className="markdown-preview" aria-label="Markdown preview" role="region" onClick={followLink}>
             <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents} disallowedElements={['img']}>
-              {note.body || '*Nothing here yet. Switch to Edit and start writing.*'}
+              {page.body || '*Nothing here yet. Switch to Edit and start writing.*'}
             </Markdown>
           </div>}
-          <div className="editor-bottom-meta"><span>Markdown supported</span><span>{countNoteWords(note.body)} words</span></div>
+          <div className="editor-bottom-meta"><span>Markdown supported</span><span>{countNoteWords(page.body)} words</span></div>
         </div>
       </> : selectedId ? <div className="editor-placeholder">
         <h2>{loading ? 'Loading note…' : 'Note unavailable'}</h2>
