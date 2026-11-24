@@ -1,26 +1,60 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, Pause, Play, Plus, RotateCcw } from 'lucide-react'
 import { HandEditor } from './HandEditor.tsx'
 import { handLibrary, type SavedHand } from './library.ts'
 import { PlayingCard } from './PlayingCard.tsx'
-import { chipLayers, ChipStack, PotChips } from './PokerChips.tsx'
+import { ChipPiles, describeChips } from './PokerChips.tsx'
+import { chipBreakdown } from './chipBreakdown.ts'
 import { chips, openingReplayStep, potTotal, replay, streets, type Frame } from './replay.ts'
 import { emptyHand, sampleHand } from './sample.ts'
 
 const sampleTitle = 'Set over set'
 
-function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: number; bigBlind: number }) {
+function seatPosition(index: number, count: number) {
+  // Screen coordinates increase downward, so increasing the angle moves clockwise.
+  const angle = Math.PI / 2 + (index * 2 * Math.PI) / count
+  return { x: Math.cos(angle), y: Math.sin(angle) }
+}
+
+function SeatChips({ frame, inTray = false }: { frame: Frame; inTray?: boolean }) {
+  return frame.seats.map((seat, index) => {
+    const amount = frame.awards ? (frame.awards.find(award => award.seat === seat.seat)?.amount ?? 0) : seat.committed
+    if (!amount) return null
+    const amountLabel = seat.name + (frame.awards ? ' won ' : ' committed ') + chips(amount)
+    const piles = chipBreakdown(amount)
+    const wager = frame.awards ? undefined : seat.wager
+    const wagerText = wager?.kind === 'call' ? 'Call' : wager && (wager.kind === 'bet' ? 'B' : 'R') + Math.round(wager.percent)
+    const wagerDescription = wager?.kind === 'call' ? 'Call' : wager && (wager.kind === 'bet' ? 'Bet ' : 'Raise ') + Math.round(wager.percent) + '% of pot'
+    const wagerColor = wager?.kind === 'bet'
+      ? (wager.percent <= 40 ? 'small' : wager.percent <= 100 ? 'medium' : 'overbet')
+      : wager?.kind
+    const chipDescription = [wagerDescription, 'Chips ' + describeChips(piles)].filter(Boolean).join(' · ')
+    const { x, y } = seatPosition(index, frame.seats.length)
+    const betTop = frame.seats.length === 2 ? (y < 0 ? 30 : 72) : y < -.1 ? 22 - y * 4 : 71 - y ** 4
+    const position = inTray ? undefined : { '--bet-x': x, '--top': betTop + '%' } as CSSProperties
+    return <div key={seat.seat} role="img" aria-label={amountLabel} aria-description={chipDescription} title={amountLabel + ' · ' + chipDescription} className="seat-chips" style={position}>
+      {inTray && <span className="wager-tray-name">{seat.name}</span>}
+      <ChipPiles piles={piles} />
+      <span className="seat-chip-amount">
+        <span>{frame.awards && '+'}{chips(amount)}</span>
+        {wagerText && <span className={'seat-chip-size wager-' + wagerColor}>{wagerText}</span>}
+      </span>
+    </div>
+  })
+}
+
+function Table({ frame, button, useWagerTray }: { frame: Frame | undefined; button: number; useWagerTray: boolean }) {
   if (!frame) return <div className="table-fallback">Complete table setup to preview this hand.</div>
   const { seats, board, collectedPots, active, awards } = frame
-  const blindCents = Math.round(bigBlind * 100)
   const pot = potTotal(collectedPots)
   const paidOut = awards?.reduce((sum, award) => sum + award.amount, 0) ?? 0
+  const centerChips = chipBreakdown(pot - paidOut)
 
-  return <div className={'table-stage' + (seats.length > 6 ? ' many-seats' : '')} aria-label="Replay table">
+  return <div className={'table-stage' + (seats.length === 2 ? ' heads-up' : '')} aria-label="Replay table">
     <div className="table-rail"><div className="table-felt" /></div>
     <div className="table-center">
       <div className="pot-display">
-        <PotChips amount={pot - paidOut} bigBlind={blindCents} />
+        <ChipPiles piles={centerChips} className="pot-chips" label={'Collected pot chips ' + chips(pot - paidOut) + ' · ' + describeChips(centerChips)} />
         <dl className="pot-total">
           <div><dt>Main pot</dt><dd>{chips(collectedPots[0]?.amount ?? 0)}</dd></div>
           <div><dt>Total pot</dt><dd>{chips(frame.pot)}</dd></div>
@@ -28,36 +62,15 @@ function Table({ frame, button, bigBlind }: { frame: Frame | undefined; button: 
       </div>
       <div className="board-cards">{Array.from({ length: 5 }, (_, index) => <PlayingCard key={index} card={board[index]} />)}</div>
     </div>
+    {!useWagerTray && <SeatChips frame={frame} />}
     {seats.map((seat, index) => {
-      // Screen coordinates increase downward, so increasing the angle moves clockwise.
-      const angle = Math.PI / 2 + (index * 2 * Math.PI) / seats.length
-      const x = Math.cos(angle)
-      const y = Math.sin(angle)
-      const amount = awards ? (awards.find(award => award.seat === seat.seat)?.amount ?? 0) : seat.committed
-      const amountLabel = seat.name + (awards ? ' won ' : ' committed ') + chips(amount)
-      const wager = awards ? undefined : seat.wager
-      const wagerText = wager?.kind === 'call' ? 'Call' : wager && (wager.kind === 'bet' ? 'B' : 'R') + Math.round(wager.percent)
-      const wagerDescription = wager?.kind === 'call' ? 'Call' : wager && (wager.kind === 'bet' ? 'Bet ' : 'Raise ') + Math.round(wager.percent) + '% of pot'
-      const wagerColor = wager?.kind === 'bet'
-        ? (wager.percent <= 40 ? 'small' : wager.percent <= 100 ? 'medium' : 'overbet')
-        : wager?.kind
-      // Leave the board lane clear and keep chips on the felt in front of their seats.
-      const betTop = y < 0 ? 24 - y * 5 : 61 + y * 8.5
-      return <Fragment key={seat.seat}>
-        {amount > 0 && <div role="img" aria-label={amountLabel} aria-description={wagerDescription} title={wagerDescription ? amountLabel + ' · ' + wagerDescription : amountLabel} className="seat-chips" style={{ '--bet-x': x, '--top': betTop + '%' } as CSSProperties}>
-          <ChipStack count={Math.min(5, chipLayers(amount, blindCents))} color={awards ? 'ivory' : 'red'} />
-          <span className="seat-chip-amount">
-            <span>{awards && '+'}{chips(amount)}</span>
-            {wagerText && <span className={'seat-chip-size wager-' + wagerColor}>{wagerText}</span>}
-          </span>
-        </div>}
-        <div className={'table-seat' + (seat.folded ? ' folded' : '') + (active === seat.seat ? ' acting' : '')} style={{ '--left': (50 + x * 41) + '%', '--top': (50 + y * 36) + '%' } as CSSProperties}>
-          <div className="hole-cards"><PlayingCard card={seat.hole[0]} back /><PlayingCard card={seat.hole[1]} back /></div>
-          <div className="seat-info"><strong title={seat.name}>{seat.name}</strong><span title={seat.folded ? 'Folded' : seat.remaining ? 'Stack' : 'All-in'}>{chips(seat.remaining)}</span>
-            {seat.seat === button && <span className="dealer-chip" aria-label="Dealer button" title="Dealer button">D</span>}
-          </div>
+      const { x, y } = seatPosition(index, seats.length)
+      return <div key={seat.seat} className={'table-seat' + (seat.folded ? ' folded' : '') + (active === seat.seat ? ' acting' : '')} style={{ '--left': (50 + x * 41) + '%', '--top': (50 + y * 36) + '%' } as CSSProperties}>
+        <div className="hole-cards"><PlayingCard card={seat.hole[0]} back /><PlayingCard card={seat.hole[1]} back /></div>
+        <div className="seat-info"><strong title={seat.name}>{seat.name}</strong><span title={seat.folded ? 'Folded' : seat.remaining ? 'Stack' : 'All-in'}>{chips(seat.remaining)}</span>
+          {seat.seat === button && <span className="dealer-chip" aria-label="Dealer button" title="Dealer button">D</span>}
         </div>
-      </Fragment>
+      </div>
     })}
   </div>
 }
@@ -115,6 +128,11 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
   const index = Math.min(step ?? openingReplayStep(frames), last)
   const frame = frames[index]
   const notesDirty = savedNotes !== notes
+  // Choose a layout for the whole hand so piles stay in the same place while stepping.
+  const useWagerTray = useMemo(() => hand.players.length > 6 || (hand.players.length > 2 && frames.some(item =>
+    item.seats.some(seat => chipBreakdown(seat.committed).length > 4) ||
+    item.awards?.some(award => chipBreakdown(award.amount).length > 4),
+  )), [frames, hand.players.length])
   const hasPotDetails = frames.some(item => item.collectedPots.length > 1 || item.awards?.length)
   const showsPotDetails = frame && (frame.collectedPots.length > 1 || !!frame.awards?.length)
 
@@ -200,7 +218,7 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
           <div><h2>{title.trim() || 'Untitled hand'}</h2><p>{source === 'sample' && 'Sample hand · '}{hand.smallBlind} / {hand.bigBlind} blinds · {hand.players.length} players</p></div>
           <button className="icon-button" onClick={newHand} disabled={busy} aria-label="New hand" title="New hand"><Plus size={19} aria-hidden="true" /></button>
         </div>
-        <Table frame={frame} button={hand.button} bigBlind={hand.bigBlind} />
+        <Table frame={frame} button={hand.button} useWagerTray={useWagerTray} />
         <div className="replay-controls">
           <div className="transport">
             <button className="icon-button" aria-label="Restart replay" title="Restart replay" onClick={() => seek(0)} disabled={!index}><RotateCcw size={17} /></button>
@@ -214,6 +232,9 @@ export function Replayer({ userId, initialHand, deletedHandId }: {
           const destination = frames.findIndex(frame => frame.street === id)
           return <button key={street} className={frame?.street === id ? 'current' : ''} aria-pressed={frame?.street === id} disabled={destination < 0} onClick={() => seek(destination)}>{street}</button>
         })}</div>
+        {useWagerTray && frame && <div className="wager-tray" role="group" aria-label={frame.awards ? 'Payout chips' : 'Player wager chips'}>
+          <SeatChips frame={frame} inTray />
+        </div>}
         {hasPotDetails && <div className="replay-pot-details" role="region" aria-label="Pot details" aria-hidden={!showsPotDetails} tabIndex={showsPotDetails ? 0 : undefined}>
           {frame && frame.collectedPots.length > 1 && <div className="pot-breakdown">{frame.collectedPots.map((pot, i) => <span key={i}>{i ? 'Side pot ' + i : 'Main pot'} <strong>{chips(pot.amount)}</strong></span>)}</div>}
           {!!frame?.awards?.length && <div className="pot-breakdown">{frame.awards.map(award => <span key={award.seat}>{hand.players.find(player => player.seat === award.seat)?.name} wins <strong>{chips(award.amount)}</strong></span>)}</div>}

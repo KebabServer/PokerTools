@@ -1,23 +1,24 @@
 import type { CSSProperties } from 'react'
+import type { ChipPile } from './chipBreakdown.ts'
+import { chips } from './replay.ts'
 
-export function chipLayers(amount: number, bigBlind: number) {
-  return Math.min(7, 1 + Math.ceil(Math.log2(Math.max(1, amount / bigBlind))))
+export function describeChips(piles: ChipPile[]) {
+  return piles.map(({ count, value }) => count + ' × ' + chips(value)).join(', ')
 }
 
-export function ChipStack({ count, color }: { count: number; color: 'red' | 'ivory' | 'black' }) {
-  return <span className={`chip-stack chip-stack-${color}`} aria-hidden="true" style={{ '--chip-layers': count - 1 } as CSSProperties}>
-    {Array.from({ length: count }, (_, index) =>
-      <span key={index} className="chip-disc" style={{ '--chip-index': index } as CSSProperties} />,
-    )}
-  </span>
-}
-
-export function PotChips({ amount, bigBlind }: { amount: number; bigBlind: number }) {
-  if (amount <= 0) return null
-  const count = chipLayers(amount, bigBlind)
-  return <span className="pot-chips" aria-hidden="true">
-    {count > 2 && <ChipStack count={count - 2} color="black" />}
-    <ChipStack count={count} color="red" />
-    {count > 4 && <ChipStack count={count - 4} color="ivory" />}
+export function ChipPiles({ piles, className = '', label }: { piles: ChipPile[]; className?: string; label?: string }) {
+  if (!piles.length) return null
+  return <span className={'chip-piles ' + className} role={label ? 'img' : undefined} aria-label={label} aria-hidden={!label || undefined} title={label}>
+    {piles.map(({ value, color, count }) => {
+      const layers = Math.min(count, 4)
+      return <span key={value} className={`chip-stack chip-stack-${color}`} data-value={value} data-count={count}
+        aria-hidden="true" style={{ '--chip-layers': layers - 1 } as CSSProperties}>
+        {Array.from({ length: layers }, (_, index) =>
+          <span key={index} className="chip-disc" style={{ '--chip-index': index } as CSSProperties} />,
+        )}
+        {color === 'fraction' && <span className="chip-fraction">{chips(value).slice(1)}</span>}
+        {count > layers && <span className="chip-count">×{count}</span>}
+      </span>
+    })}
   </span>
 }
