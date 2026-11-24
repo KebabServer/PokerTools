@@ -34,6 +34,13 @@ export function createSolverStorage(userId: string) {
   }
 
   return {
+    readSavedPage: (after?: string) => transaction<SavedSolution[]>(['solutions'], 'readonly', tx =>
+      tx.objectStore('solutions').getAll(after === undefined ? undefined : IDBKeyRange.lowerBound(after, true), 5)),
+    async close() {
+      const db = await connection
+      db?.close()
+      connection = undefined
+    },
     list: () => transaction<Pick<SavedSolution, 'id' | 'label'>[]>(['catalog'], 'readonly', tx =>
       tx.objectStore('catalog').getAll()),
     load: (id: string) => transaction<SavedSolution>(['solutions'], 'readonly', tx =>

@@ -39,6 +39,10 @@ Sign in at the site entrance. You can sign out from **Library**. Use **Save hand
 - In **Solver**, TurnRiverLab v16.13 runs heads-up flop, turn, and river solves in the browser. Set the board, ranges, and betting tree or use its **Flop library** to continue a saved flop line. Solutions and checkpoints can be exported. **Save solution** keeps solutions in this browser for the signed-in account.
 - In **Notes**, use **Add page** and the arrows in **Preview** to create and switch pages. Use **Edit** to name a page and write Markdown. Search matches note titles, page names, and page text. Pin important notes and use the toolbar to format text. **Insert table** adds a table with the number of columns and body rows you choose. In **Edit**, choose **Note actions** and **Link note** to create a sub-note or link an existing note. Open the link in **Preview**. Notes and pages autosave. If a save fails, use **Retry**. If another device changed or deleted the note, use **Save a copy** to keep your draft.
 
+## Download your data
+
+Open **Library**, choose **Prepare backup**, then select **Download backup**. The versioned JSON file includes your saved hands and hand notes, equity calculations, Notes pages and links, imported Flop Viewer spots, and Solver solutions saved in the current browser. For Solver solutions stored on another device or browser, prepare a backup there as well.
+
 ## Import flop ranges
 
 After signing in, open **Flop Viewer → Import ranges** and choose a JSON file or an existing Flop Viewer TSV. **Save to Supabase** writes the spots to your account. Importing the same configuration and flop replaces its nodes. The tab reads the saved strategies from Supabase.

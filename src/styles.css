@@ -214,6 +214,7 @@ p { color: var(--muted); line-height: 1.5; }
 .login-form { display: grid; gap: 12px; margin-top: 18px; }
 .login-form button { margin-top: 3px; }
 .library-sections { display: grid; gap: 13px; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .review-panel { padding: 17px 19px; }
 .review-panel p { margin-top: 9px; font-size: .88rem; overflow-wrap: anywhere; }
 .save-actions { display: flex; flex-wrap: wrap; gap: 8px; }

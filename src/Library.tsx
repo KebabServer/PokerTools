@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { Trash2 } from 'lucide-react'
 import { calculationLibrary, handLibrary, type SavedCalculation, type SavedHand } from './library.ts'
+import { prepareBackup } from './backup.ts'
 
 type Entry = { id: string; title: string }
 
@@ -52,10 +53,66 @@ function SavedItems<Row extends Entry>({ title, empty, collection, open }: {
   </section>
 }
 
-export function Library({ session, openHand, openCalculation, removeHand, removeCalculation, signOut, signingOut }: {
+function Backup({ userId, flushNotes, signingOut }: {
+  userId: string; flushNotes: () => Promise<void> | undefined; signingOut: boolean
+}) {
+  const request = useRef<AbortController | null>(null)
+  const objectUrl = useRef<string | null>(null)
+  const [download, setDownload] = useState<{ url: string; filename: string } | null>(null)
+  const [progress, setProgress] = useState('')
+  const [problem, setProblem] = useState('')
+
+  useEffect(() => () => {
+    request.current?.abort()
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current)
+  }, [])
+
+  async function prepare() {
+    if (request.current || signingOut) return
+    const controller = new AbortController()
+    request.current = controller
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current)
+    objectUrl.current = null
+    setDownload(null)
+    setProblem('')
+    setProgress('Preparing backup…')
+
+    try {
+      await flushNotes()?.catch(() => {
+        throw new Error('A note couldn’t be saved. Finish saving it in Notes and try again.')
+      })
+      const { file, filename } = await prepareBackup(userId, controller.signal, setProgress)
+      if (controller.signal.aborted) return
+      const url = URL.createObjectURL(file)
+      objectUrl.current = url
+      setDownload({ url, filename })
+    } catch (error) {
+      if (!controller.signal.aborted) setProblem(error instanceof Error ? error.message : 'Couldn’t prepare the backup.')
+    } finally {
+      request.current = null
+      if (!controller.signal.aborted) setProgress('')
+    }
+  }
+
+  return <section className="panel review-panel">
+    <h2>Backup</h2>
+    <p>Save a JSON copy of your hands, equity calculations, notes, and imported flops. Solver solutions are included from this browser.</p>
+    <div className="backup-actions">
+      {download && !signingOut && <a className="button primary" href={download.url} download={download.filename}>Download backup</a>}
+      <button className={'button' + (download ? '' : ' primary')} disabled={!!progress || signingOut} onClick={() => void prepare()}>
+        {download ? 'Prepare a new backup' : 'Prepare backup'}
+      </button>
+    </div>
+    {progress && <p role="status">{progress}</p>}
+    {download && <p role="status">Backup ready.</p>}
+    {problem && <p role="alert" className="error">{problem}</p>}
+  </section>
+}
+
+export function Library({ session, openHand, openCalculation, removeHand, removeCalculation, signOut, signingOut, flushNotes }: {
   session: Session; openHand: (hand: SavedHand) => void; openCalculation: (calculation: SavedCalculation) => void
   removeHand: (id: string) => Promise<void>; removeCalculation: (id: string) => Promise<void>
-  signOut: () => Promise<void>; signingOut: boolean
+  signOut: () => Promise<void>; signingOut: boolean; flushNotes: () => Promise<void> | undefined
 }) {
   const [problem, setProblem] = useState('')
 
@@ -71,7 +128,10 @@ export function Library({ session, openHand, openCalculation, removeHand, remove
   return <div className="library-workspace">
     <div className="tool-heading"><h1>Library</h1><button className="button small" disabled={signingOut} onClick={() => void leave()}>Sign out</button></div>
     {problem && <p className="error" role="alert">{problem}</p>}
-    <LibraryItems userId={session.user.id} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />
+    <div className="library-sections">
+      <Backup userId={session.user.id} flushNotes={flushNotes} signingOut={signingOut} />
+      <LibraryItems userId={session.user.id} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />
+    </div>
   </div>
 }
 
@@ -81,8 +141,8 @@ function LibraryItems({ userId, openHand, openCalculation, removeHand, removeCal
 }) {
   const [hands] = useState(() => ({ list: handLibrary(userId).list, remove: removeHand }))
   const [calculations] = useState(() => ({ list: calculationLibrary(userId).list, remove: removeCalculation }))
-  return <div className="library-sections">
+  return <>
     <SavedItems title="Saved hands" empty="No saved hands yet." collection={hands} open={openHand} />
     <SavedItems title="Saved calculations" empty="No saved calculations yet." collection={calculations} open={openCalculation} />
-  </div>
+  </>
 }

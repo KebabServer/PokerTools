@@ -130,7 +130,7 @@ function Workspace({ session }: { session: Session }) {
         </Suspense>
       </div>}
       {tool === 'library' && <Library session={session} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand}
-        removeCalculation={removeCalculation} signOut={signOut} signingOut={signingOut} />}
+        removeCalculation={removeCalculation} signOut={signOut} signingOut={signingOut} flushNotes={() => flushNotes.current?.()} />}
     </main>
   </>
 }
