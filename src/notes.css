@@ -73,9 +73,9 @@
 .editor-meta { display: flex; align-items: center; gap: 8px; color: var(--soft); font-size: 10px; font-weight: 700; letter-spacing: .05em; }
 .editor-meta svg { color: var(--note-accent); }
 .notes-layout .note-title-input { width: 100%; min-height: 0; margin: 22px 0 21px; padding: 0; border: 0; background: none; color: #ececec; font-size: var(--note-title-size); font-weight: 800; line-height: 1.3; letter-spacing: -.06em; }
-.notes-layout :is(.note-page-name, .note-page-title) { font-size: calc(var(--note-title-size) + 3px); line-height: 1.2; }
+.notes-layout :is(.note-page-name, .note-page-title) { color: #fff; font-size: calc(var(--note-title-size) + 3px); line-height: 1.2; }
 .notes-layout .note-page-name { width: 100%; max-width: 26rem; min-height: 38px; margin-bottom: 12px; padding: 4px 9px; background: var(--surface); }
-.note-page-title { margin: 0 0 12px; color: var(--muted); overflow-wrap: anywhere; }
+.note-page-title { margin: 0 0 12px; overflow-wrap: anywhere; }
 .note-title-input:focus, .note-content-input:focus { outline: none; }
 .editor-format-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin-bottom: 20px; padding: 10px 0; border-block: 1px solid var(--border); }
 .notes-tool-group { display: flex; align-items: center; }
