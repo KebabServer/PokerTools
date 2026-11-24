@@ -145,6 +145,22 @@ export function createNoteStore(repository: Repository) {
     return page.id
   }
 
+  function movePage(id: string, pageId: string, direction: -1 | 1) {
+    const entry = entries.get(id)
+    if (!entry || entry.busy) return
+    const ordered = pagesForNote(entry.note)
+    const from = ordered.findIndex(page => page.id === pageId)
+    const to = from + direction
+    if (from < 0 || to < 0 || to >= ordered.length) return
+    ordered.splice(to, 0, ordered.splice(from, 1)[0])
+    const pages = {
+      ...entry.note.pages,
+      firstPosition: ordered.findIndex(page => page.id === firstPageId),
+      extra: ordered.filter(page => page.id !== firstPageId),
+    }
+    applyEdit(entry, { ...entry.note, pages })
+  }
+
   function editPage(id: string, pageId: string, patch: Partial<NotePageText>, options?: BodyEditOptions) {
     const entry = entries.get(id)
     if (!entry || entry.busy) return
@@ -282,7 +298,7 @@ export function createNoteStore(repository: Repository) {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
     },
-    refresh, edit, addPage, editPage, navigateHistory, create, link, remove, copy, flush,
+    refresh, edit, addPage, movePage, editPage, navigateHistory, create, link, remove, copy, flush,
     retry(id: string) {
       const entry = entries.get(id)
       if (!entry) return

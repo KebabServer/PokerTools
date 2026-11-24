@@ -3,17 +3,21 @@ import type { NoteText } from './notes.ts'
 export const firstPageId = 'first'
 
 export type NotePage = { id: string; title: string; body: string }
-export type NotePages = { firstTitle: string; extra: NotePage[] }
+export type NotePages = { firstTitle: string; extra: NotePage[]; firstPosition?: number }
 export type NotePageText = Pick<NotePage, 'title' | 'body'>
 
 export const emptyNotePages: NotePages = { firstTitle: '', extra: [] }
 
 export function pagesForNote({ body, pages }: { body: string; pages: NotePages }): NotePage[] {
-  return [{ id: firstPageId, title: pages.firstTitle, body }, ...pages.extra]
+  // Keep the original page's content and ID in their existing storage fields.
+  const position = pages.firstPosition ?? 0
+  const ordered = [...pages.extra]
+  ordered.splice(Number.isInteger(position) && position >= 0 ? position : 0, 0, { id: firstPageId, title: pages.firstTitle, body })
+  return ordered
 }
 
 function sameNotePages(a: NotePages, b: NotePages) {
-  return a === b || (a.firstTitle === b.firstTitle && a.extra.length === b.extra.length && a.extra.every((page, index) => {
+  return a === b || (a.firstTitle === b.firstTitle && (a.firstPosition ?? 0) === (b.firstPosition ?? 0) && a.extra.length === b.extra.length && a.extra.every((page, index) => {
     const other = b.extra[index]
     return page.id === other.id && page.title === other.title && page.body === other.body
   }))

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent, type RefObject } from 'react'
-import { Bold, ChevronLeft, ChevronRight, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Redo2, Search, Table2, Trash2, Type, Undo2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Bold, ChevronLeft, ChevronRight, Eye, FileText, Hash, Italic, Link2, List, ListChecks, ListFilter, MoreHorizontal, Pencil, Pin, Plus, Quote, Redo2, Search, Table2, Trash2, Type, Undo2, X } from 'lucide-react'
 import { format, formatDistanceToNow, parseISO } from 'date-fns'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -67,6 +67,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const { id: selectedId, trail } = navigation
   const [lastPages, setLastPages] = useState<Record<string, string>>({})
   const [preview, setPreview] = useState(true)
+  const [showPages, setShowPages] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'pinned'>('all')
   const [showActions, setShowActions] = useState(false)
@@ -83,6 +84,7 @@ export default function Notes({ userId, active, locked, flushRef }: {
   const nameNewPage = useRef<string | null>(null)
   const tableButton = useRef<HTMLButtonElement>(null)
   const actionsButton = useRef<HTMLButtonElement>(null)
+  const pageListButton = useRef<HTMLButtonElement>(null)
   const editorPane = useRef<HTMLElement>(null)
   const editorRestore = useRef<{ caret?: EditorSelection; scroll?: EditorScroll } | null>(null)
   const pickerScroll = useRef<EditorScroll | undefined>(undefined)
@@ -153,6 +155,10 @@ export default function Notes({ userId, active, locked, flushRef }: {
   useLayoutEffect(() => {
     if (active) setPreview(true)
   }, [active])
+
+  useLayoutEffect(() => {
+    setShowPages(false)
+  }, [selectedId, preview, active])
 
   useLayoutEffect(() => {
     if (preview || !active) {
@@ -231,6 +237,13 @@ export default function Notes({ userId, active, locked, flushRef }: {
 
   function selectPage(id: string) {
     if (note) setLastPages(previous => ({ ...previous, [note.id]: id }))
+    setShowPages(false)
+  }
+
+  function movePage(id: string, direction: -1 | 1) {
+    if (!note || !page || disabled) return
+    setLastPages(previous => ({ ...previous, [note.id]: page.id }))
+    store.movePage(note.id, id, direction)
   }
 
   function addPage() {
@@ -481,11 +494,19 @@ export default function Notes({ userId, active, locked, flushRef }: {
             </div>
           </div>
         </div>
-        <div className="note-view-bar">
+        <div className="note-view-bar" onKeyDown={event => {
+          if (event.key !== 'Escape' || !showPages) return
+          setShowPages(false)
+          pageListButton.current?.focus()
+        }}>
           {preview && <div className="note-pages" role="group" aria-label="Note pages">
             <button type="button" className="icon-button" aria-label="Previous page" title="Previous page" disabled={pageIndex === 0}
               onClick={() => selectPage(pages[pageIndex - 1].id)}><ChevronLeft size={18} /></button>
-            <span className="note-page-count" role="status" aria-label={'Page ' + (pageIndex + 1) + ' of ' + pages.length}>{pageIndex + 1} / {pages.length}</span>
+            <button type="button" className="note-page-count" ref={pageListButton} title="Page list"
+              aria-label={'Page list, page ' + (pageIndex + 1) + ' of ' + pages.length} aria-expanded={showPages}
+              aria-controls={showPages ? 'note-page-list' : undefined} onClick={() => setShowPages(open => !open)}>
+              {pageIndex + 1} / {pages.length}
+            </button>
             <button type="button" className="icon-button" aria-label="Next page" title="Next page" disabled={pageIndex === pages.length - 1}
               onClick={() => selectPage(pages[pageIndex + 1].id)}><ChevronRight size={18} /></button>
             <button type="button" className="icon-button" aria-label="Add page" title="Add page" disabled={disabled} onClick={addPage}><Plus size={19} /></button>
@@ -494,6 +515,21 @@ export default function Notes({ userId, active, locked, flushRef }: {
             <button type="button" className="editor-mode" aria-pressed={!preview} aria-label="Edit" title="Edit Markdown" onClick={() => setPreview(false)}><Pencil size={16} />Edit</button>
             <button type="button" className="editor-mode" aria-pressed={preview} aria-label="Preview" title="Preview formatted note" onClick={() => setPreview(true)}><Eye size={16} />Preview</button>
           </div>
+          {preview && showPages && <ol id="note-page-list" className="note-page-list" role="list" aria-label="Pages">
+            {pages.map((item, index) => {
+              const name = item.title.trim() || `Page ${index + 1}`
+              return <li key={item.id}>
+                <button type="button" className="note-page-entry" title={name} aria-current={item.id === page.id ? 'page' : undefined} onClick={() => {
+                  selectPage(item.id)
+                  pageListButton.current?.focus()
+                }}>{name}</button>
+                <button type="button" className="icon-button" aria-label={`Move ${name} up`} title="Move up" disabled={disabled || index === 0}
+                  onClick={() => movePage(item.id, -1)}><ArrowUp size={16} /></button>
+                <button type="button" className="icon-button" aria-label={`Move ${name} down`} title="Move down" disabled={disabled || index === pages.length - 1}
+                  onClick={() => movePage(item.id, 1)}><ArrowDown size={16} /></button>
+              </li>
+            })}
+          </ol>}
         </div>
         {(problem || entry.problem instanceof NoteChangedError) && <div className="editor-alert" role="alert">
           <p className="error">{problem || 'This note changed or was deleted elsewhere. Your draft is still here.'}</p>

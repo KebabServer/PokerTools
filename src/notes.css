@@ -63,7 +63,13 @@
 .note-pages, .note-modes { display: flex; align-items: center; }
 .note-pages { min-width: 0; }
 .note-pages .icon-button { width: 44px; min-height: 44px; }
-.note-page-count { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.note-pages .note-page-count { min-width: 44px; min-height: 44px; padding: 0 4px; border-radius: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--surface); color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.note-pages .note-page-count:is(:hover, [aria-expanded="true"]) { background: var(--raised); color: #ececec; }
+.note-page-list { position: absolute; top: calc(100% + 5px); inset-inline-start: 31px; width: min(360px, calc(100% - 62px)); max-height: min(42dvh, 300px); overflow: auto; overscroll-behavior: contain; margin: 0; padding: 6px; list-style: none; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 28px #0007; }
+.note-page-list li { display: flex; gap: 2px; align-items: center; }
+.notes-layout .note-page-entry { flex: 1; min-width: 0; min-height: 44px; padding: 0 8px; border-radius: 8px; text-align: start; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-layout .note-page-entry:is(:hover, [aria-current]) { background: var(--raised); }
+.note-page-list .icon-button { width: 44px; min-height: 44px; }
 .note-modes { gap: 3px; margin-left: auto; }
 .note-modes .editor-mode { display: flex; align-items: center; justify-content: center; gap: 5px; min-width: 44px; min-height: 44px; padding: 0 9px; border-radius: 8px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .note-modes .editor-mode:is(:hover, [aria-pressed="true"]) { background: var(--raised); color: #ececec; }
@@ -134,6 +140,7 @@
   .note-open-mobile .notes-editor-pane { display: flex; flex: 1; }
   .editor-toolbar-top { height: 55px; padding: 0 16px; }
   .note-view-bar { padding-inline: 16px; }
+  .note-page-list { inset-inline-start: 16px; width: min(360px, calc(100% - 32px)); }
   .editor-back { display: flex; }
   .editor-body { --note-title-size: 33px; padding: 30px 23px 25px; }
   .notes-layout .note-title-input { margin: 18px 0; }
@@ -141,6 +148,7 @@
   .note-content-input { min-height: 250px; }
 }
 @media (max-width: 420px) {
+  .note-view-bar { gap: 4px; }
   .editor-format-toolbar { gap: 1px; }
   .toolbar-divider { margin: 0 3px; }
   .editor-format-toolbar button { min-width: 26px; height: 36px; }

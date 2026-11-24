@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createNoteStore, NoteChangedError } from '../src/noteAutosave.ts'
-import { emptyNotePages, firstPageId, pagesForNote } from '../src/notePages.ts'
+import { emptyNotePages, firstPageId, pagesForNote, sameNoteText } from '../src/notePages.ts'
 
 const original = { id: 'first', title: 'Existing note', body: 'Original', pinned: false, pages: emptyNotePages, updated_at: '2026-11-20T12:00:00Z' }
 
@@ -174,4 +174,42 @@ test('pages save together and keep independent undo histories through refresh', 
   await store.flush()
   assert.equal(saved.body, original.body)
   assert.equal(saved.pages.extra[0].body, 'Second draft')
+})
+
+test('moving the original page preserves its content, ID and undo history across saves', async () => {
+  let saved = original
+  const repository = {
+    list: async () => [saved],
+    save: async (id, text) => {
+      saved = { ...structuredClone(text), id, updated_at: new Date().toISOString() }
+      return saved
+    },
+  }
+  const store = createNoteStore(repository)
+  await store.refresh()
+  const second = store.addPage(original.id)
+  const third = store.addPage(original.id)
+  store.editPage(original.id, firstPageId, { title: 'Overview', body: 'Original edit' })
+  store.editPage(original.id, second, { title: 'Review', body: 'Second body' })
+  await store.flush()
+  const before = saved
+  store.movePage(original.id, firstPageId, 1)
+  await store.flush()
+  assert.equal(sameNoteText(saved, before), false)
+  assert.equal(saved.body, 'Original edit')
+  assert.equal(saved.pages.firstTitle, 'Overview')
+  assert.deepEqual(saved.pages.extra, before.pages.extra)
+
+  await store.refresh()
+  const reopened = createNoteStore(repository)
+  await reopened.refresh()
+  assert.deepEqual(pagesForNote(reopened.getSnapshot()[0].note).map(page => page.id), [second, firstPageId, third])
+
+  store.movePage(original.id, third, -1)
+  store.navigateHistory(original.id, firstPageId, 'undo')
+  const appended = store.addPage(original.id)
+  await store.flush()
+  assert.deepEqual(pagesForNote(saved).map(page => page.id), [second, third, firstPageId, appended])
+  assert.equal(saved.body, original.body)
+  assert.equal(saved.pages.extra[0].body, 'Second body')
 })
