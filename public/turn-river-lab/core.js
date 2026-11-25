@@ -4,6 +4,7 @@ function createSolverCore() {
   'use strict';
   const RANKS = '23456789TJQKA', SUITS = 'shdc';
   const CATEGORY_RANKS = 'AKQJT98765432';
+  const frequencyStreets = ['flop', 'turn', 'river'];
   const ALL_COMBOS = [], COMBO_LOOKUP = new Int16Array(52 * 52).fill(-1);
   for (let a = 0; a < 52; a++) for (let b = a + 1; b < 52; b++) {
     const id = ALL_COMBOS.length;
@@ -487,6 +488,22 @@ function createSolverCore() {
     return layout.mineOrder.byteLength+layout.oppOrder.byteLength+
       layout.groupStart.byteLength+layout.weakEnd.byteLength+layout.tieEnd.byteLength;
   }
+  function parseFrequencyIncrements(increments={}) {
+    if(!increments||typeof increments!=='object'||Array.isArray(increments))throw Error('Invalid frequency increment settings.');
+    return Object.fromEntries(frequencyStreets.map(street=>{
+      const pair=increments[street]??[0,0];
+      if(!Array.isArray(pair)||pair.length!==2)throw Error('Provide OOP and IP frequency increments for the '+street+'.');
+      for(let p=0;p<2;p++){
+        const step=pair[p];
+        if(step===0)continue;
+        const hundredths=typeof step==='number'?Math.round(step*100):NaN;
+        if(!Number.isFinite(hundredths)||hundredths<1||hundredths>10000||Math.abs(step*100-hundredths)>1e-8||10000%hundredths!==0)
+          throw Error(`${street[0].toUpperCase()+street.slice(1)} ${p===0?'OOP':'IP'} frequency increment must divide 100% evenly (0 for unrestricted, up to two decimal places).`);
+      }
+      return [street,pair.slice()];
+    }));
+  }
+
   function makeGame(config, options={}) {
     // Preview mode never allocates regrets, strategies, showdown programs, or
     // cached public-board matrices. It is safe for the UI to keep on phones.
@@ -497,6 +514,9 @@ function createSolverCore() {
     const pot=Number(config.pot),stack=Number(config.stack);
     const equilibrium=config.equilibrium??'gto';
     if(equilibrium!=='gto'&&equilibrium!=='qre')throw Error('Equilibrium must be gto or qre.');
+    const frequencyIncrements=parseFrequencyIncrements(config.frequencyIncrements);
+    const hasFrequencyIncrements=frequencyStreets.slice(length-3).some(street=>frequencyIncrements[street].some(Boolean));
+    if(hasFrequencyIncrements&&equilibrium==='qre')throw Error('Frequency increments are available for Nash / GTO solves.');
     const requestedAlgorithm=config.gtoAlgorithm||'dcfr';
     if(!['cfrplus','dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','dcfr-predictive','optimistic','lcfr','dcfr-cubic','dcfr-2-0.5-2'].includes(requestedAlgorithm))throw Error('Unknown GTO convergence algorithm.');
     const gtoAlgorithm=equilibrium==='gto'?requestedAlgorithm:'cfrplus';
@@ -608,6 +628,10 @@ function createSolverCore() {
     const tree=isFlop?buildFlopTurnRiverTree(pot,stack,flopSizes,turnSizes,sizes,maxRaises,allIn,maxNodes,board,turnSamples,riverSamples,raisesByStreet,turnDonkSizes0,flopDonkSizes0,flopEntryMode,riverDonkSizes0,flopSamplingSeed)
       :isTurn?buildTurnRiverTree(pot,stack,turnSizes,sizes,maxRaises,allIn,maxNodes,board,raisesByStreet,turnDonkSizes0,turnEntryMode,riverDonkSizes0)
       :buildTree(pot,stack,sizes,maxRaises,allIn,maxNodes,raisesByStreet.river,riverDonkSizes0,riverEntryMode);
+    if(hasFrequencyIncrements)for(const node of tree.nodes)if(!node.terminal&&!node.chance){
+      const step=frequencyIncrements[node.street??'river'][node.p];
+      if(step)node.frequencyUnits=Math.round(100/step);
+    }
     const nodeLocks=[];
     const seenLocks=new Set();
     for(const entry of requestedLocks){
@@ -633,6 +657,10 @@ function createSolverCore() {
           throw Error('Every locked action must have a percentage between 0 and 100.');
         if(Math.abs(values.reduce((sum,v)=>sum+v,0)-100)>1e-7)
           throw Error('Locked action percentages must total exactly 100%.');
+        if(node.frequencyUnits&&values.some(v=>{
+          const units=v*node.frequencyUnits/100;
+          return Math.abs(units-Math.round(units))>1e-8;
+        }))throw Error(`Node ${node.id} lock percentages must match the ${frequencyIncrements[node.street??'river'][node.p]}% frequency increment.`);
       };
       const mask=new Uint8Array(n),rows=new Float64Array(n*a),combos={};
       if(whole){
@@ -723,7 +751,7 @@ function createSolverCore() {
       const memory=stateBytes+approxBoardBytes+players.reduce((t,p)=>t+p.ids.length*66,0);
       return {board,isFlop,isTurn,pot,stack,equilibrium,qreTemperaturePercent,gtoAlgorithm,hybridSchedule,zeroReachPruning:!!config.useZeroReachPruning,regretPruning:!!config.useRegretPruning,sparseTraversal,
         sampledChance:isFlop&&(turnSamples<49||riverSamples<48),
-        players,...tree,memory,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks,preview:true};
+        players,...tree,memory,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks,frequencyIncrements,hasFrequencyIncrements,preview:true};
     }
     const scoresByRiver=isTurn?new Array(52).fill(null):null;
     const scoresByRunout=isFlop?new Map():null;
@@ -830,6 +858,7 @@ function createSolverCore() {
       if(['optimistic','dcfr-predictive'].includes(gtoAlgorithm))node.previousDelta=take(m*a);
       for(let h=0;h<n;h++)for(let k=0;k<a;k++)node.current[h*a+k]=
         node.lockedMask?.[h]?node.lockedRows[h*a+k]:1/a;
+      projectFrequencyRows(node,node.current);
       if(equilibrium==='qre'){
         node.qreLog=take(n*a);
         node.qreEntropy=take(n);
@@ -851,7 +880,34 @@ function createSolverCore() {
       qreWarmupIterations:0,
       sizes,turnSizes,turnDonkSizes0,turnEntryMode,flopSizes,flopDonkSizes0,flopEntryMode,riverDonkSizes0,riverEntryMode,raisesByStreet,turnSamples,riverSamples,
       sampledChance:isFlop&&(turnSamples<49||riverSamples<48),maxRaises,allIn,scores,scoresByRiver,scoresByRunout,riverPayoffLayouts,
-      players,...tree,jointZ,memory,stateStorage,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks};
+      players,...tree,jointZ,memory,stateStorage,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks,frequencyIncrements,hasFrequencyIncrements};
+  }
+
+  // Convert each hand's normalized action mix to integer units. Whole units
+  // are assigned first, then the largest remainders get the remaining units.
+  // Equal remainders use action order, so equivalent suit rows stay identical.
+  let frequencyRemainders=new Float64Array(0);
+  function projectFrequencyRows(node,policy){
+    const units=node.frequencyUnits,a=node.actions.length;
+    if(!units||a===1||node.allLocked)return;
+    if(frequencyRemainders.length<a)frequencyRemainders=new Float64Array(a);
+    for(let h=0,off=0;off<policy.length;h++,off+=a){
+      if(node.lockedMask?.[h])continue;
+      let remaining=units;
+      for(let k=0;k<a;k++){
+        const target=policy[off+k]*units,whole=Math.floor(target);
+        policy[off+k]=whole;
+        frequencyRemainders[k]=target-whole;
+        remaining-=whole;
+      }
+      for(let i=0;i<remaining;i++){
+        let best=0;
+        for(let k=1;k<a;k++)if(frequencyRemainders[k]>frequencyRemainders[best])best=k;
+        policy[off+best]++;
+        frequencyRemainders[best]=-1;
+      }
+      for(let k=0;k<a;k++)policy[off+k]/=units;
+    }
   }
   // Near-Nash QRE: entropy-regularized zero-sum extensive-form game.
   // Payoff = chips + T * (expected own decision entropy - opponent entropy).
@@ -985,6 +1041,7 @@ function createSolverCore() {
   }
   function enforceActionMask(node,handCount){
     maskRangeWidePolicy(node,node.current,handCount);
+    projectFrequencyRows(node,node.current);
   }
   function restoreLockedPolicy(game,p) {
     for(const node of game.nodes)if(node.locked&&node.p===p){
@@ -996,6 +1053,8 @@ function createSolverCore() {
   function currentPolicy(game,p) {
     if(game.compiled){
       const nativeRefreshed=game.compiled.updatePolicy(p,game.equilibrium==='qre');
+      if(game.hasFrequencyIncrements)for(const node of game.nodes)
+        if(node.frequencyUnits&&!node.isoAlias&&node.p===p)enforceActionMask(node,game.players[p].ids.length);
       // Native policy refresh can touch locked rows. Restore only the hands
       // actually locked, leaving every other hand free to learn normally.
       restoreLockedPolicy(game,p);
@@ -1571,6 +1630,7 @@ function createSolverCore() {
         for(let j=0;j<a;j++)arr[off+j]=sum>0?node.averageSum[ro+j]/sum:node.current[off+j];
       }
       maskRangeWidePolicy(node,arr,n);
+      projectFrequencyRows(node,arr);
       if(node.locked){for(let i=0;i<n;i++)if(node.lockedMask[i])
         for(let k=0;k<a;k++)arr[i*a+k]=node.lockedRows[i*a+k];}
       result[node.id]=arr;
@@ -1852,9 +1912,10 @@ function createSolverCore() {
   // tests, plus a compiled average-policy root value.  No detailed nodes,
   // TPWL computation or full report allocation is required.
   function makeSummary(game,iteration,elapsedMs,history){
-    const check=makeConvergenceCheck(game,iteration,elapsedMs,history);
+    const policy=game.hasFrequencyIncrements?averagePolicy(game,false):null;
+    const check=makeConvergenceCheck(game,iteration,elapsedMs,history,policy);
     const profile=target=>game.compiled?.profileEV?
-      game.compiled.profileEV(target):rangeValue(game,target,evaluatePolicy(game,averagePolicy(game,false),target));
+      game.compiled.profileEV(target):rangeValue(game,target,evaluatePolicy(game,policy??averagePolicy(game,false),target));
     const value0=profile(0),value1=profile(1),rootOffset=game.pot/2;
     // Individual BR values are optional for this compact summary.  Full
     // reports retain the original detailed accounting and TPWL diagnostics.
@@ -1874,13 +1935,12 @@ function createSolverCore() {
   // Exact, allocation-light Nash/QRE stopping diagnostic. This never builds
   // hand-level EV records, normalized action arrays, or TPWL diagnostics.
   // The best response still traverses every branch of the configured game.
-  function makeConvergenceCheck(game,iteration,elapsedMs,history) {
+  function makeConvergenceCheck(game,iteration,elapsedMs,history,policy=null) {
     // Only canonical strategies are needed for grouped exact best-response checks.
     let nativeBest=game.compiled?.exactBest;
     const locked=game.nodeLocks?.length>0;
     // A native check reads averageSum/current directly and never needs a JS
     // averaged-policy table or hand-level report allocations.
-    let policy=null;
     if(nativeBest&&!locked)try{
       const br0=nativeBest(0,false),br1=nativeBest(1,false);
       const r0=game.equilibrium==='qre'?nativeBest(0,true):null;
@@ -1896,7 +1956,9 @@ function createSolverCore() {
       if(game.compiled)game.compiled.exactBest=null;
       nativeBest=null;
     }
-    policy=averagePolicy(game,false);
+    // Pure actions remain valid on any grid, so an exact best response is
+    // still obtained by maximizing over legal actions against this policy.
+    policy??=averagePolicy(game,false);
     const br0=rangeValue(game,0,evaluatePolicy(game,policy,0,locked?'constrainedBest':'best'));
     const br1=rangeValue(game,1,evaluatePolicy(game,policy,1,locked?'constrainedBest':'best'));
     const nashConv=Math.max(0,br0+br1);
@@ -1947,6 +2009,11 @@ function createSolverCore() {
       number(game.hybridSchedule.rampLength);number(game.hybridSchedule.averagingPower);
     }
     number(game.qreTemperaturePercent);feed(game.zeroReachPruning?1:0);feed(game.regretPruning?1:0);
+    if(game.hasFrequencyIncrements){
+      str('action-frequency-increments-v1');
+      for(const street of frequencyStreets.slice(game.board.length-3))
+        for(const step of game.frequencyIncrements[street])number(step);
+    }
     if(game.riverPrivateSymmetry?.enabled){str('river-private-orbits-v1');feed(game.riverPrivateSymmetry.groupSize);}
     if(game.nodeLocks?.length){
       const legacy=game.nodeLocks.every(lock=>lock.percentages);
@@ -2117,7 +2184,7 @@ function createSolverCore() {
     }
   }
   return {RANKS,SUITS,CATEGORY_RANKS,ALL_COMBOS,CATEGORY_IDS,cardId,cardText,rank,comboId,comboCategory,
-    boardMask,turnMask,flopMask,boardCombos,compatible,straightHigh,evaluate7,showdownScores,buildTree,buildTurnRiverTree,buildFlopTurnRiverTree,makeGame,
+    boardMask,turnMask,flopMask,boardCombos,compatible,straightHigh,evaluate7,showdownScores,buildTree,buildTurnRiverTree,buildFlopTurnRiverTree,makeGame,frequencyStreets,parseFrequencyIncrements,
     terminalCfv,compatibilityMass,rangeValue,averagePolicy,evaluatePolicy,makeReport,makeNodeReport,makeSummary,makeConvergenceCheck,gameSignature,CFRSolver,
     currentPolicy,rangeWideActionFrequencies,accumulate,traverseCfr,logitResponse,QRE_PROBABILITY_FLOOR};
 }

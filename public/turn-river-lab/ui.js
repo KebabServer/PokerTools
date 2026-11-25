@@ -20,6 +20,11 @@ function cardHtml(id){const s=C.cardText(id),suit=s[1];return `<span class="mini
 function fmt(v,dec=2){return v===null||v===undefined||!Number.isFinite(v)?'—':Number(v).toLocaleString('en-US',{maximumFractionDigits:dec,minimumFractionDigits:dec});}
 function evText(v,dec=2){return v===null||v===undefined||!Number.isFinite(v)?'—':Math.abs(v)<1e-9?fmt(0,dec):(v>0?'+':'')+fmt(v,dec);}
 function pct(v,dec=0){return v===null||v===undefined?'—':fmt(100*v,dec)+'%';}
+const mixPercent=new Intl.NumberFormat('en-US',{style:'percent',maximumFractionDigits:2});
+function activeFrequencyIncrements(cfg){
+ return C.frequencyStreets.slice(cfg.board.length-3).flatMap(street=>(cfg.frequencyIncrements?.[street]||[])
+  .flatMap((step,p)=>step?[{street,p,step}]:[]));
+}
 // Human-readable, frozen completion log. All numbers come from the finished
 // solver report and the settings snapshot captured at Solve click, never the
 // editable controls after completion. Elapsed time for this session is kept
@@ -59,6 +64,8 @@ function solveCompletionText({kind,report,config:cfg,game,mode,run,targetPercent
   'alpha start '+numeric(cfg.scheduledAlphaStart,2)+', gain '+numeric(cfg.scheduledAlphaGain,2)+
   ', ramp '+integer(cfg.scheduledRampLength)+', averaging t^'+numeric(cfg.scheduledAveragingPower,2));
  out('Adaptive convergence checks',boolean(cfg.useAdaptiveConvergence));
+ for(const {street,p,step} of activeFrequencyIncrements(cfg))
+  out('Frequency increment',street+' '+(p===0?'OOP':'IP')+' '+step+'%');
  out('Locked decision nodes',integer(cfg.nodeLocks?.length||0));
  for(const lock of cfg.nodeLocks||[]){
   const description=lock.percentages
@@ -208,9 +215,9 @@ function startSampleStudy(){
  const study={running:true,cancelled:false,baseConfig:{...cfg},iterations,targetPercent,seeds,index:0,results:[]};
  view.sampleStudy=study;lockSampleStudyControls(study,true);renderSampleStudy();sampleStudyNext();
 }
-function benchmarkCandidates(){
+function benchmarkCandidates(skipQre){
  const gto=Array.from($('gto-algorithm').options).map(o=>({id:o.value,label:o.textContent.trim(),equilibrium:'gto'}));
- const runs=view.nodeLocks.length?gto:[...gto,{id:'qre',label:'QRE (entropy-regularized)',equilibrium:'qre'}];
+ const runs=skipQre?gto:[...gto,{id:'qre',label:'QRE (entropy-regularized)',equilibrium:'qre'}];
  const current=$('solver-method').value==='qre'?'qre':$('gto-algorithm').value;
  const last=runs.findIndex(r=>r.id===current);
  if(last>=0)runs.push(runs.splice(last,1)[0]);
@@ -249,7 +256,8 @@ function benchmarkText(b){
   'Run order: '+b.queue.map(q=>q.label).join(' > '),
   'Optimization settings: culling '+(b.baseConfig.useActionFrequencyPruning?'on':'off')+', isomorphism '+(b.baseConfig.useSuitIsomorphism?'on':'off')+', river-hand symmetry '+(b.baseConfig.useRiverHandSymmetry?'on':'off'),
   'Wall time includes Worker startup and convergence checks. Run sequentially on the same device.',
-  b.baseConfig.nodeLocks?.length?'Locked game: QRE excluded; exploitability is the constrained best-response gap.':'QRE uses an entropy-regularized objective and must not be ranked as an equivalent GTO algorithm.',
+  b.baseConfig.nodeLocks?.length?'Locked game: QRE excluded; exploitability is the constrained best-response gap.':
+   activeFrequencyIncrements(b.baseConfig).length?'Frequency increments enabled; all runs use Nash / GTO.':'QRE uses an entropy-regularized objective and must not be ranked as an equivalent GTO algorithm.',
   '',
   ['Algorithm'.padEnd(30),'Result'.padEnd(13),'Iter'.padStart(9),'Seconds'.padStart(11),'Iter/s'.padStart(11),'Exploit %'.padStart(12),'QRE gap'.padStart(12)].join('  ')];
  for(const x of b.results)rows.push([
@@ -269,7 +277,8 @@ function renderBenchmark(){
  const b=view.benchmark;if(!b)return;
  $('benchmark-console').hidden=false;$('benchmark-console').open=true;
  $('benchmark-status').textContent=(b.running?'RUNNING ':b.cancelled?'CANCELLED ':'COMPLETE ')+b.results.length+' / '+b.queue.length;
- $('benchmark-context').textContent='Same '+b.mode+' board, ranges, betting tree and '+b.iterations+' iteration cap, with a '+b.targetPercent+'% pot Nash exploitability target. Runs are sequential and start from zero. QRE optimizes a different objective; compare its timing separately. Wall time includes Worker startup, checks, and reporting.';
+ $('benchmark-context').textContent='Same '+b.mode+' board, ranges, betting tree and '+b.iterations+' iteration cap, with a '+b.targetPercent+'% pot Nash exploitability target. Runs are sequential and start from zero. '+
+  (b.queue.some(task=>task.equilibrium==='qre')?'QRE optimizes a different objective; compare its timing separately. ':'')+'Wall time includes Worker startup, checks, and reporting.';
  $('benchmark-progress').textContent=b.running?
   (b.index<b.queue.length?'Running '+(b.index+1)+'/'+b.queue.length+': '+b.queue[b.index].label+' · press Cancel benchmark to stop':'Finalizing all '+b.queue.length+' results…'):
   (b.cancelled?'Cancelled':'Finished')+' · '+b.results.length+' of '+b.queue.length+' runs · '+fmt((b.finishedMs-b.startedMs)/1000,2)+' s total elapsed';
@@ -306,7 +315,7 @@ function renderBenchmarkComparison(b){
  const el=$('benchmark-compare-summary');if(!el)return;
  const prior=view.benchmarkComparison;el.hidden=!prior;if(!prior)return;
  if(prior.fingerprint!==studyFingerprint(b.baseConfig)){
-  el.textContent='Saved benchmark uses a different board, ranges, betting sizes or sampling seed. Timing comparison is disabled.';return;
+  el.textContent='Saved benchmark uses different game settings or ranges. Timing comparison is disabled.';return;
  }
  const earlier=new Map((prior.results||[]).map(r=>[r.id,r]));
  const rows=b.results.filter(r=>earlier.has(r.id)).map(r=>{
@@ -398,7 +407,7 @@ function startBenchmark(){
  if(cfg.memoryLimitBytes<2*1048576||cfg.memoryLimitBytes>4096*1048576){notify('Enter a memory budget between 2 and 4,096 MiB.','error');return;}
  // The checkbox can be disabled while QRE is selected; preserve the intended GTO setting.
  cfg.useActionFrequencyPruning=$('action-frequency-pruning').checked;
- const runs=benchmarkCandidates();
+ const runs=benchmarkCandidates(view.nodeLocks.length>0||activeFrequencyIncrements(cfg).length>0);
  view.benchmark={running:true,cancelled:false,startedMs:Date.now(),finishedMs:0,
   baseConfig:{...cfg,weights0:Float64Array.from(cfg.weights0),weights1:Float64Array.from(cfg.weights1)},
   mode:view.mode,iterations,targetPercent,queue:runs,index:0,results:[],locked:null};
@@ -503,9 +512,20 @@ function renderRangeDetails(){
  }).join('');
 }
 function renderRangeTab(){for(const b of $('range-tabs').querySelectorAll('button'))b.classList.toggle('active',Number(b.dataset.player)===view.rangeP);renderRangeMatrix();renderRangeDetails();}
+function frequencyIncrementField(street,p){return $('frequency-'+street+'-'+p);}
+function setFrequencyIncrements(values){
+ const increments=C.parseFrequencyIncrements(values);
+ for(const street of C.frequencyStreets)increments[street].forEach((step,p)=>{frequencyIncrementField(street,p).value=step;});
+ if(Object.values(increments).some(pair=>pair.some(Boolean)))$('frequency-increments-toggle').open=true;
+}
 function config(){
  const parse=(v)=>{const pieces=v.split(/[;,\s]+/).map(x=>x.trim()).filter(Boolean).map(Number);if(pieces.some(x=>!Number.isFinite(x)||x<=0||x>1000))throw Error('Bet/raise percentages must be positive numbers up to 1,000%.');return pieces;};
  function positive(id,min=1){const x=Number($(id).value);if(!Number.isInteger(x)||x<min)throw Error(id+' must be a whole number ≥ '+min+'.');return x;}
+ const equilibrium=$('solver-method').value;
+ const frequencyIncrements=equilibrium==='gto'?C.parseFrequencyIncrements(Object.fromEntries(C.frequencyStreets.map(street=>[street,[0,1].map(p=>{
+  const field=frequencyIncrementField(street,p);
+  return field.validity.badInput?NaN:Number(field.value);
+ })]))):undefined;
  return {board:view.board.slice(),pot:positive('pot'),stack:positive('stack'),sizes0:parse($('sizes0').value),sizes1:parse($('sizes1').value),
   turnSizes0:parse($('turn-sizes0').value),turnSizes1:parse($('turn-sizes1').value),
   turnDonkSizes0:parse($('turn-donk-sizes0').value),turnEntryMode:$('turn-entry-mode').value,
@@ -518,7 +538,7 @@ function config(){
   flopTurnSamples:positive('flop-turn-samples'),flopRiverSamples:positive('flop-river-samples'),
   flopSamplingSeed:Number($('flop-sampling-seed').value),
   maxRaises:parseInt($('raises').value,10),allIn:$('allin').checked,maxNodes:positive('max-nodes',20),
-  equilibrium:$('solver-method').value,gtoAlgorithm:$('gto-algorithm').value,qreTemperaturePercent:Number($('qre-temperature').value),
+  equilibrium,frequencyIncrements,gtoAlgorithm:$('gto-algorithm').value,qreTemperaturePercent:Number($('qre-temperature').value),
   scheduledAlphaStart:Number($('scheduled-alpha-start').value),scheduledAlphaGain:Number($('scheduled-alpha-gain').value),
   scheduledRampLength:Number($('scheduled-ramp-length').value),scheduledAveragingPower:Number($('scheduled-averaging-power').value),
   useAdaptiveConvergence:$('adaptive-convergence').checked,
@@ -550,6 +570,7 @@ function updateSolverMethod(){
  const isQre=$('solver-method').value==='qre';
  $('gto-experiment-controls').hidden=isQre;
  $('action-frequency-pruning').disabled=isQre;
+ $('frequency-increments-fields').disabled=isQre;
  $('frequency-prune-controls').title=isQre?'Frequency pruning is only available for GTO; disabled for QRE.':'';
  $('qre-temp-field').hidden=!isQre;
  $('qre-mode-note').hidden=!isQre;
@@ -723,7 +744,8 @@ function renderExplorer(){
  const remainingMode=$('frequency-view').value==='remaining',f=view.filter,active=filtersActive(f),board=[...blockers];
  renderFilters('',f);
  const suitWeights=remaining?S.filterWeights(board,remaining,{...f,handClass:null}):null,filtered=remaining?S.filterWeights(board,remaining,f):null;
- $('frequency-note').textContent=remainingMode?'Weighted combos / board-legal combos; gray = missing weight. Cells show EV.':'Conditional action mix of reached hands.';
+ $('frequency-note').textContent=(remainingMode?'Weighted combos / board-legal combos; gray = missing weight. Cells show EV.':'Conditional action mix of reached hands.')+
+  (node?.frequencyUnits?' '+mixPercent.format(1/node.frequencyUnits)+' steps per exact hand.':'');
  if(hasDecision)renderHandClasses($('hand-classes'),board,suitWeights,id=>handById.get(id)?.[3],node.actions.map(a=>a.label),node.actions.map((a,i)=>actionColor(a,i,node.actions)),actionOrder(node.actions),f.handClass,culledAtNode(node.id));
  let html='';
  for(let i=0;i<13;i++)for(let j=0;j<13;j++){
@@ -747,13 +769,14 @@ function renderComboDetails(node,record,handById,remaining,filtered){
  $('combo-cat').textContent=cat;$('combo-count').textContent=remaining?fmt(ids.reduce((sum,id)=>sum+remaining[id],0),2)+' weighted combos':ids.length+' combos';
  if(!node||node.terminal){$('combo-details').innerHTML='<p class="muted">Choose a decision in the betting-tree explorer to inspect mixed strategies.</p>';return;}
  if(!ids.length){$('combo-details').innerHTML='<p class="muted">No matching combos in this hand.</p>';return;}
+ const actionPercent=node.frequencyUnits?v=>mixPercent.format(v):v=>pct(v,0);
  let html='<table class="combo-table"><thead><tr><th>COMBO</th><th>WEIGHT</th><th>REACH</th><th>MIX / ACTION EV</th><th>EV</th></tr></thead><tbody>';
  for(const id of ids){
   const [a,b]=C.ALL_COMBOS[id], blocked=isBlocked(id,set),h=handById.get(id);
   html+=`<tr class="${blocked?'blocked-row':''}"><td>${cardHtml(a)} ${cardHtml(b)}</td><td>${remaining?pct(remaining[id],1):'—'}</td><td>${h?pct(h[1],1):'—'}</td><td>`;
   if(h&&record){const order=actionOrder(node.actions).filter(k=>!culledAtNode(node.id)?.[k]);
-   html+=`<div class="combo-value-bar">${order.map(k=>`<span style="width:${(h[3][k]*100).toFixed(2)}%;background:${actionColor(node.actions[k],k,node.actions)}" title="${escapeHtml(node.actions[k].label)}: ${pct(h[3][k],1)}, EV ${evText(h[4][k])}"></span>`).join('')}</div>`;
-   html+=`<div class="combo-action-ev">${order.map(k=>`${escapeHtml(node.actions[k].label)} ${pct(h[3][k],0)} (EV ${evText(h[4][k],1)})`).join(' · ')}</div>`;
+   html+=`<div class="combo-value-bar">${order.map(k=>`<span style="width:${(h[3][k]*100).toFixed(2)}%;background:${actionColor(node.actions[k],k,node.actions)}" title="${escapeHtml(node.actions[k].label)}: ${node.frequencyUnits?actionPercent(h[3][k]):pct(h[3][k],1)}, EV ${evText(h[4][k])}"></span>`).join('')}</div>`;
+   html+=`<div class="combo-action-ev">${order.map(k=>`${escapeHtml(node.actions[k].label)} ${actionPercent(h[3][k])} (EV ${evText(h[4][k],1)})`).join(' · ')}</div>`;
   }else html+='<span class="muted">'+(blocked?'Board blocked':'Not in reached range')+'</span>';
   html+=`</td><td>${h?evText(h[2]):'—'}</td></tr>`;
  }
@@ -831,8 +854,9 @@ function studyFingerprint(cfg){
   'flopSizes0','flopSizes1','flopDonkSizes0','flopRaiseSizes0','flopRaiseSizes1',
   'turnSizes0','turnSizes1','turnDonkSizes0','turnRaiseSizes0','turnRaiseSizes1',
   'sizes0','sizes1','riverDonkSizes0','raiseSizes0','raiseSizes1'];
- return JSON.stringify(fields.map(k=>[k,cfg[k]??null]).concat([
-  Array.from(cfg.weights0||[]),Array.from(cfg.weights1||[])]));
+ const parts=fields.map(k=>[k,cfg[k]??null]),increments=activeFrequencyIncrements(cfg);
+ if(increments.length)parts.push(['frequencyIncrements',increments]);
+ return JSON.stringify(parts.concat([Array.from(cfg.weights0||[]),Array.from(cfg.weights1||[])]));
 }
 function solvedMix(hand,actions){
  const mix=hand?.[3];if(!Array.isArray(mix)||mix.length!==actions||mix.some(v=>!Number.isFinite(v)||v<0))return null;
@@ -924,6 +948,7 @@ function renderPreSolveQuality(){
  if(mb>cap)notes.push('Estimated memory exceeds configured '+cap+' MiB budget.');
  if(game.sampledChance)notes.push('Exact exploitability is measured only within the sampled chance tree.');
  if(game.actionPruning?.enabled)notes.push('Action culling changes the strategy approximation.');
+ if(game.hasFrequencyIncrements)parts.push('Frequency increments active');
  if(locks)notes.push('Unrestricted exploitability is reported separately.');
  if(game.suitIsomorphism?.enabled)parts.push('Exact public suit reduction active');
  if(game.riverPrivateSymmetry?.enabled)parts.push('Exact private-hand reduction active');
@@ -1438,7 +1463,7 @@ function solutionData(){
   config:{mode:view.mode,equilibrium:cfg.equilibrium,gtoAlgorithm:cfg.gtoAlgorithm,
    scheduledAlphaStart:cfg.scheduledAlphaStart,scheduledAlphaGain:cfg.scheduledAlphaGain,
    scheduledRampLength:cfg.scheduledRampLength,scheduledAveragingPower:cfg.scheduledAveragingPower,
-   useAdaptiveConvergence:cfg.useAdaptiveConvergence,
+   useAdaptiveConvergence:cfg.useAdaptiveConvergence,frequencyIncrements:cfg.frequencyIncrements,
    algorithmRevision:cfg.gtoAlgorithm==='dcfr-2-0.5-2'?'dcfr-2-0.5-2-quadratic-v2':null,
    qreTemperaturePercent:cfg.qreTemperaturePercent,targetExploitabilityPercent:view.solveTargetPercent,
    board:cfg.board.map(C.cardText),pot:cfg.pot,stack:cfg.stack,oopBetSizesPercent:cfg.sizes0,
@@ -1537,7 +1562,7 @@ function restoreSolution(data){
     r.history.some(row=>!Array.isArray(row)||row.length!==2||!Number.isFinite(row[0])||!Number.isFinite(row[1])))
     throw Error('Not a TurnRiverLab solution file.');
  const board=d.board.map(C.cardId),w=d.ranges.map(range=>{const a=new Float64Array(1326);for(const h of range){const [x,y]=h.hand.map(C.cardId);if(x<0||y<0||x===y||!Number.isFinite(h.weight)||h.weight<0||h.weight>1)throw Error('Invalid saved range.');a[C.comboId(x,y)]=h.weight;}return a;});
- const cfg={board,pot:d.pot,stack:d.stack,nodeLocks:d.nodeLocks||[],useSuitIsomorphism:d.useSuitIsomorphism!==false,useRiverHandSymmetry:!!d.useRiverHandSymmetry,
+ const cfg={board,pot:d.pot,stack:d.stack,frequencyIncrements:d.frequencyIncrements,flopSamplingSeed:d.flopSamplingSeed,nodeLocks:d.nodeLocks||[],useSuitIsomorphism:d.useSuitIsomorphism!==false,useRiverHandSymmetry:!!d.useRiverHandSymmetry,
   useActionFrequencyPruning:!!d.useActionFrequencyPruning,actionPruneThresholdPercent:d.actionPruneThresholdPercent,actionPruneWarmupPercent:d.actionPruneWarmupPercent,actionPruneWarmupIterations:d.actionPruneWarmupIterations,actionPruneRecheckIterations:d.actionPruneRecheckIterations,actionPrunePlannedIterations:d.actionPrunePlannedIterations,useRegretPruning:!!d.useRegretPruning,sizes0:d.oopBetSizesPercent,sizes1:d.ipBetSizesPercent,turnSizes0:d.oopTurnBetSizesPercent,turnSizes1:d.ipTurnBetSizesPercent,
   turnDonkSizes0:d.oopTurnDonkBetSizesPercent,turnEntryMode:d.turnEntryMode,flopDonkSizes0:d.oopFlopDonkBetSizesPercent,flopEntryMode:d.flopEntryMode,riverDonkSizes0:d.oopRiverDonkBetSizesPercent,riverEntryMode:d.riverEntryMode,flopSizes0:d.oopFlopBetSizesPercent,flopSizes1:d.ipFlopBetSizesPercent,raiseSizes0:d.oopRaiseSizesPercent,raiseSizes1:d.ipRaiseSizesPercent,turnRaiseSizes0:d.oopTurnRaiseSizesPercent,turnRaiseSizes1:d.ipTurnRaiseSizesPercent,flopRaiseSizes0:d.oopFlopRaiseSizesPercent,flopRaiseSizes1:d.ipFlopRaiseSizesPercent,flopTurnSamples:d.flopTurnSamples,flopRiverSamples:d.flopRiverSamples,maxRaises:d.maxRaises,allIn:d.allIn,equilibrium:d.equilibrium||'gto',gtoAlgorithm:d.gtoAlgorithm||'cfrplus',qreTemperaturePercent:d.qreTemperaturePercent||0.05,
   scheduledAlphaStart:d.scheduledAlphaStart??1,scheduledAlphaGain:d.scheduledAlphaGain??0.5,
@@ -1555,6 +1580,7 @@ function restoreSolution(data){
     throw Error('Saved strategy does not match the game tree.');}
  cancel();clearOutput();view.nodeLocks=cfg.nodeLocks.map(v=>({...v}));view.board=board;view.mode=board.length===3?'flop':board.length===4?'turn':'river';view.weights=w;view.slot=board.length-1;view.source=data.source||null;
  $('street-mode').value=view.mode;$('pot').value=cfg.pot;$('stack').value=cfg.stack;$('solver-method').value=cfg.equilibrium;$('gto-algorithm').value=cfg.gtoAlgorithm;ensureAlgorithmVisible(cfg.gtoAlgorithm);updateSolverMethod();$('qre-temperature').value=cfg.qreTemperaturePercent;
+ setFrequencyIncrements(cfg.frequencyIncrements);
  for(const [id,val] of [['scheduled-alpha-start',cfg.scheduledAlphaStart??1],['scheduled-alpha-gain',cfg.scheduledAlphaGain??0.5],
   ['scheduled-ramp-length',cfg.scheduledRampLength??16],['scheduled-averaging-power',cfg.scheduledAveragingPower??3]])$(id).value=val;
  $('adaptive-convergence').checked=!!cfg.useAdaptiveConvergence;updateSolverMethod();
@@ -1590,6 +1616,7 @@ function downloadCheckpoint(snapshot){
 }
 function applyCheckpointConfig(cfg){
  if(!Array.isArray(cfg.board)||![3,4,5].includes(cfg.board.length))throw Error('Checkpoint has an invalid board');
+ setFrequencyIncrements(cfg.frequencyIncrements);
  cancel();view.nodeLocks=(cfg.nodeLocks||[]).map(v=>({...v}));view.board=cfg.board.slice();view.weights=[Float64Array.from(cfg.weights0),Float64Array.from(cfg.weights1)];
  view.mode=cfg.board.length===3?'flop':cfg.board.length===4?'turn':'river';view.slot=view.board.length-1;
  $('street-mode').value=view.mode;$('pot').value=cfg.pot;$('stack').value=cfg.stack;
@@ -1678,6 +1705,8 @@ function wire(){
   renderRangeMatrix();invalidate('Individual suit-combination weight edited. Previous results cleared.');});
  $('apply-preset').addEventListener('click',()=>{view.source=null;showSource();const chosen=$('preset').value;view.weights[view.rangeP]=profile(chosen,view.rangeP);renderRangeTab();invalidate(`${view.rangeP===0?'OOP':'IP'} ${chosen} range loaded.`);});
  $('solver-method').addEventListener('change',()=>{updateSolverMethod();invalidate('Solution method changed. Solve to calculate a new equilibrium.');});
+ for(const street of C.frequencyStreets)for(const p of [0,1])frequencyIncrementField(street,p).addEventListener('change',()=>
+  invalidate('Frequency increments changed. Solve to calculate a new strategy.'));
  $('gto-algorithm').addEventListener('change',()=>{ensureAlgorithmVisible($('gto-algorithm').value);updateSolverMethod();invalidate('GTO algorithm changed. Solve to calculate a new strategy.');});
  $('show-experimental-algorithms').addEventListener('change',e=>{
    // Never silently replace an active experimental algorithm with CFR+.

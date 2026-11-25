@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#10151d">
   <meta name="description" content="A local heads-up Texas Hold'em flop, turn and river solver.">
   <title>TurnRiverLab — Poker Solver</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=frequency-increments">
 </head>
 <body>
   <header class="topbar"><div class="topbar-inner"><h1>TurnRiverLab</h1><span>Flop · turn · river solver</span></div></header>
@@ -133,6 +133,19 @@
           <label class="algorithm-toggle"><input type="checkbox" id="adaptive-convergence"><span>Adaptive exact convergence-check cadence (optional)</span></label>
           <p class="subtle-note">When far from the target, exact checks use larger iteration intervals. Near the target they become frequent. Stopping still requires an exact full-tree Nash verification.</p>
           <div class="solver-fields"><label>Iterations<input id="iterations" type="number" min="1" max="10000000" step="100" value="1000"></label><label><span id="tolerance-title">Target exploitability</span> <span class="field-unit" id="tolerance-unit">% of pot</span><input id="tolerance" type="number" min="0" step="any" value="0.35" title="Percent of the pot at the start of this solve"></label><label>Memory <span class="field-unit">MiB</span><input id="memory-limit" type="number" min="2" max="4096" step="1" value="128"></label></div>
+          <details class="advanced section-disclosure" id="frequency-increments-toggle">
+            <summary><span>Frequency increments</span><span class="disclosure-state" aria-hidden="true"></span></summary>
+            <div class="disclosure-body">
+              <fieldset id="frequency-increments-fields" aria-describedby="frequency-increments-note">
+                <legend class="sr-only">Frequency increments by street and player</legend>
+                <span>Street</span><span>OOP %</span><span>IP %</span>
+                <span>Flop</span><input id="frequency-flop-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="Flop OOP frequency increment"><input id="frequency-flop-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="Flop IP frequency increment">
+                <span>Turn</span><input id="frequency-turn-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="Turn OOP frequency increment"><input id="frequency-turn-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="Turn IP frequency increment">
+                <span>River</span><input id="frequency-river-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="River OOP frequency increment"><input id="frequency-river-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="River IP frequency increment">
+              </fieldset>
+              <p class="subtle-note" id="frequency-increments-note">Nash / GTO only. Use 0 for unrestricted frequencies or enter a step that divides 100 evenly. For example, 25 limits each exact hand to 0%, 25%, 50%, 75%, or 100% per action. Larger steps can raise exploitability.</p>
+            </div>
+          </details>
           <details class="advanced section-disclosure" id="betting-toggle" open><summary><span>Betting settings</span><span class="disclosure-state" aria-hidden="true"></span></summary><div class="disclosure-body">
             <div class="field-row"><label><span class="inline-field-label">Pot <span class="field-unit">chips</span></span><input id="pot" type="number" min="1" max="1000000" step="1" value="100"></label><label><span class="inline-field-label">Stack <span class="field-unit">chips</span></span><input id="stack" type="number" min="1" max="1000000" step="1" value="300"></label></div>
             <div class="betting-street" id="flop-size-row" hidden><div class="betting-street-title">Flop</div>
@@ -174,7 +187,7 @@
             <p class="subtle-note">Donk sizes apply only to eligible OOP flop, turn and river opening leads (not IP bets or raises). Use commas for multiple sizes (e.g. 33, 75). Blank bet or raise fields disable only that action type. Raises add the chosen percentage of the pot after calling, subject to the minimum legal raise. Max raises limits raises per street (0 = none); all-ins are separate.</p>
           </div></details>
           <section id="pre-solve-quality" class="study-results" role="status" aria-live="polite">Preparing game estimate…</section><p class="subtle-note"><strong id="node-lock-count">No node locks</strong> · Set a node lock in the <strong>Game tree</strong> tab, then solve. Lock an entire decision or selected exact two-card combinations; unlocked hands keep adapting. GTO only. A locked-game convergence target does not mean the resulting strategy is an unrestricted Nash equilibrium.</p><div class="control-actions"><button id="clear-all-node-locks" type="button" class="secondary" disabled>Clear all node locks</button></div>
-          <div class="control-actions"><button type="button" class="primary" id="solve">Solve</button><button type="button" class="secondary" id="benchmark-all" title="Run all ten GTO algorithms plus QRE sequentially on this exact game">Benchmark all algorithms</button><button type="button" class="secondary" id="stop" disabled>Stop</button><button type="button" class="secondary" id="reset">Reset</button><button type="button" class="secondary" id="export" disabled>Export JSON</button><button type="button" class="secondary" id="save-local" disabled>Save solution</button><button type="button" class="secondary" id="save-checkpoint" disabled>Save checkpoint</button><label class="secondary file-button">Resume checkpoint<input type="file" id="open-checkpoint" accept=".trlc,application/octet-stream"></label><label class="secondary file-button">Open solution<input type="file" id="open-solution" accept=".json,application/json"></label></div>
+          <div class="control-actions"><button type="button" class="primary" id="solve">Solve</button><button type="button" class="secondary" id="benchmark-all" title="Run compatible algorithms sequentially on this game">Benchmark all algorithms</button><button type="button" class="secondary" id="stop" disabled>Stop</button><button type="button" class="secondary" id="reset">Reset</button><button type="button" class="secondary" id="export" disabled>Export JSON</button><button type="button" class="secondary" id="save-local" disabled>Save solution</button><button type="button" class="secondary" id="save-checkpoint" disabled>Save checkpoint</button><label class="secondary file-button">Resume checkpoint<input type="file" id="open-checkpoint" accept=".trlc,application/octet-stream"></label><label class="secondary file-button">Open solution<input type="file" id="open-solution" accept=".json,application/json"></label></div>
           <div class="saved-row" id="saved-row" hidden><select id="saved-select" aria-label="Saved solutions"></select><button id="load-local" class="secondary small" type="button">Load</button><button id="delete-local" class="secondary small" type="button">Delete</button></div><div class="progress"><div class="progress-track"><div id="progress-bar"></div></div><div class="progress-caption"><span id="progress-text">Ready to solve</span><span id="progress-percent">0%</span></div></div>
           <div class="metrics"><div class="metric"><span>Iterations</span><strong id="stat-iterations">0</strong></div><div class="metric"><span id="stat-main-label">Nash exploitability (chips/player)</span><strong id="stat-exploit">—</strong></div><div class="metric"><span>Elapsed</span><strong id="stat-time">—</strong></div></div>
           <details class="advanced diagnostics section-disclosure" id="diagnostics-toggle" open><summary><span>Diagnostics</span><span class="disclosure-state" aria-hidden="true"></span></summary><div class="disclosure-body">
@@ -217,6 +230,6 @@
   </div>
   <script src="pokertools-host.js"></script>
   <script src="flop-combo-order.js"></script>
-  <script src="core.js"></script><script src="checkpoint-format.js"></script><script src="wasm-kernel-data.js"></script><script src="compiled-traversal.js"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js"></script>
+  <script src="core.js?v=frequency-increments"></script><script src="checkpoint-format.js"></script><script src="wasm-kernel-data.js"></script><script src="compiled-traversal.js?v=frequency-increments"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js?v=frequency-increments"></script>
 </body>
 </html>

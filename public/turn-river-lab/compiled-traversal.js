@@ -148,7 +148,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
   // without private-hand row sharing or heuristic action pruning. Older WASM
   // modules and all other algorithms retain the verified separate pass.
   const fusedPolicy=game.equilibrium==='gto'&&game.gtoAlgorithm==='dcfr'&&
-    !game.actionPruning?.enabled&&!game.riverPrivateSymmetry?.enabled&&
+    !game.actionPruning?.enabled&&!game.riverPrivateSymmetry?.enabled&&!game.hasFrequencyIncrements&&
     typeof exports.set_fused_dcfr_policy==='function'&&typeof exports.full_traverse==='function';
   let full=null,variantNodePtr=0,statsPtr=null;
   if(typeof exports.full_traverse==='function')try{
@@ -360,12 +360,15 @@ function createCompiledTraversal(game, base64, limitBytes) {
   // Culling requires a native full-tree skip mask. A partial native bridge
   // must not refresh unmasked policies or silently accept a slow alternate.
   if(game.actionPruning?.enabled&&!full)return null;
+  // The native evaluators read the unprojected average sums. The JS
+  // evaluators use the same increment-constrained policy as the reports.
+  const evaluateNative=full&&!game.hasFrequencyIncrements;
   return {
     memory,fusesPolicy:!!(full&&fusedPolicy),mode:full?'wasm-full-tree-f64':'wasm-f64',simd:simdEnabled&&typeof exports.kernel_features==='function'&&exports.kernel_features()===1,fullTraversal:!!full,
     traverse:full?(id,target,reach,weight)=>full.run(id,target,reach,weight):null,
-    profileEV:full&&typeof exports.profile_evaluate==='function'?(target)=>full.profileEV(target):null,
-    nodeDetail:full&&typeof exports.profile_evaluate==='function'?(id)=>full.nodeDetail(id):null,
-    exactBest:full&&typeof exports.exact_best_response==='function'?(target,regularized)=>full.exactBest(target,regularized):null,
+    profileEV:evaluateNative&&typeof exports.profile_evaluate==='function'?(target)=>full.profileEV(target):null,
+    nodeDetail:evaluateNative&&typeof exports.profile_evaluate==='function'?(id)=>full.nodeDetail(id):null,
+    exactBest:evaluateNative&&typeof exports.exact_best_response==='function'?(target,regularized)=>full.exactBest(target,regularized):null,
     scratchBytes:memory.buffer.byteLength-start,
     cacheStats:full&&statsPtr!==null?()=>{
       exports.cache_statistics(statsPtr);
