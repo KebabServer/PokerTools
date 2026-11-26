@@ -41,8 +41,9 @@ p { color: var(--muted); line-height: 1.5; }
 .button.small { min-height: 40px; padding-inline: 11px; font-size: .82rem; }
 .icon-button { width: 44px; flex: 0 0 auto; padding: 0; }
 .main-wrap { padding: 32px 0 48px; }
-.main-wrap[data-tool="solver"] { width: 100%; padding: 0; }
-.turn-river-lab-frame { display: block; width: 100%; border: 0; background: #10151d; }
+#root:has(> [data-tool="solver"]) { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; height: 100dvh; }
+.main-wrap[data-tool="solver"] { display: grid; grid-template-rows: minmax(0, 1fr); width: 100%; margin: 0; padding: 0; }
+.turn-river-lab-frame { display: block; width: 100%; height: 100%; border: 0; background: #212121; }
 .tool-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .replay-layout { display: grid; grid-template-columns: minmax(0, 2.15fr) minmax(280px, 1fr); gap: 18px; align-items: start; }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }

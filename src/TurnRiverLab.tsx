@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef } from 'react'
 import { readStudyFile } from './studyFiles.ts'
 import { createSolverStorage, type SavedSolution } from './turnRiverLab/storage.ts'
 import solverPage from './turnRiverLab/solver.html?raw'
@@ -20,7 +20,6 @@ function savedSolution(value: unknown): value is SavedSolution {
 
 export default function TurnRiverLab({ userId }: { userId: string }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const [height, setHeight] = useState(730)
 
   useLayoutEffect(() => {
     const controller = new AbortController()
@@ -29,7 +28,7 @@ export default function TurnRiverLab({ userId }: { userId: string }) {
       switch (action) {
         case 'flop-library':
           return readStudyFile('turn-river-lab/flop-library.tsv', controller.signal)
-            .catch(() => { throw new Error('Couldn’t load the flop library. Select Flop library to retry.') })
+            .catch(() => { throw new Error('Couldn’t load the flop library.') })
         case 'list-solutions':
           return storage.list()
         case 'load-solution':
@@ -49,15 +48,6 @@ export default function TurnRiverLab({ userId }: { userId: string }) {
       const frame = frameRef.current
       const message = event.data
       if (!frame || event.source !== frame.contentWindow || event.origin !== 'null' || message?.scope !== bridgeScope) return
-      if (message.action === 'resize') {
-        if (Number.isInteger(message.value) && message.value > 0) setHeight(Math.min(message.value, 50_000))
-        return
-      }
-      if (message.action === 'scroll-top') {
-        if (frame.getClientRects().length) window.scrollTo(0, 0)
-        return
-      }
-
       const port = event.ports[0]
       if (!port) return
       void request(message.action, message.value)
@@ -74,7 +64,7 @@ export default function TurnRiverLab({ userId }: { userId: string }) {
   }, [userId])
 
   return <iframe ref={frameRef} className="turn-river-lab-frame" title="TurnRiverLab solver"
-    srcDoc={documentSource} height={height} referrerPolicy="no-referrer"
+    srcDoc={documentSource} referrerPolicy="no-referrer"
     sandbox="allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox"
     allow="clipboard-write *" />
 }

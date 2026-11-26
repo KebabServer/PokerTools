@@ -9,8 +9,8 @@ const colors={check:'#58bb6e',call:'#30935b',fold:'#3d79ae'};
 const sizePalette={small:'#ea9a22',medium:'#d93a36',large:'#7d45c5',huge:'#4c5460'};
 const newFilter=()=>({suits:[],both:false,handClass:null});
 const view={filter:newFilter(),
- mode:'turn',board:['As','8h','3d','2c'].map(C.cardId),slot:0,
- weights:[new Float64Array(1326),new Float64Array(1326)],rangeP:0,rangeCat:'AKs',viewCat:'AKs',
+ mode:'turn',board:['As','8h','3d','2c'].map(C.cardId),slot:0,pickerSuit:'s',
+ weights:[new Float64Array(1326),new Float64Array(1326)],rangeP:0,rangeCat:'AKs',rangePresets:['example','example'],viewCat:null,
  game:null,report:null,node:0,parents:[],worker:null,fallback:null,
  active:false,stopRequested:false,generation:0,limit:2000,origin:'',solverStatus:'ready',source:null,solveTargetPercent:null,
  fullReportReady:false,fullReportPromise:null,fullReportResolve:null,fullReportReject:null,detailPending:new Set(),fixedActionWarmup:null,fixedPrunePlanned:null,solveRun:null,solveLog:'',benchmark:null,nodeLocks:[],lockCat:'AKs',studyBaseline:null,selectedLockCombos:new Set(),sampleStudy:null
@@ -142,7 +142,6 @@ function showSolveCompletion(kind,report){
  view.solveLog=text;
  $('solve-console-output').textContent=text;
  $('solve-console').hidden=false;
- $('solve-console').open=true;
  $('solve-console-copy').disabled=false;
  if(typeof console!=='undefined'&&typeof console.info==='function')console.info(text);
 }
@@ -170,15 +169,15 @@ function renderSampleStudy(){
 }
 function lockSampleStudyControls(study,lock){
  if(lock){
-  study.disabled=[...document.querySelectorAll('#configuration input, #configuration select, #configuration button, #ranges input, #ranges select, #ranges button, #solve-view input, #solve-view select, #solve-view button')]
-   .filter(el=>el.id!=='stop').map(el=>[el,el.disabled]);
+  study.disabled=[...document.querySelectorAll('#solve-view input, #solve-view select, #solve-view button, #solve')].map(el=>[el,el.disabled]);
   for(const [el] of study.disabled)el.disabled=true;
-  $('stop').disabled=false;$('stop').textContent='Cancel sample study';
+  $('stop').disabled=false;
  }else{
   for(const [el,was] of study.disabled||[])el.disabled=was;
-  study.disabled=null;$('stop').textContent='Stop';$('stop').disabled=true;
+  study.disabled=null;$('stop').disabled=true;
   $('solve').disabled=false;
  }
+ syncRunBar();
 }
 function sampleStudyNext(){
  const s=view.sampleStudy;if(!s?.running||view.active)return;
@@ -226,19 +225,20 @@ function benchmarkCandidates(skipQre){
 function benchmarkSettingsLock(locked){
  const b=view.benchmark;if(!b)return;
  if(locked){
-  b.locked=Array.from(document.querySelectorAll('#configuration input, #configuration select, #configuration button, #ranges input, #ranges select, #ranges button, #solve-view input, #solve-view select, #reset, #solve, #save-local, #save-checkpoint, #export'));
+  b.locked=Array.from(document.querySelectorAll('#solve-view input, #solve-view select, #solve-view button, #solve, #save-local, #save-checkpoint, #export'));
   b.locked=b.locked.map(el=>[el,el.disabled]);
   for(const [el] of b.locked)el.disabled=true;
-  $('benchmark-all').disabled=true;$('stop').textContent='Cancel benchmark';
+  $('benchmark-all').disabled=true;$('stop').disabled=false;
  }else{
   for(const [el,wasDisabled] of b.locked||[])el.disabled=wasDisabled;
-  b.locked=null;$('benchmark-all').disabled=false;$('stop').textContent='Stop';
+  b.locked=null;$('benchmark-all').disabled=false;
   $('solve').disabled=!!view.active;
   $('stop').disabled=!view.active;
   $('save-local').disabled=!view.report;
   $('export').disabled=!view.report;
   $('save-checkpoint').disabled=!(view.report||view.active);
  }
+ syncRunBar();
 }
 function clearBenchmark(){
  if(view.benchmark?.running)return;
@@ -441,7 +441,14 @@ function categoryAt(i,j){return i===j?R[i]+R[j]:i<j?R[i]+R[j]+'s':R[j]+R[i]+'o';
 function idsForCat(cat){return C.CATEGORY_IDS[cat]||[];}
 function boardSet(node=null){const s=new Set(view.board);if(node){if(node.turn!==null&&node.turn!==undefined)s.add(node.turn);if(node.river!==null&&node.river!==undefined)s.add(node.river);}return s;}
 function isBlocked(id,set){const [a,b]=C.ALL_COMBOS[id];return set.has(a)||set.has(b);}
-function notify(text,type='ok'){$('notice').hidden=false;$('notice-text').textContent=text;$('notice').className='notice'+(type==='ok'?'':' '+type);}
+let noticeTimer;
+function dismissNotice(){
+ clearTimeout(noticeTimer);$('notice').hidden=true;
+}
+function notify(text,type='ok'){
+ dismissNotice();$('notice-text').textContent=text;$('notice').className='notice'+(type==='ok'?'':' '+type);$('notice').hidden=false;
+ if(type==='ok')noticeTimer=setTimeout(dismissNotice,5000);
+}
 function profile(name,p){
  const value=new Float64Array(1326),fallbackMap={};
  const oop={AA:1,KK:1,QQ:1,JJ:1,TT:1,99:1,88:.9,77:.8,66:.6,55:.45,44:.45,33:.9,22:.8,
@@ -462,31 +469,41 @@ function profile(name,p){
  return value;
 }
 function renderBoard(){
- $('street-chip').textContent=view.mode==='flop'?'FLOP + TURN + RIVER':view.mode==='turn'?'TURN + RIVER':'RIVER';
- $('board-label').textContent=view.mode==='turn'?'Board · select a slot, then a card':'Board · select a slot, then a card';
- $('turn-size-row').hidden=view.mode==='river';
  $('turn-entry-row').hidden=view.mode!=='turn';
  $('flop-entry-row').hidden=view.mode!=='flop';
  $('river-entry-row').hidden=view.mode!=='river';
- $('flop-size-row').hidden=view.mode!=='flop';
  $('flop-runout-row').hidden=view.mode!=='flop';
- $('flop-runout-note').hidden=view.mode!=='flop';
  $('flop-seed-row').hidden=view.mode!=='flop';
- $('flop-mode-note').hidden=view.mode!=='flop';
- if(view.mode==='flop')$('flop-mode-note').textContent=(Number($('flop-turn-samples').value)===49&&Number($('flop-river-samples').value)===48)?'All future cards are enumerated. Full-game flop solving can use substantial memory and time.':'Future cards are sampled by default: flop results are approximate. Set 49 turn cards and 48 river cards in Betting settings for full enumeration.';
- $('board-cards').innerHTML=view.board.map((id,i)=>{const s=C.cardText(id);return `<button class="board-slot s-${s[1]} ${i===view.slot?'active':''}" data-slot="${i}" aria-label="Board card ${i+1}: ${s[0]} of ${suitNames[s[1]]}" title="${s[0]} of ${suitNames[s[1]]} · select slot ${i+1}">${s[0]}</button>`;}).join('')+(view.mode==='river'?'':Array.from({length:5-view.board.length},(_,i)=>'<span class="board-slot future-card" title="Unknown '+(view.mode==='flop'&&i===0?'turn':'river')+' card">?</span>').join(''));
- const chosen=boardSet();let html='';
- for(const s of 'shdc')for(const r of 'AKQJT98765432'){
-  const id=C.cardId(r+s),used=chosen.has(id);
-  html+=`<button class="deck-card ${used?'used':''} s-${s}" data-card="${id}" aria-label="${r} of ${suitNames[s]}" title="${r} of ${suitNames[s]}${used?' · on board':''}">${r}</button>`;
- }
- $('deck').innerHTML=html;
+ const pickerOpen=!$('card-picker').hidden;
+ $('board-cards').innerHTML=view.board.map((id,i)=>{
+  const card=C.cardText(id),open=pickerOpen&&view.slot===i;
+  return `<button type="button" class="board-slot s-${card[1]}${open?' active':''}" data-slot="${i}" aria-controls="card-picker" aria-expanded="${open}" aria-label="Board card ${i+1}: ${card[0]} of ${suitNames[card[1]]}">${card[0]}</button>`;
+ }).join('')+Array.from({length:5-view.board.length},(_,i)=>'<span class="board-slot future-card" title="Unknown '+(view.mode==='flop'&&i===0?'turn':'river')+' card">?</span>').join('');
+ if(pickerOpen)renderCardPicker();
+}
+function renderCardPicker(){
+ const suit=view.pickerSuit,chosen=boardSet(),selected=view.board[view.slot];
+ $('card-picker-title').textContent='Choose card '+(view.slot+1);
+ for(const button of $('picker-suits').querySelectorAll('button'))button.setAttribute('aria-pressed',String(button.dataset.pickerSuit===suit));
+ $('deck').innerHTML=Array.from(R,rank=>{
+  const id=C.cardId(rank+suit),used=chosen.has(id)&&id!==selected;
+  return `<button type="button" class="deck-card s-${suit}" data-card="${id}" aria-label="${rank} of ${suitNames[suit]}" aria-pressed="${id===selected}" ${used?'disabled':''}>${rank}</button>`;
+ }).join('');
+}
+function closeCardPicker(focus=false){
+ if($('card-picker').hidden)return;
+ $('card-picker').hidden=true;renderBoard();
+ if(focus)$('board-cards').querySelector('[data-slot="'+view.slot+'"]')?.focus({preventScroll:true});
 }
 function rangeSummary(){
- const set=boardSet();let count=0,effective=0;
- for(let id=0;id<1326;id++)if(!isBlocked(id,set)&&view.weights[view.rangeP][id]>0){count++;effective+=view.weights[view.rangeP][id];}
- $('range-count').textContent=count+' COMBOS';
- $('range-count').title=fmt(effective,1)+' weighted combinations';
+ const set=boardSet(),positions=view.source?.positions||view.source?.parent?.positions;
+ for(const button of $('range-tabs').querySelectorAll('button')){
+  const p=Number(button.dataset.player),preset=view.rangePresets[p];let count=0,effective=0;
+  for(let id=0;id<1326;id++)if(view.weights[p][id]>0&&!isBlocked(id,set)){count++;effective+=view.weights[p][id];}
+  const source=preset?Array.from($('preset').options).find(option=>option.value===preset)?.textContent:positions?.[p]||'Custom';
+  button.querySelector('.range-summary').textContent=count?source+' · '+count+' combos':'Empty · 0 combos';
+  button.title=fmt(effective,1)+' weighted combinations';
+ }
 }
 function renderRangeMatrix(){
  const set=boardSet(),weights=view.weights[view.rangeP];let html='';
@@ -511,12 +528,39 @@ function renderRangeDetails(){
   return `<div class="combo-edit ${blocked?'blocked':''}"><label>${cardHtml(a)}${cardHtml(b)}</label><input type="range" min="0" max="100" step="1" data-combo="${id}" value="${Math.round(weight*100)}" ${blocked?'disabled':''} aria-label="Frequency for ${C.cardText(a)}${C.cardText(b)}"><span>${blocked?'X':Math.round(weight*100)+'%'}</span></div>`;
  }).join('');
 }
-function renderRangeTab(){for(const b of $('range-tabs').querySelectorAll('button'))b.classList.toggle('active',Number(b.dataset.player)===view.rangeP);renderRangeMatrix();renderRangeDetails();}
+function renderRangeTab(){
+ const editing=!$('range-editor').hidden;
+ for(const button of $('range-tabs').querySelectorAll('button'))button.setAttribute('aria-expanded',String(editing&&Number(button.dataset.player)===view.rangeP));
+ if(editing){renderRangeMatrix();renderRangeDetails();}
+ else rangeSummary();
+}
 function frequencyIncrementField(street,p){return $('frequency-'+street+'-'+p);}
 function setFrequencyIncrements(values){
  const increments=C.parseFrequencyIncrements(values);
  for(const street of C.frequencyStreets)increments[street].forEach((step,p)=>{frequencyIncrementField(street,p).value=step;});
- if(Object.values(increments).some(pair=>pair.some(Boolean)))$('frequency-increments-toggle').open=true;
+}
+function renderSetupSummaries(){
+ const streets=C.frequencyStreets.slice(view.board.length-3),streetName=street=>street[0].toUpperCase()+street.slice(1);
+ const betFields={flop:['flop-sizes0','flop-sizes1'],turn:['turn-sizes0','turn-sizes1'],river:['sizes0','sizes1']};
+ const betSummary=streets.map(street=>{
+  const count=new Set(betFields[street].flatMap(id=>$(id).value.split(/[;,\s]+/).filter(Boolean).map(Number))).size;
+  return streetName(street)+' '+(count?count+' '+(count===1?'size':'sizes'):'no bets');
+ }).join(' · ');
+ $('bet-sizes-summary').textContent=betSummary;
+ const isQre=$('solver-method').value==='qre';
+ const increments=streets.flatMap(street=>{
+  const pair=[0,1].map(p=>Number(frequencyIncrementField(street,p).value));
+  return pair.some(Boolean)?[streetName(street)+' · '+pair.map((v,p)=>(p?'IP ':'OOP ')+(v?v+'%':'unrestricted')).join(' · ')]:[];
+ });
+ $('frequency-increments-summary').textContent=isQre?'Nash / GTO only':increments.join('\n')||'Unrestricted';
+ const raises=Number($('raises').value);
+ $('betting-tree-summary').textContent=raises+' '+(raises===1?'raise':'raises')+' · '+($('allin').checked?'All-ins on':'All-ins off');
+ const algorithm=$('gto-algorithm').selectedOptions[0]?.textContent.split(' · ')[0]||'GTO';
+ $('advanced-summary').textContent=(isQre?'QRE':algorithm)+' · '+Number($('iterations').value).toLocaleString()+' iter';
+ const fullyEnumerated=Number($('flop-turn-samples').value)===49&&Number($('flop-river-samples').value)===48;
+ const scope=view.mode==='flop'?(fullyEnumerated?'Full flop':'Sampled flop'):view.mode==='turn'?'Turn + river':'River';
+ $('street-chip').textContent=scope;
+ $('run-scope').textContent=scope;
 }
 function config(){
  const parse=(v)=>{const pieces=v.split(/[;,\s]+/).map(x=>x.trim()).filter(Boolean).map(Number);if(pieces.some(x=>!Number.isFinite(x)||x<=0||x>1000))throw Error('Bet/raise percentages must be positive numbers up to 1,000%.');return pieces;};
@@ -581,29 +625,21 @@ function updateSolverMethod(){
  $('tolerance-unit').textContent='% of pot';
  $('stat-qre-gap').hidden=!isQre;
  nodeLockStatus();
- $('stat-main-label').textContent=view.nodeLocks.length?'Locked-game exploitability (chips/player)':'Nash exploitability (chips/player)';
  $('chart').setAttribute('aria-label','Exploitability versus iterations');
 }
 function makeLocalGame(solveConfig=null){
+ renderSetupSummaries();
  try{
   view.game=C.makeGame(solveConfig||config(),{preview:true});view.parents=new Array(view.game.nodes.length).fill(null);
   for(const node of view.game.nodes)if(!node.terminal){
    if(node.chance){for(const outcome of node.runouts)view.parents[outcome.child]=[node.id,outcome.label];}
    else for(const a of node.actions)view.parents[a.child]=[node.id,a.label];
   }
-  $('tree-node-count').textContent=view.game.nodes.length+' NODES';
-  const orbit=view.game.suitIsomorphism;
-  const hand=view.game.riverPrivateSymmetry;
-  $('tree-node-count').title=orbit?.enabled?
-   `Exact ${orbit.street} suit symmetry: ${orbit.representatives}/${orbit.runouts} opening chance representatives; ${orbit.aliasedDecisions} aliased decisions; complete original tree retained.`:
-   hand?.enabled?`Exact river private-hand symmetry: ${hand.representatives.join(' / ')} strategy rows retained per player (${hand.savedRows} rows saved per decision pair).`:
-   `No exact symmetry enabled for this game (${orbit?.reason||'not applicable'}${hand?.reason?', '+hand.reason:''}).`;
-  if(view.mode==='flop')$('street-chip').textContent=view.game.sampledChance?'FLOP · SAMPLED':'FLOP · FULL';
   if(view.mode==='flop')$('stat-exploit').title=view.game.sampledChance?'Exploitability is calculated for the sampled chance tree, not the complete flop game.':'';
   $('stat-memory').textContent='≈'+fmt(view.game.memory/1048576,2)+' MiB (estimated)';
   renderPreSolveQuality();
   return true;
- }catch(e){view.game=null;view.parents=[];renderPreSolveQuality();$('tree-node-count').textContent='INVALID GAME';notify(e.message,'warn');return false;}
+ }catch(e){view.game=null;view.parents=[];renderPreSolveQuality();notify(e.message,'warn');return false;}
 }
 function cancel(){
  if($('save-checkpoint'))$('save-checkpoint').disabled=true;
@@ -616,25 +652,39 @@ function cancel(){
  if(view.fallback){clearTimeout(view.fallback.timer);view.fallback=null;}
  view.active=false;view.stopRequested=false;
  $('solve').disabled=false;$('stop').disabled=true;
+ syncRunBar();
+}
+function syncRunBar(){
+ const running=view.active||!!view.benchmark?.running||!!view.sampleStudy?.running;
+ $('solver-run-bar').hidden=!running&&!$('library-view').hidden;
+ $('solve').hidden=running;$('stop').hidden=!running;
+ $('progress-percent').hidden=!running;
+}
+function updateGapLabel(){
+ const label=$('stat-main-label'),locked=view.nodeLocks.length>0;
+ label.textContent=locked?'Locked gap':'Exploitability';
+ label.title=(locked?'Locked-game':'Nash')+' exploitability in chips per player';
 }
 function setStatus(text,kind='ready'){
  view.solverStatus=kind;
  $('solver-status').textContent=text;
  $('solver-status').className='status-tag '+(kind==='running'?'running':kind==='complete'?'complete':'');
+ syncRunBar();
 }
 function clearOutput(){
  clearSolveCompletion();view.activeConfig=null;
- view.report=null;view.node=0;view.filter=newFilter();view.solveTargetPercent=null;view.fullReportReady=false;view.detailPending.clear();
+ view.report=null;view.node=0;view.viewCat=null;view.filter=newFilter();view.solveTargetPercent=null;view.fullReportReady=false;view.detailPending.clear();
  $('stat-iterations').textContent='0';$('stat-speed').textContent='—';$('stat-time').textContent='—';
  $('stat-exploit').textContent='—';$('stat-exploit').title=view.game?.sampledChance?'Exploitability is computed for the sampled chance tree, not the complete flop game.':'';$('stat-qre-gap').textContent='Regularized QRE gap: —';$('stat-tpwl').textContent='Tree PWL: —';$('stat-nash').textContent='NashConv: —';$('stat-ev').textContent='OOP EV: —';$('stat-zero').textContent='Pot accounting error: —';
  $('progress-bar').style.width='0%';$('progress-percent').textContent='0%';$('progress-text').textContent='Waiting for solver';
  $('export').disabled=true;$('save-local').disabled=true;
  drawChart([]);
 }
-function invalidate(reason='Configuration edited. Solve to recalculate strategies.'){
+function invalidate(reason){
  if(view.sampleStudy?.running){view.sampleStudy.cancelled=true;view.sampleStudy.running=false;lockSampleStudyControls(view.sampleStudy,false);}
  if(view.benchmark?.running){view.benchmark.cancelled=true;completeBenchmark();}
- clearBenchmark();cancel();clearOutput();const valid=makeLocalGame();renderExplorer();renderTree();setStatus(valid?'READY':'INVALID',valid?'ready':'error');if(valid)notify(reason,'ok');
+ clearBenchmark();cancel();clearOutput();dismissNotice();const valid=makeLocalGame();renderExplorer();renderTree();setStatus(valid?'READY':'CHECK SETTINGS',valid?'ready':'error');
+ if(valid&&reason)notify(reason);
 }
 function actionSizePercent(action){
  if(!action||!(action.type==='bet'||action.type==='raise'))return null;
@@ -698,28 +748,30 @@ function renderHandClasses(el,board,weights,probabilities,labels,palette,order,s
  el.innerHTML=html;el.scrollTop=scroll;if(focused)[...el.querySelectorAll('[data-hand-class]')].find(b=>b.dataset.handClass===focused)?.focus({preventScroll:true});
 }
 function setSolverTab(name,focus=false){
- const solving=name==='solve';
- $('solve-view').hidden=!solving;$('tree').hidden=solving;
- for(const [id,on] of [['tab-solve',solving],['tab-tree',!solving]]){
-  const tab=$(id);tab.classList.toggle('active',on);tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;
+ const strategy=name==='tree',library=name==='library',panel=strategy?'tree':library?'library-view':'solve-view';
+ const changed=$(panel).hidden;
+ $('solve-view').hidden=strategy||library;$('tree').hidden=!strategy;$('library-view').hidden=!library;
+ if(changed){$('solver-scroll').scrollTop=0;closeCardPicker();}
+ $('solver-files').open=false;
+ for(const [id,on] of [['tab-solve',!strategy],['tab-tree',strategy]]){
+  const tab=$(id);tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;
  }
- if(focus)$(solving?'tab-solve':'tab-tree').focus();
- if(solving)drawChart(view.report?.history||[]);
+ if(focus)$(strategy?'tab-tree':'tab-solve').focus({preventScroll:true});
+ if(strategy){drawChart(view.report?.history||[]);requestSelectedDetails();}
+ syncRunBar();
 }
 function getSelected(){if(!view.game)return null;return view.game.nodes[view.node]||view.game.nodes[0];}
 function renderExplorer(){
  const node=getSelected(),record=node&&!node.terminal&&view.report?view.report.nodes[node.id]:null;
- $('node-actor').textContent=node?(node.terminal?'TERMINAL':node.chance?(node.street==='deal-turn'?'DEAL TURN':'DEAL RIVER'):node.p===0?'OOP TO ACT':'IP TO ACT'):'NO GAME';
- $('node-path').textContent=node?node.history.join(' → '):'Configure valid ranges';
- $('node-subtitle').textContent=node?(node.terminal?'This betting sequence has ended.':node.chance?(node.street==='deal-turn'?'The next turn has 45 legal cards per private-hand pair.':'The next river has 44 legal cards per private-hand pair.')+(view.game.sampledChance?' Displayed runouts are sampled.':''):`Pot: ${node.pot} chips · To call: ${node.toCall} · ${node.actions.length-(culledAtNode(node.id)?.filter(Boolean).length||0)} active actions${culledAtNode(node.id)?.some(x=>x)?' ('+node.actions.length+' legal)':''}`):'Game unavailable';
+ $('strategy-board').innerHTML=[...boardSet(node)].map(cardHtml).join('');
+ $('node-actor').textContent=node?(node.terminal?'Hand complete':node.chance?(node.street==='deal-turn'?'Choose the turn':'Choose the river'):node.p===0?'OOP to act':'IP to act'):'Game unavailable';
+ $('node-subtitle').textContent=node?'Pot '+node.pot+(node.toCall?' · Call '+node.toCall:''):'';
  $('node-ev').textContent=record?evText(record.rangeEV):'—';
  const hasDecision=!!(record&&node&&!node.terminal&&!node.chance);
+ $('strategy-options').hidden=!hasDecision;
+ $('combo-inspector').hidden=true;
  $('strategy-view-controls').hidden=!hasDecision;$('strategy-filters').hidden=!hasDecision;$('hand-classes').hidden=!hasDecision;
  if(!hasDecision)$('hand-classes').innerHTML='';
- $('legend').innerHTML=node&&!node.terminal&&!node.chance?actionOrder(node.actions).filter(i=>!culledAtNode(node.id)?.[i]).map(i=>{
-  const a=node.actions[i],v=record?record.actions[i]:null;
-  return `<span class="legend-item"><i class="legend-color" style="background:${actionColor(a,i,node.actions)}"></i>${escapeHtml(a.label)} <strong>${v!==null?pct(v,1):'—'}</strong></span>`;
- }).join(''):'<span class="muted">No decision at this node</span>';
  if(!view.report){
   $('strategy').classList.add('is-empty');
   $('strategy-matrix').innerHTML='<div class="empty-results">Run a solve to see hand strategies and EVs.</div>';
@@ -742,6 +794,7 @@ function renderExplorer(){
  const blockers=boardSet(node), weights=node&&!node.terminal?view.weights[node.p]:null;
  const remaining=hasDecision?S.remainingWeights(view.game,view.report,view.weights,node.id,view.parents):null;
  const remainingMode=$('frequency-view').value==='remaining',f=view.filter,active=filtersActive(f),board=[...blockers];
+ $('strategy-filter-summary').textContent=active?'Filters active':'';
  renderFilters('',f);
  const suitWeights=remaining?S.filterWeights(board,remaining,{...f,handClass:null}):null,filtered=remaining?S.filterWeights(board,remaining,f):null;
  $('frequency-note').textContent=(remainingMode?'Weighted combos / board-legal combos; gray = missing weight. Cells show EV.':'Conditional action mix of reached hands.')+
@@ -762,7 +815,10 @@ function renderExplorer(){
   html+=`<span class="cell-name">${cat}</span><span class="cell-ev">${mass>1e-16?evText(ev,1):'—'}</span></button>`;
  }
  $('strategy-matrix').innerHTML=html;
- renderComboDetails(node,record,handById,remaining,active?filtered:null);
+ if(hasDecision&&view.viewCat){
+  $('combo-inspector').hidden=false;
+  renderComboDetails(node,record,handById,remaining,active?filtered:null);
+ }
 }
 function renderComboDetails(node,record,handById,remaining,filtered){
  const cat=view.viewCat,ids=idsForCat(cat).filter(id=>!filtered||filtered[id]>0),set=boardSet(node);
@@ -958,9 +1014,11 @@ function renderPreSolveQuality(){
 // Node locks use structural decision IDs; exact-combo locks additionally use
 // canonical 0–1325 card-combination IDs. Other hands stay fully learnable.
 function nodeLockStatus(){
- const n=view.nodeLocks.length,el=$('node-lock-count');
- if(el)el.textContent=n?`${n} node lock${n===1?'':'s'} active`:'No node locks';
- const clear=$('clear-all-node-locks');if(clear)clear.disabled=!n||view.active||!!view.benchmark?.running;
+ const n=view.nodeLocks.length;
+ $('lock-management').hidden=!n;
+ $('node-lock-count').textContent=n+' active '+(n===1?'lock':'locks');
+ $('clear-all-node-locks').disabled=!n||view.active||!!view.benchmark?.running;
+ updateGapLabel();
 }
 function renderNodeLockEditor(node){
  const panel=$('node-lock-editor');if(!panel)return;
@@ -969,6 +1027,8 @@ function renderNodeLockEditor(node){
  nodeLockStatus();
  if(!eligible)return;
  const current=view.nodeLocks.find(lock=>lock.nodeId===node.id),rec=view.report?.nodes?.[node.id];
+ $('decision-lock-state').textContent=current?'Lock active':'';
+ if(!panel.open)return;
  const solved=rec?.actions?.length===node.actions.length?rec.actions.map(p=>Math.round(p*10000)/100):null;
  if(solved)solved[solved.length-1]=Math.round((100-solved.slice(0,-1).reduce((x,y)=>x+y,0))*100)/100;
  const inputs=node.actions.map((action,k)=>{
@@ -1096,27 +1156,24 @@ function clearNodeLocks(single=false){
 function renderTree(){
  refreshContinue();
  const n=getSelected();
- renderNodeLockEditor(n);if(!n){$('tree-breadcrumb').innerHTML='';$('tree-summary').innerHTML='';$('tree-actions').innerHTML='<p class="muted">Configure valid ranges first.</p>';return;}
+ renderNodeLockEditor(n);if(!n){$('tree-breadcrumb').innerHTML='';$('tree-actions').innerHTML='';return;}
  const path=getPath(n.id);
  $('tree-breadcrumb').innerHTML=path.map((id,i)=>{
   const parent=i===0?null:path[i-1],label=parent===null?(view.mode==='flop'?'Flop':view.mode==='turn'?'Turn':'River'):view.parents[id][1];
-  return `${i?'<span class="crumb-sep">›</span>':''}<button class="crumb ${id===n.id?'current':''}" data-node="${id}">${escapeHtml(label)}</button>`;
+  return `${i?'<span class="crumb-sep" aria-hidden="true">›</span>':''}<button type="button" class="crumb${id===n.id?' current':''}" ${id===n.id?'aria-current="step"':''} data-node="${id}">${escapeHtml(label)}</button>`;
  }).join('');
  const record=view.report&&!n.terminal?view.report.nodes[n.id]:null;
- const stats=[['ACTING PLAYER',n.terminal?'—':n.chance?'Chance':n.p===0?'OOP':'IP'],['STREET',n.street|| (n.river!==null&&n.river!==undefined?'River':'—')],['CURRENT POT',n.pot+' chips'],['TO CALL',n.terminal||n.chance?'—':n.toCall+' chips'],['NODE REACH',record?pct(record.reachMass,2):'—'],['RANGE EV',record?evText(record.rangeEV):'—']];
- $('tree-summary').innerHTML=stats.map(([key,value])=>`<div class="tree-stat"><span>${key}</span><strong>${value}</strong></div>`).join('');
  if(n.chance){
-  const dealTurn=n.street==='deal-turn';
-  $('tree-actions').innerHTML='<p class="mini-note">Choose a '+(dealTurn?'turn':'river')+' card'+(view.game.sampledChance?' (sampled chance outcomes)':'')+':</p><div class="runout-grid">'+n.runouts.map(o=>{const s=C.cardText(o.card??o.river);return `<button class="runout-card s-${s[1]}" data-next="${o.child}" aria-label="${s[0]} of ${suitNames[s[1]]}" title="${s[0]} of ${suitNames[s[1]]}">${s[0]}</button>`;}).join('')+'</div>';return;
+  $('tree-actions').innerHTML='<div class="runout-grid">'+n.runouts.map(o=>{const s=C.cardText(o.card??o.river);return `<button type="button" class="runout-card s-${s[1]}" data-next="${o.child}" aria-label="${s[0]} of ${suitNames[s[1]]}">${s[0]}</button>`;}).join('')+'</div>';return;
  }
  if(n.terminal){$('tree-actions').innerHTML=`<div class="terminal-note">${n.type==='fold'?`Hand ends by fold; ${n.winner===0?'OOP':'IP'} wins the pot.`:'Hand ends at showdown; exact seven-card rankings determine the result.'} The final pot is ${n.pot} chips.</div>`;return;}
  $('tree-actions').innerHTML=actionOrder(n.actions).filter(k=>!culledAtNode(n.id)?.[k]).map(k=>{
-  const a=n.actions[k],f=record?record.actions[k]:null,clr=actionColor(a,k,n.actions),child=view.game.nodes[a.child];
-  return `<button class="tree-action" style="--action-color:${clr}" data-next="${a.child}"><strong style="color:${clr}">${escapeHtml(a.label)} →</strong><span>${f===null?'Not solved':pct(f,1)+' of reaching range'} · ${child.terminal?'Terminal':'Decision'}</span>`+
-   `<div class="action-progress"><span style="width:${f===null?0:f*100}%;background:${clr}"></span></div></button>`;
+  const a=n.actions[k],f=record?record.actions[k]:null,clr=actionColor(a,k,n.actions);
+  return `<button type="button" class="tree-action" style="--action-color:${clr}" data-next="${a.child}"><strong>${escapeHtml(a.label)}</strong><span>${f===null?'→':pct(f,1)}</span></button>`;
  }).join('');
 }
 function drawChart(history){
+ if($('tree').hidden||!$('diagnostics-toggle').open)return;
  const canvas=$('chart'),rect=canvas.getBoundingClientRect(),dpr=Math.min(2,window.devicePixelRatio||1),width=Math.max(240,rect.width||600),height=160;
  canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
  const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);ctx.clearRect(0,0,width,height);
@@ -1210,7 +1267,6 @@ function updateReport(report,kind){
  if($('phase-profile')){const p=report.performance; $('phase-profile').hidden=!p;
   if(p)$('phase-profile').textContent='WASM phases — P0 traversal '+fmt(p.traversal0Ms,1)+' ms; P1 traversal '+fmt(p.traversal1Ms,1)+' ms; policy '+(p.fusedPolicy?'fused into traversal':fmt(p.policy0Ms+p.policy1Ms,1)+' ms')+'; exact checks '+fmt(p.checkMs,1)+' ms; checks '+p.checks+'.';}
  const isQre=report.equilibrium==='qre';
- $('stat-main-label').textContent=view.nodeLocks.length?'Locked-game exploitability (chips/player)':'Nash exploitability (chips/player)';
  $('chart').setAttribute('aria-label','Exploitability versus iterations');
  $('stat-exploit').textContent=fmt(report.exploitability,4);
  $('stat-qre-gap').hidden=!isQre;
@@ -1243,14 +1299,11 @@ function finished(kind,report){
  $('solve').disabled=false;$('stop').disabled=true;
  if(view.fallback){clearTimeout(view.fallback.timer);view.fallback.timer=null;}
  $('save-local').disabled=!view.report;$('save-checkpoint').disabled=!(view.report||view.active);refreshContinue();
- if(view.report&&!view.benchmark?.running){setSolverTab('tree');requestSelectedDetails();}
+ if(view.report&&!view.benchmark?.running&&!view.sampleStudy?.running)setSolverTab('tree');
  setStatus(kind==='converged'?'TOLERANCE MET':kind==='stopped'?'STOPPED':'ITERATION LIMIT','complete');
- const isQre=report?.equilibrium==='qre',e=report?.exploitability;
- const metric=(report?.lockedNodes?'Locked-game exploitability ':'Nash exploitability ')+fmt(e,4)+' chips per player ('+fmt(100*e/view.game.pot,4)+'% of starting pot)'+(isQre?'; regularized QRE gap '+fmt(report.qreResidual,4)+' chips per player':'');
+ renderTree();
  showSolveCompletion(kind,report);
- notify(kind==='converged'?`Configured target reached: ${metric}.`:
-  kind==='stopped'?`Solve stopped after ${report?.iteration||0} iterations; ${metric}. Strategies are interim.`:
-  `Iteration limit reached: ${metric}.${isQre?' Both gaps must meet the target; lower temperature if Nash exploitability remains high.':' Convergence is not guaranteed.'}`,kind==='converged'?'ok':'warn');
+ dismissNotice();
  if(view.benchmark?.running)benchmarkRunComplete(kind,report);
  if(view.sampleStudy?.running)sampleStudyFinished(kind,report);
 }
@@ -1382,6 +1435,7 @@ function exploitabilityTargetChips(pot,percent){
 }
 function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
  if(view.active)return false;
+ dismissNotice();
  if(!benchmarkConfig&&view.benchmark&&!view.benchmark.running)clearBenchmark();
  if(!makeLocalGame(benchmarkConfig))return false;
  const max=benchmarkLimits?.iterations??Number($('iterations').value),percent=benchmarkLimits?.targetPercent??($('tolerance').value.trim()===''?NaN:Number($('tolerance').value)),budget=benchmarkConfig?benchmarkConfig.memoryLimitBytes/1048576:Number($('memory-limit').value);
@@ -1390,7 +1444,7 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
  if(!Number.isFinite(budget)||budget<2||budget>4096){notify('Set a memory budget between 2 and 4,096 MiB.','error');return false;}
  if(view.game.memory/1048576>budget){notify(`The preview estimates ${fmt(view.game.memory/1048576,2)} MiB; the worker will check the exact ${budget} MiB limit before solving.`,'warn');}
  cancel();clearOutput();view.active=true;view.limit=max;view.solveTargetPercent=percent;
- $('solve').disabled=true;$('stop').disabled=false; $('save-checkpoint').disabled=false;setStatus('SOLVING','running');notify(view.game.equilibrium==='qre'?'Solving entropy-regularized QRE at '+fmt(view.game.qreTemperaturePercent,3)+'% of pot temperature. Both Nash exploitability and regularized gap must meet the target.':view.mode==='flop'?(view.game.sampledChance?'Solving the flop, turn and river with sampled runouts (approximate full-game results).':'Solving all flop, turn and river chance outcomes with exact runout enumeration.'):view.mode==='turn'?'GTO is solving turn and every legal river runout, with blocker-aware chance probabilities.':'GTO is solving the selected river board.');
+ $('solve').disabled=true;$('stop').disabled=false;$('save-checkpoint').disabled=false;setStatus('SOLVING','running');
  renderTree();renderExplorer();
  const cfg=benchmarkConfig||config(),generation=view.generation;view.activeConfig=cfg;
  view.solveRun={startedMs:Date.now(),startedIteration:checkpoint?.iteration??0,limit:max};
@@ -1497,18 +1551,10 @@ function loadFlopLibrary(){
  return flopLibraryLoading;
 }
 const lib={filter:newFilter(),spots:[],spot:null,lines:[],cat:'AKs'};
-function appTab(name){
- const library=name==='library';
- if(library&&!lib.spots.length){
-  $('notice').hidden=true;
-  loadFlopLibrary().catch(e=>notify(e.message,'error'));
- }
- $('library-view').hidden=!library;
- $('solver-workspace').hidden=library;
- $('tab-library').classList.toggle('active',library);
- $('tab-solver').classList.toggle('active',!library);
- $('tab-library').setAttribute('aria-pressed',library);
- $('tab-solver').setAttribute('aria-pressed',!library);
+async function openFlopLibrary(){
+ dismissNotice();$('lib-retry').hidden=true;
+ try{await loadFlopLibrary();}
+ catch(e){$('lib-retry').hidden=false;if(!$('library-view').hidden)notify(e.message,'error');}
 }
 function fillSelect(id,entries){const el=$(id);el.replaceChildren(...entries.map(([v,label])=>{const o=document.createElement('option');o.value=v;o.textContent=label;return o;}));}
 function libInit(text){const spots=L.parse(text);if(!spots.length)throw Error('TSV has no flop spots.');lib.spots=spots;const configs=[...new Set(spots.map(s=>s.configuration))];fillSelect('lib-config',configs.map(c=>[c,L.names[c]||c]));$('lib-count').textContent=spots.length+' SPOTS';libConfig();}
@@ -1532,9 +1578,21 @@ function libRender(){const node=lib.spot.nodes[$('lib-node').value],labels=L.act
  const details=idsForCat(lib.cat).filter(id=>!active||filtered[id]>0);
  $('lib-combos').innerHTML=!details.length?'<p class="muted">No matching combos in this hand.</p>':'<table class="combo-table"><thead><tr><th>COMBO</th><th>WEIGHT</th><th>FREQUENCY / SOURCE EV</th></tr></thead><tbody>'+details.map(id=>{const h=node.hands.get(id),[a,b]=C.ALL_COMBOS[id],w=node.weights[id];return `<tr><td>${cardHtml(a)} ${cardHtml(b)}</td><td>${pct(w,2)}</td><td>${w>0&&h?`<div class="lib-combo-action-gradient" style="background:${actionGradient(h.f,order,node.colors)}" role="img" aria-label="${escapeHtml(labels.map((l,k)=>l+' '+pct(h.f[k],2)).join(', '))}"></div>`+labels.map((l,k)=>`${escapeHtml(l)} ${pct(h.f[k],2)}${h.ev?' (EV '+fmt(h.ev[k],2)+')':''}`).join(' · '):'Not in range'}</td></tr>`;}).join('')+'</tbody></table>';
 }
-function showSource(){const s=view.source;const pos=s?.positions||s?.parent?.positions;for(const b of $('range-tabs').querySelectorAll('button')){const i=Number(b.dataset.player);b.textContent=(i?'IP':'OOP')+(pos?' · '+pos[i]:'');}$('continuation-source').hidden=!s;$('continuation-source').textContent=s?`${s.configuration? (L?.names?.[s.configuration]||s.configuration)+' · ':''}${s.line}${s.note?' · '+s.note:''}`:'';}
-function loadContinuation(next){view.nodeLocks=[];if(next.turnEntryMode&&next.board.length===4)$('turn-entry-mode').value=next.turnEntryMode;if(next.riverEntryMode&&next.board.length===5)$('river-entry-mode').value=next.riverEntryMode;view.source=next.source;view.mode=next.board.length===4?'turn':'river';view.board=next.board.slice();view.weights=next.weights;view.slot=view.board.length-1;$('street-mode').value=view.mode;$('pot').value=next.pot;$('stack').value=next.stack;showSource();appTab('solver');setSolverTab('solve');renderBoard();renderRangeTab();invalidate('Continuation loaded. Review future betting settings and solve.');pokerToolsHost.scrollToTop();}
-function libWire(){ wireFilters('lib-',lib,libRender); $('tab-library').onclick=()=>appTab('library');$('tab-solver').onclick=()=>appTab('solver');$('lib-config').onchange=libConfig;$('lib-flop').onchange=libSpot;$('lib-line').onchange=libBet;$('lib-node').onchange=libRender;$('lib-frequency-view').onchange=libRender;$('lib-matrix').onclick=e=>{const b=e.target.closest('[data-lib-cat]');if(b){lib.cat=b.dataset.libCat;libRender();}};
+function showSource(){const s=view.source;$('continuation-source').hidden=!s;$('continuation-source').textContent=s?`${s.configuration? (L?.names?.[s.configuration]||s.configuration)+' · ':''}${s.line}${s.note?' · '+s.note:''}`:'';}
+function loadContinuation(next){
+ view.nodeLocks=[];
+ if(next.turnEntryMode&&next.board.length===4)$('turn-entry-mode').value=next.turnEntryMode;
+ if(next.riverEntryMode&&next.board.length===5)$('river-entry-mode').value=next.riverEntryMode;
+ view.source=next.source;view.mode=next.board.length===4?'turn':'river';view.board=next.board.slice();view.weights=next.weights;
+ view.rangePresets=[null,null];$('range-editor').hidden=true;view.slot=view.board.length-1;
+ $('street-mode').value=view.mode;$('pot').value=next.pot;$('stack').value=next.stack;
+ showSource();setSolverTab('solve');renderBoard();renderRangeTab();invalidate('Continuation loaded.');
+}
+function libWire(){
+ wireFilters('lib-',lib,libRender);
+ $('tab-library').onclick=()=>{setSolverTab('library');$('lib-back').focus({preventScroll:true});if(!lib.spots.length)openFlopLibrary();};
+ $('lib-back').onclick=()=>{dismissNotice();setSolverTab('solve');$('tab-library').focus({preventScroll:true});};
+ $('lib-retry').onclick=openFlopLibrary;$('lib-config').onchange=libConfig;$('lib-flop').onchange=libSpot;$('lib-line').onchange=libBet;$('lib-node').onchange=libRender;$('lib-frequency-view').onchange=libRender;$('lib-matrix').onclick=e=>{const b=e.target.closest('[data-lib-cat]');if(b){lib.cat=b.dataset.libCat;libRender();}};
  $('lib-pot').oninput=libBet;$('lib-stack').oninput=libPreview;$('lib-bet').oninput=libPreview;$('lib-turn').onchange=libPreview;
  $('lib-continue').onclick=()=>{try{loadContinuation(libInput());}catch(e){notify(e.message,'error');}};
  $('lib-file').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{libInit(await file.text());notify('Flop library imported.','ok');}catch(err){notify('Import failed: '+err.message,'error');}e.target.value='';};
@@ -1579,6 +1637,7 @@ function restoreSolution(data){
     !Array.isArray(h[4])||h[4].length!==n.actions.length||h[4].some(v=>v!==null&&!Number.isFinite(v))))
     throw Error('Saved strategy does not match the game tree.');}
  cancel();clearOutput();view.nodeLocks=cfg.nodeLocks.map(v=>({...v}));view.board=board;view.mode=board.length===3?'flop':board.length===4?'turn':'river';view.weights=w;view.slot=board.length-1;view.source=data.source||null;
+ view.rangePresets=[null,null];$('range-editor').hidden=true;
  $('street-mode').value=view.mode;$('pot').value=cfg.pot;$('stack').value=cfg.stack;$('solver-method').value=cfg.equilibrium;$('gto-algorithm').value=cfg.gtoAlgorithm;ensureAlgorithmVisible(cfg.gtoAlgorithm);updateSolverMethod();$('qre-temperature').value=cfg.qreTemperaturePercent;
  setFrequencyIncrements(cfg.frequencyIncrements);
  for(const [id,val] of [['scheduled-alpha-start',cfg.scheduledAlphaStart??1],['scheduled-alpha-gain',cfg.scheduledAlphaGain??0.5],
@@ -1599,7 +1658,7 @@ function restoreSolution(data){
  view.fixedPrunePlanned=cfg.useActionFrequencyPruning?cfg.actionPrunePlannedIterations??null:null;
  $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled; $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;$('max-nodes').value=Math.max(18000,g.nodes.length);$('iterations').value=r.iteration;view.limit=r.iteration;
  view.fullReportReady=true;view.game=g;view.parents=new Array(g.nodes.length).fill(null);for(const n of g.nodes)if(!n.terminal){for(const a of n.chance?n.runouts:n.actions)view.parents[a.child]=[n.id,a.label];}
- $('tree-node-count').textContent=g.nodes.length+' NODES';appTab('solver');setSolverTab('tree');showSource();renderBoard();renderRangeTab();updateReport(r,'finished');$('save-local').disabled=false;setStatus('SAVED SOLUTION','complete');$('progress-text').textContent='Saved result loaded';notify(d.gtoAlgorithm==='dcfr-2-0.5-2'&&d.algorithmRevision!=='dcfr-2-0.5-2-quadratic-v2'?
+ setSolverTab('tree');showSource();renderBoard();renderRangeTab();renderSetupSummaries();updateReport(r,'finished');$('save-local').disabled=false;setStatus('SAVED SOLUTION','complete');$('progress-text').textContent='Saved result loaded';notify(d.gtoAlgorithm==='dcfr-2-0.5-2'&&d.algorithmRevision!=='dcfr-2-0.5-2-quadratic-v2'?
  'Legacy DCFR 2/0.5/2 solution loaded: before v16.2 this method used linear averaging. Displayed results remain historical; re-solve for corrected quadratic averaging.':
  'Saved solution loaded. Browse strategy or continue from a new street.',
  d.gtoAlgorithm==='dcfr-2-0.5-2'&&d.algorithmRevision!=='dcfr-2-0.5-2-quadratic-v2'?'warn':'ok');
@@ -1618,6 +1677,7 @@ function applyCheckpointConfig(cfg){
  if(!Array.isArray(cfg.board)||![3,4,5].includes(cfg.board.length))throw Error('Checkpoint has an invalid board');
  setFrequencyIncrements(cfg.frequencyIncrements);
  cancel();view.nodeLocks=(cfg.nodeLocks||[]).map(v=>({...v}));view.board=cfg.board.slice();view.weights=[Float64Array.from(cfg.weights0),Float64Array.from(cfg.weights1)];
+ view.source=null;view.rangePresets=[null,null];$('range-editor').hidden=true;
  view.mode=cfg.board.length===3?'flop':cfg.board.length===4?'turn':'river';view.slot=view.board.length-1;
  $('street-mode').value=view.mode;$('pot').value=cfg.pot;$('stack').value=cfg.stack;
  $('solver-method').value=cfg.equilibrium;$('gto-algorithm').value=cfg.gtoAlgorithm||'cfrplus';ensureAlgorithmVisible(cfg.gtoAlgorithm||'cfrplus');$('qre-temperature').value=cfg.qreTemperaturePercent||.05;
@@ -1645,7 +1705,7 @@ function applyCheckpointConfig(cfg){
  view.fixedActionWarmup=cfg.useActionFrequencyPruning?cfg.actionPruneWarmupIterations??null:null;
  view.fixedPrunePlanned=cfg.useActionFrequencyPruning?cfg.actionPrunePlannedIterations??null:null;
  $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled;
- updateSolverMethod();renderBoard();renderRangeTab();makeLocalGame();appTab('solver');setSolverTab('solve');
+ updateSolverMethod();showSource();renderBoard();renderRangeTab();makeLocalGame();setSolverTab('solve');
 }
 function checkpointWire(){
  $('save-checkpoint').onclick=()=>{
@@ -1673,41 +1733,68 @@ function storageWire(){refreshSaved();$('save-local').onclick=async()=>{try{noti
 
 function wire(){
  checkpointWire();
+ const files=$('solver-files');
+ document.addEventListener('pointerdown',e=>{if(files.open&&!files.contains(e.target))files.open=false;});
+ document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape')return;
+  if(files.open){files.open=false;files.querySelector('summary').focus();}
+  else if(!$('card-picker').hidden)closeCardPicker(true);
+ });
+ $('dismiss-notice').onclick=dismissNotice;
  $('solver-tabs').addEventListener('click',e=>{const tab=e.target.closest('[role="tab"]');if(tab)setSolverTab(tab.id==='tab-solve'?'solve':'tree');});
  $('solver-tabs').addEventListener('keydown',e=>{
   if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
   e.preventDefault();setSolverTab(e.key==='ArrowLeft'||e.key==='Home'?'solve':'tree',true);
  });
  $('diagnostics-toggle').addEventListener('toggle',()=>{if($('diagnostics-toggle').open)drawChart(view.report?.history||[]);});
+ $('node-lock-editor').addEventListener('toggle',()=>{if($('node-lock-editor').open)renderNodeLockEditor(getSelected());});
+ $('iterations').addEventListener('input',renderSetupSummaries);
  $('street-mode').addEventListener('change',e=>{
   view.source=null;showSource();view.mode=e.target.value;
   const length=view.mode==='flop'?3:view.mode==='turn'?4:5;
   view.board=view.board.slice(0,length);
   for(const id of ['9s','2c','7d','Ks','4h'].map(C.cardId))if(view.board.length<length&&!view.board.includes(id))view.board.push(id);
   while(view.board.length<length)view.board.push(Array.from({length:52},(_,i)=>i).find(i=>!view.board.includes(i)));
-  view.slot=0;renderBoard();renderRangeTab();invalidate('Street mode changed. Choose board cards and solve.');
+  view.slot=0;$('card-picker').hidden=true;renderBoard();renderRangeTab();invalidate();
  });
- $('board-cards').addEventListener('click',e=>{const b=e.target.closest('[data-slot]');if(!b)return;view.slot=Number(b.dataset.slot);renderBoard();});
+ $('board-cards').addEventListener('click',e=>{
+  const button=e.target.closest('[data-slot]');if(!button)return;
+  const slot=Number(button.dataset.slot);
+  if(!$('card-picker').hidden&&slot===view.slot){closeCardPicker(true);return;}
+  view.slot=slot;view.pickerSuit=C.cardText(view.board[slot])[1];$('card-picker').hidden=false;renderBoard();
+  $('card-picker').scrollIntoView({block:'nearest'});
+  if(e.detail===0)$('picker-suits').querySelector('[aria-pressed="true"]').focus({preventScroll:true});
+ });
+ $('close-card-picker').onclick=()=>closeCardPicker(true);
+ $('picker-suits').addEventListener('click',e=>{
+  const button=e.target.closest('[data-picker-suit]');if(!button)return;
+  view.pickerSuit=button.dataset.pickerSuit;renderCardPicker();
+ });
  $('deck').addEventListener('click',e=>{const b=e.target.closest('[data-card]');if(!b)return;const id=Number(b.dataset.card);
-  if(view.board.includes(id)&&view.board[view.slot]!==id){notify(`${C.cardText(id)} is already on the board. Choose an unused card.`,'warn');return;}
-  if(view.board[view.slot]===id){view.slot=(view.slot+1)%view.board.length;renderBoard();return;}
-  view.source=null;showSource();view.board[view.slot]=id;view.slot=(view.slot+1)%view.board.length;renderBoard();renderRangeTab();invalidate('Board changed. Previous results cleared; blocker-aware ranges recalculated.');
+  if(b.disabled)return;
+  if(view.board[view.slot]===id){closeCardPicker(true);return;}
+  view.source=null;showSource();view.board[view.slot]=id;closeCardPicker(true);renderRangeTab();invalidate();
  });
- $('range-tabs').addEventListener('click',e=>{const b=e.target.closest('[data-player]');if(!b)return;view.rangeP=Number(b.dataset.player);renderRangeTab();});
+ $('range-tabs').addEventListener('click',e=>{
+  const button=e.target.closest('[data-player]');if(!button)return;
+  const player=Number(button.dataset.player),editor=$('range-editor');
+  editor.hidden=!editor.hidden&&view.rangeP===player;
+  view.rangeP=player;$('preset').value=view.rangePresets[player]||'example';renderRangeTab();
+ });
  $('range-matrix').addEventListener('click',e=>{const b=e.target.closest('[data-cat]');if(!b)return;view.rangeCat=b.dataset.cat;renderRangeMatrix();renderRangeDetails();});
- $('range-freq').addEventListener('input',e=>{view.source=null;showSource();const w=Number(e.target.value)/100,set=boardSet();for(const id of idsForCat(view.rangeCat))if(!isBlocked(id,set))view.weights[view.rangeP][id]=w;
-  $('range-freq-label').textContent=Math.round(w*100)+'%';renderRangeMatrix();renderRangeDetails();invalidate('Range frequency edited. Previous results cleared.');});
- $('range-combos').addEventListener('input',e=>{const b=e.target.closest('[data-combo]');if(!b)return;view.source=null;showSource();view.weights[view.rangeP][Number(b.dataset.combo)]=Number(b.value)/100;
+ $('range-freq').addEventListener('input',e=>{view.source=null;showSource();view.rangePresets[view.rangeP]=null;const w=Number(e.target.value)/100,set=boardSet();for(const id of idsForCat(view.rangeCat))if(!isBlocked(id,set))view.weights[view.rangeP][id]=w;
+  $('range-freq-label').textContent=Math.round(w*100)+'%';renderRangeMatrix();renderRangeDetails();invalidate();});
+ $('range-combos').addEventListener('input',e=>{const b=e.target.closest('[data-combo]');if(!b)return;view.source=null;showSource();view.rangePresets[view.rangeP]=null;view.weights[view.rangeP][Number(b.dataset.combo)]=Number(b.value)/100;
   const valueLabel=b.closest('.combo-edit').querySelector('span:last-child');if(valueLabel)valueLabel.textContent=b.value+'%';
   const valid=idsForCat(view.rangeCat).filter(id=>!isBlocked(id,boardSet()));
   const mean=valid.length?valid.reduce((sum,id)=>sum+view.weights[view.rangeP][id],0)/valid.length:0;
   $('range-freq').value=Math.round(mean*100);$('range-freq-label').textContent=fmt(mean*100,0)+'%';
-  renderRangeMatrix();invalidate('Individual suit-combination weight edited. Previous results cleared.');});
- $('apply-preset').addEventListener('click',()=>{view.source=null;showSource();const chosen=$('preset').value;view.weights[view.rangeP]=profile(chosen,view.rangeP);renderRangeTab();invalidate(`${view.rangeP===0?'OOP':'IP'} ${chosen} range loaded.`);});
- $('solver-method').addEventListener('change',()=>{updateSolverMethod();invalidate('Solution method changed. Solve to calculate a new equilibrium.');});
+  renderRangeMatrix();invalidate();});
+ $('apply-preset').addEventListener('click',()=>{view.source=null;showSource();const chosen=$('preset').value;view.rangePresets[view.rangeP]=chosen;view.weights[view.rangeP]=profile(chosen,view.rangeP);renderRangeTab();invalidate();});
+ $('solver-method').addEventListener('change',()=>{updateSolverMethod();invalidate();});
  for(const street of C.frequencyStreets)for(const p of [0,1])frequencyIncrementField(street,p).addEventListener('change',()=>
-  invalidate('Frequency increments changed. Solve to calculate a new strategy.'));
- $('gto-algorithm').addEventListener('change',()=>{ensureAlgorithmVisible($('gto-algorithm').value);updateSolverMethod();invalidate('GTO algorithm changed. Solve to calculate a new strategy.');});
+  invalidate());
+ $('gto-algorithm').addEventListener('change',()=>{ensureAlgorithmVisible($('gto-algorithm').value);updateSolverMethod();invalidate();});
  $('show-experimental-algorithms').addEventListener('change',e=>{
    // Never silently replace an active experimental algorithm with CFR+.
    const selected=$('gto-algorithm').value;
@@ -1716,7 +1803,7 @@ function wire(){
      notify('This solve uses an experimental algorithm. Choose a recommended method before hiding the others.','warn');
    }else setExperimentalAlgorithmVisibility(e.target.checked);
  });
- for(const id of ['qre-temperature','pot','stack','sizes0','sizes1','turn-sizes0','turn-sizes1','turn-donk-sizes0','turn-entry-mode','flop-donk-sizes0','flop-entry-mode','river-donk-sizes0','river-entry-mode','flop-sizes0','flop-sizes1','raise-sizes0','raise-sizes1','turn-raise-sizes0','turn-raise-sizes1','flop-raise-sizes0','flop-raise-sizes1','flop-turn-samples','flop-river-samples','raises','max-nodes','allin','memory-limit','suit-isomorphism','river-hand-symmetry','action-frequency-pruning','action-prune-threshold','action-prune-warmup','action-prune-recheck','scheduled-alpha-start','scheduled-alpha-gain','scheduled-ramp-length','scheduled-averaging-power','adaptive-convergence','zero-reach-pruning','enable-profile'])$(id).addEventListener('change',()=>{if(id==='pot'||id==='stack'){view.source=null;showSource();}if(id.startsWith('action-prune')){view.fixedActionWarmup=null;view.fixedPrunePlanned=null;}renderBoard();invalidate('Betting configuration changed. Solver and tree rebuilt.');});
+ for(const id of ['qre-temperature','pot','stack','sizes0','sizes1','turn-sizes0','turn-sizes1','turn-donk-sizes0','turn-entry-mode','flop-donk-sizes0','flop-entry-mode','river-donk-sizes0','river-entry-mode','flop-sizes0','flop-sizes1','raise-sizes0','raise-sizes1','turn-raise-sizes0','turn-raise-sizes1','flop-raise-sizes0','flop-raise-sizes1','flop-turn-samples','flop-river-samples','flop-sampling-seed','raises','max-nodes','allin','memory-limit','suit-isomorphism','river-hand-symmetry','action-frequency-pruning','action-prune-threshold','action-prune-warmup','action-prune-recheck','scheduled-alpha-start','scheduled-alpha-gain','scheduled-ramp-length','scheduled-averaging-power','adaptive-convergence','zero-reach-pruning','enable-profile'])$(id).addEventListener('change',()=>{if(id==='pot'||id==='stack'){view.source=null;showSource();}if(id.startsWith('action-prune')){view.fixedActionWarmup=null;view.fixedPrunePlanned=null;}renderBoard();invalidate();});
  $('solve-console-copy').addEventListener('click',async()=>{
   const text=view.solveLog;if(!text)return;
   try{
@@ -1730,8 +1817,6 @@ function wire(){
   }catch(_){notify('Clipboard unavailable. Select the console text and copy it manually.','warn');}
  });
  $('sample-study-start').addEventListener('click',startSampleStudy);
- $('quick-solve').onclick=()=>setSolverTab('solve');
- $('quick-tree').onclick=()=>setSolverTab('tree');
  $('solve').addEventListener('click',()=>startSolver());$('benchmark-all').addEventListener('click',startBenchmark);
  $('stop').addEventListener('click',stopSolver);
  $('benchmark-copy').addEventListener('click',()=>copyBenchmark());
@@ -1747,7 +1832,19 @@ function wire(){
  $('export').addEventListener('click',exportJSON);
  wireFilters('',view,renderExplorer);
  $('frequency-view').addEventListener('change',renderExplorer);
- $('strategy-matrix').addEventListener('click',e=>{const b=e.target.closest('[data-vcat]');if(!b)return;view.viewCat=b.dataset.vcat;renderExplorer();});
+ $('strategy-matrix').addEventListener('click',e=>{
+  const button=e.target.closest('[data-vcat]');if(!button)return;
+  view.viewCat=button.dataset.vcat;renderExplorer();
+  const inspector=$('combo-inspector');
+  if(!inspector.hidden){
+   if(e.detail===0)$('close-combos').focus({preventScroll:true});
+   inspector.scrollIntoView({block:'nearest'});
+  }
+ });
+ $('close-combos').onclick=()=>{
+  const category=view.viewCat;view.viewCat=null;renderExplorer();
+  $('strategy-matrix').querySelector('[data-vcat="'+category+'"]')?.focus();
+ };
  $('tree-breadcrumb').addEventListener('click',e=>{const b=e.target.closest('[data-node]');if(!b)return;view.node=Number(b.dataset.node);renderExplorer();renderTree();requestSelectedDetails();});
  $('node-lock-apply').addEventListener('click',()=>{try{applyNodeLock();}catch(e){notify(e.message,'error');}});
  $('node-lock-category-grid').addEventListener('click',e=>{

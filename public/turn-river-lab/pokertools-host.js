@@ -6,12 +6,7 @@ const pokerToolsHost = (() => {
     window.parent.postMessage({ scope, action, value }, hostOrigin, transfer);
   };
 
-  new ResizeObserver(() => {
-    send('resize', Math.ceil(document.body.getBoundingClientRect().height));
-  }).observe(document.body);
-
   return {
-    scrollToTop: () => send('scroll-top'),
     request(action, value) {
       return new Promise((resolve, reject) => {
         const { port1, port2 } = new MessageChannel();

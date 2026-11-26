@@ -5,231 +5,309 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src LAB_ASSET_BASE 'wasm-unsafe-eval'; style-src LAB_ASSET_BASE 'unsafe-inline'; worker-src blob:; base-uri LAB_ASSET_BASE; form-action 'none'">
   <base href="LAB_ASSET_BASE">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#10151d">
+  <meta name="theme-color" content="#212121">
   <meta name="description" content="A local heads-up Texas Hold'em flop, turn and river solver.">
   <title>TurnRiverLab — Poker Solver</title>
-  <link rel="stylesheet" href="style.css?v=frequency-increments">
+  <link rel="stylesheet" href="style.css?v=solver-layout">
 </head>
 <body>
-  <header class="topbar"><div class="topbar-inner"><h1>TurnRiverLab</h1><span>Flop · turn · river solver</span></div></header>
-  <div class="page" id="top">
-    <div class="notice" id="notice" role="status" aria-live="polite" hidden><span id="notice-text"></span></div>
-    <nav class="segmented app-tabs" aria-label="Main views"><button id="tab-library" type="button">Flop library</button><button id="tab-solver" class="active" type="button">Solver</button></nav>
-    <section id="library-view" hidden class="library-layout">
-      <section class="panel library-controls">
-        <div class="section-head"><h2>Flop library</h2><span id="lib-count" class="small-chip"></span></div>
-        <label class="mode-selector">Configuration<select id="lib-config"></select></label>
-        <label class="mode-selector">Flop<select id="lib-flop"></select></label>
-        <div id="lib-board" class="board-cards"></div>
-        <label class="mode-selector">Continue from flop line<select id="lib-line"></select></label>
-        <p id="lib-line-note" class="subtle-note"></p>
-        <div class="field-row"><label>Original flop pot <input id="lib-pot" type="number" min="1" step="1" placeholder="Enter chips"></label><label>Flop effective stack<input id="lib-stack" type="number" min="1" step="1" placeholder="Enter chips"></label></div>
-        <label class="mode-selector" id="lib-bet-field">Flop bet amount <span class="field-unit">chips · editable</span><input id="lib-bet" type="number" min="1" step="1" placeholder="Calculated from pot"></label>
-        <label class="mode-selector">Turn card<select id="lib-turn"></select></label>
-        <div id="lib-preview" class="library-preview"></div>
-        <button id="lib-continue" class="primary" type="button" disabled>Continue to turn solver</button>
-        <p class="subtle-note">Uses the saved flop strategy, then solves a fresh turn/river game. Pot and stack load from the TSV when available; they can be edited in whole chips. Bet amount is rounded to whole chips and can be corrected to match the source.</p>
-        <details class="advanced"><summary>Import another FlopViewer TSV</summary><input id="lib-file" type="file" accept=".tsv,.txt,text/tab-separated-values"><p class="subtle-note">Uses the original FlopViewer combo order. Optional OriginalFlopPot and FlopEffectiveStack columns load per spot. Only recognized, complete action paths can be continued.</p></details>
-      </section>
-      <section class="panel library-strategy">
-        <div class="section-head"><h2>Saved flop strategy</h2><span class="small-chip" id="lib-node-actor"></span></div>
-        <label class="mode-selector">Decision<select id="lib-node"></select></label>
-        <div id="lib-legend" class="legend"></div>
-        <div class="strategy-view-controls"><label for="lib-frequency-view">View</label><select id="lib-frequency-view"><option value="remaining">Remaining combos</option><option value="full">Full frequency</option></select><span id="lib-frequency-note" class="muted"></span></div><div class="strategy-filters" id="lib-strategy-filters" role="group" aria-label="Strategy filters">
-          <span class="filter-label">Suits</span><div class="suit-filter-buttons" role="group" aria-label="Hole card suits"><button type="button" data-suit="all" aria-pressed="true">All</button><button type="button" class="s-s" data-suit="s" aria-label="Spades" title="Spades" aria-pressed="false">Spades</button><button type="button" class="s-h" data-suit="h" aria-label="Hearts" title="Hearts" aria-pressed="false">Hearts</button><button type="button" class="s-d" data-suit="d" aria-label="Diamonds" title="Diamonds" aria-pressed="false">Diamonds</button><button type="button" class="s-c" data-suit="c" aria-label="Clubs" title="Clubs" aria-pressed="false">Clubs</button></div><label class="suit-both"><input type="checkbox" id="lib-suit-both"> Both cards</label><button type="button" class="filter-clear" id="lib-clear-filters" hidden>Clear filters</button></div>
-        <div class="strategy-layout strategy-with-classes"><div id="lib-matrix" class="matrix-strategy" aria-label="Imported flop strategy"></div><aside class="strategy-sidebar hand-class-sidebar" id="lib-hand-classes" aria-label="Hand classes"></aside><div class="strategy-sidebar combo-inspector"><div class="subsection-head"><strong id="lib-combo-cat">AKs</strong></div><div id="lib-combos" class="combo-details"></div></div></div>
-        <p class="subtle-note">Action frequencies and source EVs are imported as exported. Source EV units/baseline are not specified; solver EVs use fold = 0. Raise sizes not included in the TSV are shown without invented amounts.</p>
-      </section>
-    </section>
-    <main class="workspace" id="solver-workspace">
-      <div class="left-column">
-        <section class="panel" id="configuration">
-          <h2>Game</h2><div id="continuation-source" class="subtle-note" hidden></div>
-          <label class="mode-selector" for="street-mode">Start from
-            <select id="street-mode"><option value="flop">Flop (3 board cards)</option><option value="turn" selected>Turn (4 board cards)</option><option value="river">River (5 board cards)</option></select>
-          </label>
-          <p class="subtle-note" id="flop-mode-note" hidden>Flop results use sampled future cards by default and are approximate. Set 49 turns and 48 rivers in Betting settings for full enumeration.</p>
-          <div class="board-title"><span id="board-label">Board</span><span class="board-mode" id="street-chip">TURN</span></div>
-          <div class="board-cards" id="board-cards" aria-label="Community cards"></div>
-          <div class="deck-wrap">
-            <div class="deck-header"><span>Choose card</span><div class="suit-key" aria-label="Card color key"><span><i class="suit-dot s-s"></i>Spades</span><span><i class="suit-dot s-h"></i>Hearts</span><span><i class="suit-dot s-d"></i>Diamonds</span><span><i class="suit-dot s-c"></i>Clubs</span></div></div>
-            <div class="deck" id="deck" aria-label="Select a card from the deck"></div>
+  <div class="solver-shell">
+    <header class="workspace-header">
+      <div class="workspace-toolbar">
+        <h1 class="sr-only">TurnRiverLab</h1>
+        <div class="workspace-tabs" id="solver-tabs" role="tablist" aria-label="Solver views">
+          <button type="button" id="tab-solve" role="tab" aria-selected="true" aria-controls="solve-view library-view">Setup</button>
+          <button type="button" id="tab-tree" role="tab" aria-selected="false" aria-controls="tree" tabindex="-1">Strategy</button>
+        </div>
+        <details class="files-menu" id="solver-files">
+          <summary>Files</summary>
+          <div class="files-content">
+            <div class="saved-row" id="saved-row" hidden><select id="saved-select" aria-label="Saved solutions"></select><button id="load-local" class="secondary small" type="button">Load</button><button id="delete-local" class="secondary small" type="button">Delete</button></div>
+            <div class="file-actions">
+              <button type="button" class="secondary" id="save-local" disabled>Save solution</button>
+              <button type="button" class="secondary" id="export" disabled>Export JSON</button>
+              <label class="secondary file-button">Open solution<input type="file" id="open-solution" accept=".json,application/json"></label>
+              <button type="button" class="secondary" id="save-checkpoint" disabled>Save checkpoint</button>
+              <label class="secondary file-button">Resume checkpoint<input type="file" id="open-checkpoint" accept=".trlc,application/octet-stream"></label>
+            </div>
           </div>
-        </section>
-        <section class="panel" id="ranges">
-          <div class="section-head"><h2>Ranges</h2><span class="small-chip" id="range-count">—</span></div>
-          <div class="segmented" id="range-tabs"><button type="button" class="active" data-player="0">OOP</button><button type="button" data-player="1">IP</button></div>
-          <div class="preset-row"><label class="sr-only" for="preset">Range preset</label><select id="preset"><option value="example">Example</option><option value="tight">Tight</option><option value="wide">All hands</option><option value="clear">Clear</option></select><button type="button" class="secondary small" id="apply-preset">Apply</button></div>
-          <div class="matrix-range" id="range-matrix" aria-label="Editable 13 by 13 hand range"></div>
-          <div class="range-edit"><div class="edit-title"><strong id="range-cat">AKs</strong><span id="range-cat-count" class="muted"></span></div><label class="freq-label" for="range-freq">Frequency <output id="range-freq-label">0%</output></label><input type="range" id="range-freq" min="0" max="100" step="1" value="0"><div id="range-combos" class="range-combos"></div></div>
-        </section>
+        </details>
       </div>
-      <div class="right-column">
-        <section class="panel controls" id="solver">
-          <div class="solver-tab-header">
-            <div class="segmented solver-tabs" id="solver-tabs" role="tablist" aria-label="Solver views">
-              <button type="button" class="active" id="tab-solve" role="tab" aria-selected="true" aria-controls="solve-view">Solve</button>
-              <button type="button" id="tab-tree" role="tab" aria-selected="false" aria-controls="tree" tabindex="-1">Game tree &amp; strategy</button>
-            </div>
-            <span class="status-tag" id="solver-status">READY</span>
+      <div class="notice" id="notice" role="status" aria-live="polite" hidden><span id="notice-text"></span><button type="button" id="dismiss-notice" aria-label="Dismiss message">×</button></div>
+    </header>
+    <main class="solver-scroll" id="solver-scroll">
+      <div class="page" id="top">
+        <section id="solve-view" class="setup-grid" role="tabpanel" aria-labelledby="tab-solve">
+          <div class="setup-column">
+            <section id="configuration" aria-label="Game setup">
+              <div class="setup-start">
+                <label for="street-mode">Start from<select id="street-mode"><option value="flop">Flop</option><option value="turn" selected>Turn</option><option value="river">River</option></select></label>
+                <button class="secondary" type="button" id="tab-library">Flop library</button>
+              </div>
+              <p id="continuation-source" class="subtle-note" hidden></p>
+              <div class="board-title"><span>Board</span><span class="board-mode" id="street-chip">Turn + river</span></div>
+              <div class="board-cards" id="board-cards" aria-label="Community cards"></div>
+              <section class="deck-wrap" id="card-picker" aria-label="Card picker" hidden>
+                <div class="deck-header"><strong id="card-picker-title">Choose a card</strong><button class="secondary small" type="button" id="close-card-picker">Close</button></div>
+                <div class="picker-suits" id="picker-suits" role="group" aria-label="Suit">
+                  <button type="button" class="s-s" data-picker-suit="s" aria-label="Spades">♠</button>
+                  <button type="button" class="s-h" data-picker-suit="h" aria-label="Hearts">♥</button>
+                  <button type="button" class="s-d" data-picker-suit="d" aria-label="Diamonds">♦</button>
+                  <button type="button" class="s-c" data-picker-suit="c" aria-label="Clubs">♣</button>
+                </div>
+                <div class="deck" id="deck" aria-label="Cards in selected suit"></div>
+              </section>
+              <div class="field-row"><label>Pot <span class="field-unit">chips</span><input id="pot" type="number" min="1" max="1000000" step="1" value="100"></label><label>Effective stack <span class="field-unit">chips</span><input id="stack" type="number" min="1" max="1000000" step="1" value="300"></label></div>
+            </section>
+            <section id="ranges" aria-label="Ranges">
+              <div class="range-tabs" id="range-tabs" role="group" aria-label="Range editors">
+                <button type="button" class="secondary" data-player="0" aria-controls="range-editor" aria-expanded="false"><strong>OOP range</strong><span class="range-summary"></span></button>
+                <button type="button" class="secondary" data-player="1" aria-controls="range-editor" aria-expanded="false"><strong>IP range</strong><span class="range-summary"></span></button>
+              </div>
+              <div id="range-editor" class="range-editor" hidden>
+                <div class="preset-row"><label class="sr-only" for="preset">Range preset</label><select id="preset"><option value="example">Example</option><option value="tight">Tight</option><option value="wide">All hands</option><option value="clear">Clear</option></select><button type="button" class="secondary small" id="apply-preset">Apply</button></div>
+                <div class="matrix-range" id="range-matrix" aria-label="Editable 13 by 13 hand range"></div>
+                <div class="range-edit"><div class="edit-title"><strong id="range-cat">AKs</strong><span id="range-cat-count" class="muted"></span></div><label class="freq-label" for="range-freq">Frequency <output id="range-freq-label">0%</output></label><input type="range" id="range-freq" min="0" max="100" step="1" value="0"><details class="advanced exact-range"><summary>Exact combos</summary><div id="range-combos" class="range-combos"></div></details></div>
+              </div>
+            </section>
           </div>
-          <details class="solve-console benchmark-console" id="benchmark-console" aria-label="Algorithm benchmark results" hidden>
-            <summary>Algorithm benchmark <span class="solve-console-hint" id="benchmark-status">Sequential algorithm timing comparison</span></summary>
-            <div class="solve-console-body">
-              <p class="subtle-note" id="benchmark-context">Each algorithm uses the same board, ranges, betting tree, iteration limit, and Nash exploitability target. QRE optimizes a different objective and is shown separately.</p>
-              <canvas id="benchmark-convergence-chart" width="720" height="220" style="max-width:100%;height:auto" aria-label="Algorithm convergence curves; iterations versus exploitability"></canvas>
-              <div class="benchmark-tools"><label class="secondary small file-button">Compare saved benchmark<input id="benchmark-compare-file" type="file" accept=".json,application/json"></label></div>
-              <div id="benchmark-compare-summary" class="study-results" hidden></div>
-              <div class="benchmark-table-wrap"><table class="benchmark-table" id="benchmark-table" aria-label="Algorithm runtime comparison">
-                <thead><tr><th>Algorithm</th><th>Result</th><th>Iterations</th><th>Wall time</th><th>Iter/s</th><th>Nash exploit. % pot</th><th>QRE gap</th></tr></thead>
-                <tbody id="benchmark-rows"></tbody>
-              </table></div>
-              <div class="solve-console-toolbar"><span id="benchmark-progress" role="status" aria-live="polite">No runs yet.</span><div class="benchmark-tools"><button id="benchmark-copy" class="secondary small" type="button" disabled>Copy benchmark</button><button id="benchmark-csv" class="secondary small" type="button" disabled>Export CSV</button><button id="benchmark-json" class="secondary small" type="button" disabled>Save benchmark JSON</button></div></div>
-              <details class="benchmark-details"><summary>Full individual solver logs</summary><pre id="benchmark-output" role="log" aria-label="Sequential algorithm benchmark logs"></pre></details>
-            </div>
-          </details>
-          <details class="solve-console" id="solve-console" aria-label="Completed solve console" hidden>
-            <summary>Completed solve console <span class="solve-console-hint">Algorithm · time · iterations · results</span></summary>
-            <div class="solve-console-body">
-              <div class="solve-console-toolbar"><span>Run report (also printed to browser developer console)</span><button id="solve-console-copy" class="secondary small" type="button" disabled>Copy log</button></div>
-              <pre id="solve-console-output" role="log" aria-label="Completed solver settings and statistics"></pre>
-            </div>
-          </details>
-          <div class="mobile-shortcuts"><button type="button" class="secondary small" id="quick-solve">Solve settings</button><button type="button" class="secondary small" id="quick-tree">Game tree / locks</button></div><div id="solve-view" role="tabpanel" aria-labelledby="tab-solve" tabindex="0">
-            <div class="solver-fields solver-method-fields">
-            <label>Solution method<select id="solver-method"><option value="gto" selected>Nash / GTO</option><option value="qre">Near-GTO QRE</option></select></label>
-            <label id="gto-algorithm-field">GTO algorithm<select id="gto-algorithm">
-              <optgroup label="Recommended / benchmark candidates">
-                <option value="dcfr" selected>DCFR · established</option>
-                <option value="dcfr-scheduled">Scheduled DCFR · experimental</option>
-                <option value="dcfr-scheduled-cubic">Scheduled DCFR + Cubic · experimental</option>
-                <option value="dcfr-cubic">DCFR cubic averaging · experimental</option>
-              </optgroup>
-              <optgroup label="Legacy algorithms">
-                <option value="cfrplus">CFR+ · verified baseline</option>
-              </optgroup>
-              <optgroup label="Additional experimental methods" id="gto-experimental-options" hidden>
-                <option value="dcfr-adaptive">Adaptive DCFR</option>
-                <option value="dcfr-predictive">Predictive DCFR</option>
-                <option value="optimistic">Optimistic CFR+</option>
-                <option value="lcfr">Linear CFR</option>
-                <option value="dcfr-2-0.5-2">DCFR α=2 β=0.5 γ=2 (corrected)</option>
-              </optgroup>
-            </select></label>
-            <label id="qre-temp-field" hidden>QRE temperature <span class="field-unit">% of pot</span><input id="qre-temperature" type="number" min="0.005" max="50" step="0.005" value="0.05"></label>
+          <div class="setup-settings">
+            <details class="advanced section-disclosure" id="bet-sizes-toggle">
+              <summary><span>Bet sizes</span><span class="setting-summary" id="bet-sizes-summary"></span></summary>
+              <div class="disclosure-body">
+                <p class="subtle-note field-help">Percent of pot. Separate sizes with commas. Leave a field blank to skip that bet.</p>
+                <div class="betting-street"><h3>Flop</h3>
+                  <div class="field-row"><label>OOP<input id="flop-sizes0" type="text" value="50" placeholder="None" spellcheck="false"></label><label>IP<input id="flop-sizes1" type="text" value="50" placeholder="None" spellcheck="false"></label></div>
+                </div>
+                <div class="betting-street"><h3>Turn</h3>
+                  <div class="field-row"><label>OOP<input id="turn-sizes0" type="text" value="" placeholder="None" spellcheck="false"></label><label>IP<input id="turn-sizes1" type="text" value="75,150" placeholder="None" spellcheck="false"></label></div>
+                </div>
+                <div class="betting-street"><h3>River</h3>
+                  <div class="field-row"><label>OOP<input id="sizes0" type="text" value="33,75,150" placeholder="None" spellcheck="false"></label><label>IP<input id="sizes1" type="text" value="75,150" placeholder="None" spellcheck="false"></label></div>
+                </div>
+              </div>
+            </details>
+            <details class="advanced section-disclosure" id="frequency-increments-toggle">
+              <summary><span>Frequency increments</span><span class="setting-summary" id="frequency-increments-summary">Unrestricted</span></summary>
+              <div class="disclosure-body">
+                <fieldset id="frequency-increments-fields" aria-describedby="frequency-increments-note">
+                  <legend class="sr-only">Frequency increments by street and player</legend>
+                  <span>Street</span><span>OOP %</span><span>IP %</span>
+                  <span>Flop</span><input id="frequency-flop-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="Flop OOP frequency increment"><input id="frequency-flop-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="Flop IP frequency increment">
+                  <span>Turn</span><input id="frequency-turn-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="Turn OOP frequency increment"><input id="frequency-turn-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="Turn IP frequency increment">
+                  <span>River</span><input id="frequency-river-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="River OOP frequency increment"><input id="frequency-river-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="River IP frequency increment">
+                </fieldset>
+                <p class="subtle-note" id="frequency-increments-note">Nash / GTO only. Enter a step that divides 100, or 0 for unrestricted. A 25% step limits each exact hand to 0%, 25%, 50%, 75%, or 100% per action.</p>
+              </div>
+            </details>
+            <details class="advanced section-disclosure" id="betting-toggle">
+              <summary><span>Betting tree</span><span class="setting-summary" id="betting-tree-summary"></span></summary>
+              <div class="disclosure-body">
+                <div class="field-row tree-limits"><label><span class="inline-field-label">Max raises </span><select id="raises"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option></select></label><label class="toggle-row"><input id="allin" type="checkbox" checked> Include all-in actions</label></div>
+                <p class="subtle-note">Donks are OOP leads after IP was the last aggressor. Raises add the chosen share of the pot after calling. Leave a size blank to skip it.</p>
+                <div class="betting-street"><h3>Flop</h3>
+                  <div class="field-row"><label><span class="inline-field-label">OOP donk bet <span class="field-unit">% pot</span></span><input id="flop-donk-sizes0" type="text" value="50" placeholder="None" spellcheck="false"></label></div>
+                  <div class="field-row" id="flop-entry-row"><label><span class="inline-field-label">Preflop aggressor</span><select id="flop-entry-mode"><option value="ip-aggressor" selected>IP raised preflop (donk possible)</option><option value="normal">OOP raised / no IP aggression (normal)</option></select></label></div>
+                  <div class="field-row"><label><span class="inline-field-label">OOP raise <span class="field-unit">% pot after call</span></span><input id="flop-raise-sizes0" type="text" value="50" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP raise <span class="field-unit">% pot after call</span></span><input id="flop-raise-sizes1" type="text" value="50" placeholder="None" spellcheck="false"></label></div>
+                </div>
+                <div class="betting-street"><h3>Turn</h3>
+                  <div class="field-row"><label><span class="inline-field-label">OOP donk bet <span class="field-unit">% pot</span></span><input id="turn-donk-sizes0" type="text" value="" placeholder="None" spellcheck="false"></label></div>
+                  <div class="field-row" id="turn-entry-row"><label><span class="inline-field-label">Prior flop action</span><select id="turn-entry-mode"><option value="ip-aggressor" selected>IP bet; OOP called (donk possible)</option><option value="normal">Checked through / OOP bet (normal)</option></select></label></div>
+                  <div class="field-row"><label><span class="inline-field-label">OOP raise <span class="field-unit">% pot after call</span></span><input id="turn-raise-sizes0" type="text" value="50,100" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP raise <span class="field-unit">% pot after call</span></span><input id="turn-raise-sizes1" type="text" value="50,100" placeholder="None" spellcheck="false"></label></div>
+                </div>
+                <div class="betting-street"><h3>River</h3>
+                  <div class="field-row"><label><span class="inline-field-label">OOP donk bet <span class="field-unit">% pot</span></span><input id="river-donk-sizes0" type="text" value="" placeholder="None" spellcheck="false"></label></div>
+                  <div class="field-row" id="river-entry-row"><label><span class="inline-field-label">Prior turn action</span><select id="river-entry-mode"><option value="ip-aggressor">IP bet; OOP called (donk possible)</option><option value="normal" selected>Checked through / OOP bet (normal)</option></select></label></div>
+                  <div class="field-row"><label><span class="inline-field-label">OOP raise <span class="field-unit">% pot after call</span></span><input id="raise-sizes0" type="text" value="75" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP raise <span class="field-unit">% pot after call</span></span><input id="raise-sizes1" type="text" value="75" placeholder="None" spellcheck="false"></label></div>
+                </div>
+              </div>
+            </details>
+            <details class="advanced section-disclosure" id="advanced-toggle">
+              <summary><span>Advanced</span><span class="setting-summary" id="advanced-summary"></span></summary>
+              <div class="disclosure-body">
+                <div class="solver-fields solver-method-fields">
+                  <label>Solution method<select id="solver-method"><option value="gto" selected>Nash / GTO</option><option value="qre">Near-GTO QRE</option></select></label>
+                  <label id="gto-algorithm-field">GTO algorithm<select id="gto-algorithm">
+                    <optgroup label="Recommended / benchmark candidates">
+                      <option value="dcfr" selected>DCFR · established</option>
+                      <option value="dcfr-scheduled">Scheduled DCFR · experimental</option>
+                      <option value="dcfr-scheduled-cubic">Scheduled DCFR + Cubic · experimental</option>
+                      <option value="dcfr-cubic">DCFR cubic averaging · experimental</option>
+                    </optgroup>
+                    <optgroup label="Legacy algorithms">
+                      <option value="cfrplus">CFR+ · verified baseline</option>
+                    </optgroup>
+                    <optgroup label="Additional experimental methods" id="gto-experimental-options" hidden>
+                      <option value="dcfr-adaptive">Adaptive DCFR</option>
+                      <option value="dcfr-predictive">Predictive DCFR</option>
+                      <option value="optimistic">Optimistic CFR+</option>
+                      <option value="lcfr">Linear CFR</option>
+                      <option value="dcfr-2-0.5-2">DCFR α=2 β=0.5 γ=2 (corrected)</option>
+                    </optgroup>
+                  </select></label>
+                  <label id="qre-temp-field" hidden>QRE temperature <span class="field-unit">% of pot</span><input id="qre-temperature" type="number" min="0.005" max="50" step="0.005" value="0.05"></label>
+                </div>
+                <div id="hybrid-parameters" class="algorithm-controls" hidden>
+                  <div class="solver-fields">
+                    <label>Alpha start<input id="scheduled-alpha-start" type="number" min="0.5" max="2" step="0.1" value="1"></label>
+                    <label>Alpha gain<input id="scheduled-alpha-gain" type="number" min="0" max="1" step="0.1" value="0.5"></label>
+                    <label>Ramp length<input id="scheduled-ramp-length" type="number" min="2" max="256" step="1" value="16"></label>
+                    <label>Averaging power<input id="scheduled-averaging-power" type="number" min="1" max="4" step="0.5" value="3"></label>
+                  </div>
+                  <p class="subtle-note">Experimental hybrid schedule: α(t) = start + gain × t/(t+ramp). Discount positive regrets using t^α/(t^α+1); average strategies with t^power. Defaults reproduce the researched hybrid.</p>
+                </div>
+                <div id="gto-experiment-controls" class="algorithm-controls"><label class="algorithm-toggle"><input type="checkbox" id="show-experimental-algorithms"><span>Show additional experimental GTO algorithms</span></label><a class="algorithm-benchmark-link" href="algorithm-leaderboard.html" target="_blank" rel="noopener noreferrer">Historical v16.2 leaderboard</a></div>
+                <p class="subtle-note" id="gto-algorithm-note">DCFR is the default. Each GTO algorithm uses the same best-response exploitability check.</p>
+                <p class="subtle-note" id="qre-mode-note" hidden>QRE favors mixed play. Both Nash exploitability and the regularized gap must reach the target.</p>
+                <label class="algorithm-toggle"><input type="checkbox" id="adaptive-convergence"><span>Adaptive exact convergence-check cadence (optional)</span></label>
+
+                <div class="solver-fields"><label>Iterations<input id="iterations" type="number" min="1" max="10000000" step="100" value="1000"></label><label><span id="tolerance-title">Target exploitability</span> <span class="field-unit" id="tolerance-unit">% of pot</span><input id="tolerance" type="number" min="0" step="any" value="0.35" title="Percent of the pot at the start of this solve"></label><label>Memory <span class="field-unit">MiB</span><input id="memory-limit" type="number" min="2" max="4096" step="1" value="128"></label></div>
+                <div class="field-row"><label><span class="inline-field-label">Max tree nodes </span><input id="max-nodes" type="number" min="20" max="100000" step="100" value="18000"></label></div>
+                <details class="advanced" id="optimization-settings"><summary>Runouts &amp; optimizations</summary>
+                  <div class="field-row" id="flop-runout-row" hidden><label><span class="inline-field-label">Turn cards sampled <span class="field-unit">of 49</span></span><input id="flop-turn-samples" type="number" min="1" max="49" step="1" value="8"></label><label><span class="inline-field-label">River cards sampled <span class="field-unit">of 48 per turn</span></span><input id="flop-river-samples" type="number" min="1" max="48" step="1" value="6"></label></div>
+                  <div class="field-row" id="flop-seed-row" hidden><label>Sampling seed <span class="field-unit">0–2147483647</span><input id="flop-sampling-seed" type="number" min="0" max="2147483647" step="1" value="0"></label><button type="button" id="sample-study-start" class="secondary small">Compare 3 seeds</button></div><div class="study-results" id="sample-study-results" hidden aria-live="polite"></div>
+                  <label class="toggle-row"><input id="suit-isomorphism" type="checkbox" checked> Exact public-card suit isomorphism (eligible turn and flop trees)</label>
+                  <label class="toggle-row"><input id="river-hand-symmetry" type="checkbox"> River-only exact private-hand symmetry (compact strategy-state rows; reference JS path)</label>
+                  <p class="subtle-note">River symmetry applies only when the fixed board and <strong>both weighted ranges</strong> allow suit permutations. Flop symmetry requires an invariant sampled runout set; otherwise it safely disables itself.</p>
+                  <div class="advanced" id="frequency-prune-controls">
+                    <label class="toggle-row"><input id="action-frequency-pruning" type="checkbox"> Cull low-frequency bet/raise sizes across the full range <strong>(approximate GTO; opt-in)</strong></label>
+                    <div class="field-row"><label>Frequency cutoff <span class="field-unit">% (0.5–5)</span><input id="action-prune-threshold" type="number" min="0.5" max="5" step="0.5" value="1"></label><label>Warm-up <span class="field-unit">% of planned iterations</span><input id="action-prune-warmup" type="number" min="10" max="50" step="5" value="20"></label></div>
+                    <div class="field-row"><label>Full reevaluation every <span class="field-unit">iterations</span><select id="action-prune-recheck"><option value="50">50</option><option value="100" selected>100</option><option value="250">250</option></select></label></div>
+                    <p class="subtle-note">Culling can change the strategy. The reported exploitability still checks all legal sizes.</p>
+                  </div>
+                  <label class="toggle-row"><input id="zero-reach-pruning" type="checkbox"> Skip provably zero-reach subtrees (experimental native optimization)</label>
+                  <label class="toggle-row"><input id="regret-pruning" type="checkbox"> One-step bounded negative-regret pruning (experimental; native DCFR, river/turn only)</label>
+                  <label class="toggle-row"><input id="enable-profile" type="checkbox"> Record per-phase solving times</label>
+                </details>
+                <div class="control-actions"><button type="button" class="secondary" id="benchmark-all">Benchmark algorithms</button><button type="button" class="secondary" id="reset">Reset results</button></div>
+                <details class="solve-console benchmark-console" id="benchmark-console" aria-label="Algorithm benchmark results" hidden>
+                  <summary>Algorithm benchmark <span class="solve-console-hint" id="benchmark-status">Sequential algorithm timing comparison</span></summary>
+                  <div class="solve-console-body">
+                    <p class="subtle-note" id="benchmark-context">Each algorithm uses the same board, ranges, betting tree, iteration limit, and Nash exploitability target. QRE optimizes a different objective and is shown separately.</p>
+                    <canvas id="benchmark-convergence-chart" width="720" height="220" style="max-width:100%;height:auto" aria-label="Algorithm convergence curves; iterations versus exploitability"></canvas>
+                    <div class="benchmark-tools"><label class="secondary small file-button">Compare saved benchmark<input id="benchmark-compare-file" type="file" accept=".json,application/json"></label></div>
+                    <div id="benchmark-compare-summary" class="study-results" hidden></div>
+                    <div class="benchmark-table-wrap"><table class="benchmark-table" id="benchmark-table" aria-label="Algorithm runtime comparison">
+                      <thead><tr><th>Algorithm</th><th>Result</th><th>Iterations</th><th>Wall time</th><th>Iter/s</th><th>Nash exploit. % pot</th><th>QRE gap</th></tr></thead>
+                      <tbody id="benchmark-rows"></tbody>
+                    </table></div>
+                    <div class="solve-console-toolbar"><span id="benchmark-progress" role="status" aria-live="polite">No runs yet.</span><div class="benchmark-tools"><button id="benchmark-copy" class="secondary small" type="button" disabled>Copy benchmark</button><button id="benchmark-csv" class="secondary small" type="button" disabled>Export CSV</button><button id="benchmark-json" class="secondary small" type="button" disabled>Save benchmark JSON</button></div></div>
+                    <details class="benchmark-details"><summary>Full individual solver logs</summary><pre id="benchmark-output" role="log" aria-label="Sequential algorithm benchmark logs"></pre></details>
+                  </div>
+                </details>
+                <section id="pre-solve-quality" class="study-results" aria-label="Game estimate"></section>
+              </div>
+            </details>
           </div>
-          <div id="hybrid-parameters" class="algorithm-controls" hidden>
-            <div class="solver-fields">
-              <label>Alpha start<input id="scheduled-alpha-start" type="number" min="0.5" max="2" step="0.1" value="1"></label>
-              <label>Alpha gain<input id="scheduled-alpha-gain" type="number" min="0" max="1" step="0.1" value="0.5"></label>
-              <label>Ramp length<input id="scheduled-ramp-length" type="number" min="2" max="256" step="1" value="16"></label>
-              <label>Averaging power<input id="scheduled-averaging-power" type="number" min="1" max="4" step="0.5" value="3"></label>
-            </div>
-            <p class="subtle-note">Experimental hybrid schedule: α(t) = start + gain × t/(t+ramp). Discount positive regrets using t^α/(t^α+1); average strategies with t^power. Defaults reproduce the researched hybrid.</p>
+        </section>
+        <section class="solver-tree" id="tree" role="tabpanel" aria-labelledby="tab-tree" tabindex="0" hidden>
+          <div class="decision-header">
+            <div class="decision-board" id="strategy-board" aria-label="Current board"></div>
+            <div class="decision-info"><strong id="node-actor">OOP to act</strong><div class="node-subtitle" id="node-subtitle"></div></div>
+            <div class="strategy-ev"><span>Range EV</span><strong id="node-ev">—</strong></div>
           </div>
-          <div id="gto-experiment-controls" class="algorithm-controls"><label class="algorithm-toggle"><input type="checkbox" id="show-experimental-algorithms"><span>Show additional experimental GTO algorithms</span></label><a class="algorithm-benchmark-link" href="algorithm-leaderboard.html" target="_blank" rel="noopener noreferrer">Historical v16.2 leaderboard</a></div>
-          <p class="subtle-note" id="gto-algorithm-note">DCFR is the default established algorithm. CFR+ remains available under Legacy algorithms as the verified baseline; Scheduled DCFR, its cubic hybrid, and cubic-averaging DCFR are experimental candidates. Additional experimental variants are hidden by default, not deleted. All GTO algorithms use the same exact Nash exploitability check. The convergence benchmark is workload-specific and is not a guarantee that any variant will be faster on your game.</p>
-          <p class="subtle-note" id="qre-mode-note" hidden>Low-temperature, entropy-regularized QRE favors near-GTO play while keeping rare actions possible. Default 0.05% of pot. Higher temperatures can deliberately change strategy and increase exploitability. Both ordinary Nash exploitability and the regularized QRE gap must meet the target. Independent model; not GTO Wizard's proprietary solver.</p>
-          <label class="algorithm-toggle"><input type="checkbox" id="adaptive-convergence"><span>Adaptive exact convergence-check cadence (optional)</span></label>
-          <p class="subtle-note">When far from the target, exact checks use larger iteration intervals. Near the target they become frequent. Stopping still requires an exact full-tree Nash verification.</p>
-          <div class="solver-fields"><label>Iterations<input id="iterations" type="number" min="1" max="10000000" step="100" value="1000"></label><label><span id="tolerance-title">Target exploitability</span> <span class="field-unit" id="tolerance-unit">% of pot</span><input id="tolerance" type="number" min="0" step="any" value="0.35" title="Percent of the pot at the start of this solve"></label><label>Memory <span class="field-unit">MiB</span><input id="memory-limit" type="number" min="2" max="4096" step="1" value="128"></label></div>
-          <details class="advanced section-disclosure" id="frequency-increments-toggle">
-            <summary><span>Frequency increments</span><span class="disclosure-state" aria-hidden="true"></span></summary>
+          <div class="tree-breadcrumb" id="tree-breadcrumb" aria-label="Betting path"></div>
+          <div id="tree-actions" class="tree-actions" aria-label="Actions"></div>
+          <button id="continue-street" type="button" class="primary" hidden>Solve from this street</button>
+          <section class="combined-strategy" id="strategy" aria-label="Hand strategy">
+            <div class="strategy-layout decision-strategy">
+              <div class="matrix-strategy" id="strategy-matrix" aria-label="Solved 13 by 13 strategy"></div>
+              <aside class="strategy-sidebar combo-inspector" id="combo-inspector" aria-label="Exact combos" hidden>
+                <div class="subsection-head"><strong id="combo-cat"></strong><span id="combo-count" class="muted"></span><button id="close-combos" class="secondary small" type="button">Close</button></div>
+                <div id="combo-details" class="combo-details"></div>
+              </aside>
+            </div>
+            <details id="strategy-options" class="advanced section-disclosure" hidden>
+              <summary>Filters &amp; hand classes<span class="setting-summary" id="strategy-filter-summary"></span></summary>
+              <div class="disclosure-body">
+                <div class="strategy-view-controls" id="strategy-view-controls" hidden><label for="frequency-view">View</label><select id="frequency-view"><option value="remaining" selected>Remaining combos</option><option value="full">Full frequency</option></select><span id="frequency-note" class="muted"></span></div><div class="strategy-filters" id="strategy-filters" role="group" aria-label="Strategy filters" hidden>
+                <span class="filter-label">Suits</span><div class="suit-filter-buttons" role="group" aria-label="Hole card suits"><button type="button" data-suit="all" aria-pressed="true">All</button><button type="button" class="s-s" data-suit="s" aria-label="Spades" title="Spades" aria-pressed="false">Spades</button><button type="button" class="s-h" data-suit="h" aria-label="Hearts" title="Hearts" aria-pressed="false">Hearts</button><button type="button" class="s-d" data-suit="d" aria-label="Diamonds" title="Diamonds" aria-pressed="false">Diamonds</button><button type="button" class="s-c" data-suit="c" aria-label="Clubs" title="Clubs" aria-pressed="false">Clubs</button></div><label class="suit-both"><input type="checkbox" id="suit-both"> Both cards</label><button type="button" class="filter-clear" id="clear-filters" hidden>Clear filters</button></div>
+                <aside class="strategy-sidebar hand-class-sidebar" id="hand-classes" aria-label="Hand classes" hidden></aside>
+              </div>
+            </details>
+          </section>
+          <details class="advanced section-disclosure" id="node-lock-editor">
+            <summary><span>Lock strategy</span><span class="setting-summary" id="decision-lock-state"></span></summary>
             <div class="disclosure-body">
-              <fieldset id="frequency-increments-fields" aria-describedby="frequency-increments-note">
-                <legend class="sr-only">Frequency increments by street and player</legend>
-                <span>Street</span><span>OOP %</span><span>IP %</span>
-                <span>Flop</span><input id="frequency-flop-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="Flop OOP frequency increment"><input id="frequency-flop-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="Flop IP frequency increment">
-                <span>Turn</span><input id="frequency-turn-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="Turn OOP frequency increment"><input id="frequency-turn-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="Turn IP frequency increment">
-                <span>River</span><input id="frequency-river-0" type="number" min="0" max="100" step="0.01" value="0" aria-label="River OOP frequency increment"><input id="frequency-river-1" type="number" min="0" max="100" step="0.01" value="0" aria-label="River IP frequency increment">
-              </fieldset>
-              <p class="subtle-note" id="frequency-increments-note">Nash / GTO only. Use 0 for unrestricted frequencies or enter a step that divides 100 evenly. For example, 25 limits each exact hand to 0%, 25%, 50%, 75%, or 100% per action. Larger steps can raise exploitability.</p>
+            <h3 id="node-lock-title">Lock decision</h3>
+            <p class="subtle-note" id="node-lock-help">Set the whole-range action frequencies for this node.</p>
+            <div class="node-lock-inputs" id="node-lock-inputs"></div>
+            <div class="control-actions"><button type="button" id="study-capture" class="secondary">Capture comparison baseline</button><button type="button" id="study-save-baseline" class="secondary small">Export baseline</button><label class="secondary small file-button">Load baseline<input type="file" id="study-load-baseline" accept=".json,application/json"></label><button type="button" id="study-lock-solved" class="secondary">Lock current solved strategy</button><button type="button" id="node-lock-apply" class="primary">Lock whole node</button><button type="button" id="node-lock-remove" class="secondary" hidden>Unlock this node</button></div>
+            <details class="advanced node-combo-lock-editor" id="node-combo-lock-editor" hidden>
+              <summary>Lock exact combos</summary>
+              <p class="subtle-note" id="node-lock-combo-summary">Choose a hand class, then lock individual suit combinations.</p>
+              <div class="node-lock-category-grid" id="node-lock-category-grid" aria-label="Hand classes for node combo locking"></div>
+              <div class="subsection-head"><strong id="node-lock-combo-title">Hand combinations</strong></div>
+              <div class="node-lock-combo-list" id="node-lock-combo-list"></div><div class="control-actions"><button type="button" class="secondary small" id="node-lock-select-all">Select all visible</button><button type="button" class="secondary small" id="node-lock-fill-selected">Copy first selected mix to selected</button><button type="button" class="secondary small" id="node-lock-apply-selected">Lock selected combos</button><button type="button" class="secondary small" id="node-lock-unlock-selected">Unlock selected combos</button></div>
+              <div class="control-actions"><button type="button" class="secondary small" id="node-lock-class-preset">Copy whole-node mix into class fields</button><button type="button" class="secondary small" id="node-lock-class-apply">Lock all in this class</button><button type="button" class="secondary small" id="node-lock-class-clear">Unlock this class</button></div>
+              <p class="subtle-note">Individual combo locks hold their percentages for that exact hand only. Unlocked combos at the same node continue solving normally. Locking the whole node replaces individual locks.</p>
+            </details>
+            <section id="study-comparison" class="study-results" hidden aria-live="polite"></section>
             </div>
           </details>
-          <details class="advanced section-disclosure" id="betting-toggle" open><summary><span>Betting settings</span><span class="disclosure-state" aria-hidden="true"></span></summary><div class="disclosure-body">
-            <div class="field-row"><label><span class="inline-field-label">Pot <span class="field-unit">chips</span></span><input id="pot" type="number" min="1" max="1000000" step="1" value="100"></label><label><span class="inline-field-label">Stack <span class="field-unit">chips</span></span><input id="stack" type="number" min="1" max="1000000" step="1" value="300"></label></div>
-            <div class="betting-street" id="flop-size-row" hidden><div class="betting-street-title">Flop</div>
-              <div class="field-row"><label><span class="inline-field-label">OOP normal / probe bet <span class="field-unit">% pot</span></span><input id="flop-sizes0" type="text" value="50" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP bet <span class="field-unit">% pot</span></span><input id="flop-sizes1" type="text" value="50" placeholder="None" spellcheck="false"></label></div>
-              <div class="field-row"><label><span class="inline-field-label">OOP donk bet <span class="field-unit">% pot</span></span><input id="flop-donk-sizes0" type="text" value="50" placeholder="None" spellcheck="false"></label></div>
-              <div class="field-row" id="flop-entry-row"><label><span class="inline-field-label">Preflop aggressor (flop-only)</span><select id="flop-entry-mode"><option value="ip-aggressor" selected>IP raised preflop (donk possible)</option><option value="normal">OOP raised / no IP aggression (normal)</option></select></label></div>
-              <p class="subtle-note">Flop donks are first-to-act OOP leads when IP was the preflop aggressor. Select the preflop aggressor for a standalone flop solve; only the OOP opening bet uses donk sizing.</p>
-              <div class="field-row"><label><span class="inline-field-label">OOP raise <span class="field-unit">% pot after call</span></span><input id="flop-raise-sizes0" type="text" value="50" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP raise <span class="field-unit">% pot after call</span></span><input id="flop-raise-sizes1" type="text" value="50" placeholder="None" spellcheck="false"></label></div>
-            </div>
-            <div class="betting-street" id="turn-size-row"><div class="betting-street-title">Turn</div>
-              <div class="field-row"><label><span class="inline-field-label">OOP normal / probe bet <span class="field-unit">% pot</span></span><input id="turn-sizes0" type="text" value="" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP normal bet <span class="field-unit">% pot</span></span><input id="turn-sizes1" type="text" value="75,150" placeholder="None" spellcheck="false"></label></div>
-              <div class="field-row"><label><span class="inline-field-label">OOP donk bet <span class="field-unit">% pot</span></span><input id="turn-donk-sizes0" type="text" value="" placeholder="None" spellcheck="false" aria-describedby="turn-donk-note"></label></div>
-              <div class="field-row" id="turn-entry-row"><label><span class="inline-field-label">Prior flop action (turn-only)</span><select id="turn-entry-mode"><option value="ip-aggressor" selected>IP bet; OOP called (donk possible)</option><option value="normal">Checked through / OOP bet (normal)</option></select></label></div>
-              <p class="subtle-note" id="turn-donk-note">A donk bet is an OOP lead after IP was the last aggressor on the flop. Flop-mode solves detect this automatically. With a turn-only board, select the preceding flop action above. Blank donk sizes disable percentage-based donks; all-ins are controlled separately.</p>
-              <div class="field-row"><label><span class="inline-field-label">OOP raise <span class="field-unit">% pot after call</span></span><input id="turn-raise-sizes0" type="text" value="50,100" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP raise <span class="field-unit">% pot after call</span></span><input id="turn-raise-sizes1" type="text" value="50,100" placeholder="None" spellcheck="false"></label></div>
-            </div>
-            <div class="betting-street" id="river-size-row"><div class="betting-street-title">River</div>
-              <div class="field-row"><label><span class="inline-field-label">OOP normal / probe bet <span class="field-unit">% pot</span></span><input id="sizes0" type="text" value="33,75,150" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP bet <span class="field-unit">% pot</span></span><input id="sizes1" type="text" value="75,150" placeholder="None" spellcheck="false"></label></div>
-              <div class="field-row"><label><span class="inline-field-label">OOP donk bet <span class="field-unit">% pot</span></span><input id="river-donk-sizes0" type="text" value="" placeholder="None" spellcheck="false"></label></div>
-              <div class="field-row" id="river-entry-row"><label><span class="inline-field-label">Prior turn action (river-only)</span><select id="river-entry-mode"><option value="ip-aggressor">IP bet; OOP called (donk possible)</option><option value="normal" selected>Checked through / OOP bet (normal)</option></select></label></div>
-              <p class="subtle-note">River donks apply when IP was the last aggressor on the turn. Flop/turn-mode trees detect this automatically; river-only solves use the preceding-turn selector.</p>
-              <div class="field-row"><label><span class="inline-field-label">OOP raise <span class="field-unit">% pot after call</span></span><input id="raise-sizes0" type="text" value="75" placeholder="None" spellcheck="false"></label><label><span class="inline-field-label">IP raise <span class="field-unit">% pot after call</span></span><input id="raise-sizes1" type="text" value="75" placeholder="None" spellcheck="false"></label></div>
-            </div>
-            <div class="field-row" id="flop-runout-row" hidden><label><span class="inline-field-label">Turn cards sampled <span class="field-unit">of 49</span></span><input id="flop-turn-samples" type="number" min="1" max="49" step="1" value="8"></label><label><span class="inline-field-label">River cards sampled <span class="field-unit">of 48 per turn</span></span><input id="flop-river-samples" type="number" min="1" max="48" step="1" value="6"></label></div>
-            <div class="field-row" id="flop-seed-row" hidden><label>Sampling seed <span class="field-unit">0–2147483647</span><input id="flop-sampling-seed" type="number" min="0" max="2147483647" step="1" value="0"></label><button type="button" id="sample-study-start" class="secondary small">Compare 3 seeds</button></div><div class="study-results" id="sample-study-results" hidden aria-live="polite"></div><p class="subtle-note" id="flop-runout-note" hidden>Flop sampling is an <strong>approximation</strong> of the full game. Increase samples for better coverage, or use 49 turns × 48 rivers for full enumeration (requires substantially more memory and time).</p>
-            <div class="field-row"><label><span class="inline-field-label">Max raises </span><select id="raises"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option></select></label><label><span class="inline-field-label">Max tree nodes </span><input id="max-nodes" type="number" min="20" max="100000" step="100" value="18000"></label></div>
-            <label class="toggle-row"><input id="allin" type="checkbox" checked> Include all-in actions</label>
-            <label class="toggle-row"><input id="suit-isomorphism" type="checkbox" checked> Exact public-card suit isomorphism (eligible turn and flop trees)</label>
-            <label class="toggle-row"><input id="river-hand-symmetry" type="checkbox"> River-only exact private-hand symmetry (compact strategy-state rows; reference JS path)</label>
-            <p class="subtle-note">River symmetry applies only when the fixed board and <strong>both weighted ranges</strong> allow suit permutations. Flop symmetry requires an invariant sampled runout set; otherwise it safely disables itself.</p>
-            <div class="advanced" id="frequency-prune-controls">
-              <label class="toggle-row"><input id="action-frequency-pruning" type="checkbox"> Cull low-frequency bet/raise sizes across the full range <strong>(approximate GTO; opt-in)</strong></label>
-              <div class="field-row"><label>Frequency cutoff <span class="field-unit">% (0.5–5)</span><input id="action-prune-threshold" type="number" min="0.5" max="5" step="0.5" value="1"></label><label>Warm-up <span class="field-unit">% of planned iterations</span><input id="action-prune-warmup" type="number" min="10" max="50" step="5" value="20"></label></div>
-              <div class="field-row"><label>Full reevaluation every <span class="field-unit">iterations</span><select id="action-prune-recheck"><option value="50">50</option><option value="100" selected>100</option><option value="250">250</option></select></label></div>
-              <p class="subtle-note">Culls an entire bet/raise size at each decision node when its <strong>range-weighted frequency</strong> falls below the cutoff (not a per-hand threshold). Culled actions become 0% for all hands and disappear from the action cards. Every 50/100/250 iterations, all sizes are reconsidered and can return. Check/fold/call/all-in remain available. Full-tree exploitability is still measured against every legal action, including culled sizes. This approximate GTO mode can use native scalar/SIMD WebAssembly when supported; otherwise it uses the JavaScript reference path.</p>
-            </div>
-            <label class="toggle-row"><input id="zero-reach-pruning" type="checkbox"> Skip provably zero-reach subtrees (experimental native optimization)</label>
-            <label class="toggle-row"><input id="regret-pruning" type="checkbox"> One-step bounded negative-regret pruning (experimental; native DCFR, river/turn only)</label>
-            <p class="subtle-note">Donk sizes apply only to eligible OOP flop, turn and river opening leads (not IP bets or raises). Use commas for multiple sizes (e.g. 33, 75). Blank bet or raise fields disable only that action type. Raises add the chosen percentage of the pot after calling, subject to the minimum legal raise. Max raises limits raises per street (0 = none); all-ins are separate.</p>
-          </div></details>
-          <section id="pre-solve-quality" class="study-results" role="status" aria-live="polite">Preparing game estimate…</section><p class="subtle-note"><strong id="node-lock-count">No node locks</strong> · Set a node lock in the <strong>Game tree</strong> tab, then solve. Lock an entire decision or selected exact two-card combinations; unlocked hands keep adapting. GTO only. A locked-game convergence target does not mean the resulting strategy is an unrestricted Nash equilibrium.</p><div class="control-actions"><button id="clear-all-node-locks" type="button" class="secondary" disabled>Clear all node locks</button></div>
-          <div class="control-actions"><button type="button" class="primary" id="solve">Solve</button><button type="button" class="secondary" id="benchmark-all" title="Run compatible algorithms sequentially on this game">Benchmark all algorithms</button><button type="button" class="secondary" id="stop" disabled>Stop</button><button type="button" class="secondary" id="reset">Reset</button><button type="button" class="secondary" id="export" disabled>Export JSON</button><button type="button" class="secondary" id="save-local" disabled>Save solution</button><button type="button" class="secondary" id="save-checkpoint" disabled>Save checkpoint</button><label class="secondary file-button">Resume checkpoint<input type="file" id="open-checkpoint" accept=".trlc,application/octet-stream"></label><label class="secondary file-button">Open solution<input type="file" id="open-solution" accept=".json,application/json"></label></div>
-          <div class="saved-row" id="saved-row" hidden><select id="saved-select" aria-label="Saved solutions"></select><button id="load-local" class="secondary small" type="button">Load</button><button id="delete-local" class="secondary small" type="button">Delete</button></div><div class="progress"><div class="progress-track"><div id="progress-bar"></div></div><div class="progress-caption"><span id="progress-text">Ready to solve</span><span id="progress-percent">0%</span></div></div>
-          <div class="metrics"><div class="metric"><span>Iterations</span><strong id="stat-iterations">0</strong></div><div class="metric"><span id="stat-main-label">Nash exploitability (chips/player)</span><strong id="stat-exploit">—</strong></div><div class="metric"><span>Elapsed</span><strong id="stat-time">—</strong></div></div>
-          <details class="advanced diagnostics section-disclosure" id="diagnostics-toggle" open><summary><span>Diagnostics</span><span class="disclosure-state" aria-hidden="true"></span></summary><div class="disclosure-body">
-            <label class="toggle-row"><input id="enable-profile" type="checkbox"> Record per-phase solving times</label><div class="diagnostic-metrics"><span>Speed: <strong id="stat-speed">—</strong> iter/s</span><span>Memory: <strong id="stat-memory">—</strong></span></div>
+          <div class="lock-management" id="lock-management" hidden>
+            <span id="node-lock-count"></span><button id="clear-all-node-locks" type="button" class="secondary small">Clear all locks</button>
+          </div>
+          <details class="advanced diagnostics section-disclosure" id="diagnostics-toggle"><summary><span>Diagnostics</span></summary><div class="disclosure-body">
+            <div class="diagnostic-metrics"><span>Speed: <strong id="stat-speed">—</strong> iter/s</span><span>Memory: <strong id="stat-memory">—</strong></span></div>
             <p id="phase-profile" class="subtle-note" hidden></p><canvas id="chart" height="160" aria-label="Exploitability versus iterations"></canvas>
             <div class="chart-foot"><span id="stat-qre-gap" hidden>Regularized QRE gap: —</span><span id="stat-tpwl">Tree PWL: —</span><span id="stat-nash">NashConv: —</span><span id="stat-ev">OOP EV: —</span><span id="stat-zero">Pot accounting error: —</span></div>
-          </div></details>
-          </div>
-          <section class="solver-tree" id="tree" role="tabpanel" aria-labelledby="tab-tree" tabindex="0" hidden>
-            <div class="section-head"><h3 id="tree-title">Game tree</h3><span class="small-chip" id="tree-node-count">— nodes</span></div>
-            <div class="tree-breadcrumb" id="tree-breadcrumb"></div><div id="tree-summary" class="tree-summary"></div><div class="tree-actions" id="tree-actions"></div>
-            <section class="node-lock-editor" id="node-lock-editor" aria-label="Node locking" hidden>
-              <div class="section-head"><h4 id="node-lock-title">Lock decision</h4><span class="small-chip">Whole node</span></div>
-              <p class="subtle-note" id="node-lock-help">Set the whole-range action frequencies for this node.</p>
-              <div class="node-lock-inputs" id="node-lock-inputs"></div>
-              <div class="control-actions"><button type="button" id="study-capture" class="secondary">Capture comparison baseline</button><button type="button" id="study-save-baseline" class="secondary small">Export baseline</button><label class="secondary small file-button">Load baseline<input type="file" id="study-load-baseline" accept=".json,application/json"></label><button type="button" id="study-lock-solved" class="secondary">Lock current solved strategy</button><button type="button" id="node-lock-apply" class="primary">Lock whole node</button><button type="button" id="node-lock-remove" class="secondary" hidden>Unlock this node</button></div>
-              <div class="node-combo-lock-editor" id="node-combo-lock-editor" hidden>
-                <div class="section-head"><h4>Exact combination locking</h4><span class="small-chip">13 × 13 hand classes</span></div>
-                <p class="subtle-note" id="node-lock-combo-summary">Choose a hand class, then lock individual suit combinations.</p>
-                <div class="node-lock-category-grid" id="node-lock-category-grid" aria-label="Hand classes for node combo locking"></div>
-                <div class="subsection-head"><strong id="node-lock-combo-title">Hand combinations</strong></div>
-                <div class="node-lock-combo-list" id="node-lock-combo-list"></div><div class="control-actions"><button type="button" class="secondary small" id="node-lock-select-all">Select all visible</button><button type="button" class="secondary small" id="node-lock-fill-selected">Copy first selected mix to selected</button><button type="button" class="secondary small" id="node-lock-apply-selected">Lock selected combos</button><button type="button" class="secondary small" id="node-lock-unlock-selected">Unlock selected combos</button></div>
-                <div class="control-actions"><button type="button" class="secondary small" id="node-lock-class-preset">Copy whole-node mix into class fields</button><button type="button" class="secondary small" id="node-lock-class-apply">Lock all in this class</button><button type="button" class="secondary small" id="node-lock-class-clear">Unlock this class</button></div>
-                <p class="subtle-note">Individual combo locks hold their percentages for that exact hand only. Unlocked combos at the same node continue solving normally. Locking the whole node replaces individual locks.</p>
+            <details class="solve-console" id="solve-console" aria-label="Completed solve console" hidden>
+              <summary>Completed solve console <span class="solve-console-hint">Algorithm · time · iterations · results</span></summary>
+              <div class="solve-console-body">
+                <div class="solve-console-toolbar"><span>Run report (also printed to browser developer console)</span><button id="solve-console-copy" class="secondary small" type="button" disabled>Copy log</button></div>
+                <pre id="solve-console-output" role="log" aria-label="Completed solver settings and statistics"></pre>
               </div>
-            </section><section id="study-comparison" class="study-results" hidden aria-live="polite"></section><button id="continue-street" type="button" class="primary" hidden>Continue solving from this street</button>
-          <section class="combined-strategy" id="strategy">
-          <div class="section-head"><h2>Strategy</h2><span class="small-chip" id="node-actor">OOP TO ACT</span></div>
-          <p class="subtle-note" id="lazy-report-note">After solving, exact hand and action EVs are calculated when you open a decision. Export JSON or Save solution prepares the complete traditional report on demand.</p>
-          <div class="strategy-top"><div><div id="node-path" class="node-path">Board</div><div class="node-subtitle" id="node-subtitle">Solve to view frequencies and EVs.</div></div><div class="strategy-ev"><span>Range EV</span><strong id="node-ev">—</strong></div></div>
-          <div class="legend" id="legend"></div>
-          <div class="strategy-view-controls" id="strategy-view-controls" hidden><label for="frequency-view">View</label><select id="frequency-view"><option value="remaining" selected>Remaining combos</option><option value="full">Full frequency</option></select><span id="frequency-note" class="muted"></span></div><div class="strategy-filters" id="strategy-filters" role="group" aria-label="Strategy filters" hidden>
-          <span class="filter-label">Suits</span><div class="suit-filter-buttons" role="group" aria-label="Hole card suits"><button type="button" data-suit="all" aria-pressed="true">All</button><button type="button" class="s-s" data-suit="s" aria-label="Spades" title="Spades" aria-pressed="false">Spades</button><button type="button" class="s-h" data-suit="h" aria-label="Hearts" title="Hearts" aria-pressed="false">Hearts</button><button type="button" class="s-d" data-suit="d" aria-label="Diamonds" title="Diamonds" aria-pressed="false">Diamonds</button><button type="button" class="s-c" data-suit="c" aria-label="Clubs" title="Clubs" aria-pressed="false">Clubs</button></div><label class="suit-both"><input type="checkbox" id="suit-both"> Both cards</label><button type="button" class="filter-clear" id="clear-filters" hidden>Clear filters</button></div>
-          <div class="strategy-layout strategy-with-classes"><div class="matrix-strategy" id="strategy-matrix" aria-label="Solved 13 by 13 strategy"></div><aside class="strategy-sidebar hand-class-sidebar" id="hand-classes" aria-label="Hand classes" hidden></aside><div class="strategy-sidebar combo-inspector"><div class="subsection-head"><strong id="combo-cat">Select a hand</strong><span id="combo-count" class="muted"></span></div><div id="combo-details" class="combo-details"><p class="muted">Choose a hand category to see combos and EVs.</p></div></div></div>
+            </details>
+          </div></details>
+        </section>
+        <section id="library-view" hidden aria-labelledby="library-title">
+          <div class="section-head library-heading">
+            <h2 id="library-title">Flop library</h2><button class="secondary small" type="button" id="lib-back">Back to Setup</button>
+          </div>
+          <div class="library-layout">
+          <section class="panel library-controls">
+            <div class="section-head"><h3>Choose a line</h3><span id="lib-count" class="small-chip"></span><button type="button" class="secondary small" id="lib-retry" hidden>Retry</button></div>
+            <label class="mode-selector">Configuration<select id="lib-config"></select></label>
+            <label class="mode-selector">Flop<select id="lib-flop"></select></label>
+            <div id="lib-board" class="board-cards"></div>
+            <label class="mode-selector">Continue from flop line<select id="lib-line"></select></label>
+            <p id="lib-line-note" class="subtle-note"></p>
+            <div class="field-row"><label>Original flop pot <input id="lib-pot" type="number" min="1" step="1" placeholder="Enter chips"></label><label>Flop effective stack<input id="lib-stack" type="number" min="1" step="1" placeholder="Enter chips"></label></div>
+            <label class="mode-selector" id="lib-bet-field">Flop bet amount <span class="field-unit">chips · editable</span><input id="lib-bet" type="number" min="1" step="1" placeholder="Calculated from pot"></label>
+            <label class="mode-selector">Turn card<select id="lib-turn"></select></label>
+            <div id="lib-preview" class="library-preview"></div>
+            <button id="lib-continue" class="primary" type="button" disabled>Continue to turn solver</button>
+            <p class="subtle-note">Uses the saved flop strategy, then solves a fresh turn/river game. Pot and stack load from the TSV when available; they can be edited in whole chips. Bet amount is rounded to whole chips and can be corrected to match the source.</p>
+            <details class="advanced"><summary>Import another FlopViewer TSV</summary><input id="lib-file" type="file" accept=".tsv,.txt,text/tab-separated-values"><p class="subtle-note">Uses the original FlopViewer combo order. Optional OriginalFlopPot and FlopEffectiveStack columns load per spot. Only recognized, complete action paths can be continued.</p></details>
           </section>
+          <section class="panel library-strategy">
+            <div class="section-head"><h2>Saved flop strategy</h2><span class="small-chip" id="lib-node-actor"></span></div>
+            <label class="mode-selector">Decision<select id="lib-node"></select></label>
+            <div id="lib-legend" class="legend"></div>
+            <div class="strategy-view-controls"><label for="lib-frequency-view">View</label><select id="lib-frequency-view"><option value="remaining">Remaining combos</option><option value="full">Full frequency</option></select><span id="lib-frequency-note" class="muted"></span></div><div class="strategy-filters" id="lib-strategy-filters" role="group" aria-label="Strategy filters">
+              <span class="filter-label">Suits</span><div class="suit-filter-buttons" role="group" aria-label="Hole card suits"><button type="button" data-suit="all" aria-pressed="true">All</button><button type="button" class="s-s" data-suit="s" aria-label="Spades" title="Spades" aria-pressed="false">Spades</button><button type="button" class="s-h" data-suit="h" aria-label="Hearts" title="Hearts" aria-pressed="false">Hearts</button><button type="button" class="s-d" data-suit="d" aria-label="Diamonds" title="Diamonds" aria-pressed="false">Diamonds</button><button type="button" class="s-c" data-suit="c" aria-label="Clubs" title="Clubs" aria-pressed="false">Clubs</button></div><label class="suit-both"><input type="checkbox" id="lib-suit-both"> Both cards</label><button type="button" class="filter-clear" id="lib-clear-filters" hidden>Clear filters</button></div>
+            <div class="strategy-layout strategy-with-classes"><div id="lib-matrix" class="matrix-strategy" aria-label="Imported flop strategy"></div><aside class="strategy-sidebar hand-class-sidebar" id="lib-hand-classes" aria-label="Hand classes"></aside><div class="strategy-sidebar combo-inspector"><div class="subsection-head"><strong id="lib-combo-cat">AKs</strong></div><div id="lib-combos" class="combo-details"></div></div></div>
+            <p class="subtle-note">Action frequencies and source EVs are imported as exported. Source EV units/baseline are not specified; solver EVs use fold = 0. Raise sizes not included in the TSV are shown without invented amounts.</p>
           </section>
+          </div>
         </section>
       </div>
     </main>
+    <footer class="run-bar" id="solver-run-bar">
+      <div class="run-content">
+        <div class="run-action"><button type="button" class="primary" id="solve">Solve</button><button type="button" class="secondary" id="stop" disabled hidden>Stop</button></div>
+        <div class="run-readout">
+          <div class="run-state"><strong class="status-tag" id="solver-status" aria-live="polite">READY</strong><span id="run-scope">Turn + river</span><span id="progress-percent" hidden>0%</span></div>
+          <div class="run-stats"><span><strong id="stat-iterations">0</strong> iter</span><span><span id="stat-main-label" title="Nash exploitability in chips per player">Exploitability</span> <strong id="stat-exploit">—</strong></span><span class="run-time" id="stat-time">—</span></div>
+          <span class="sr-only" id="progress-text">Ready to solve</span>
+        </div>
+      </div>
+      <div class="progress-track" aria-hidden="true"><div id="progress-bar"></div></div>
+    </footer>
   </div>
-  <script src="pokertools-host.js"></script>
+  <script src="pokertools-host.js?v=solver-layout"></script>
   <script src="flop-combo-order.js"></script>
-  <script src="core.js?v=frequency-increments"></script><script src="checkpoint-format.js"></script><script src="wasm-kernel-data.js"></script><script src="compiled-traversal.js?v=frequency-increments"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js?v=frequency-increments"></script>
+  <script src="core.js?v=frequency-increments"></script><script src="checkpoint-format.js"></script><script src="wasm-kernel-data.js"></script><script src="compiled-traversal.js?v=frequency-increments"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js?v=solver-layout"></script>
 </body>
 </html>
