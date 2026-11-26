@@ -162,11 +162,12 @@
                 <label class="algorithm-toggle"><input type="checkbox" id="adaptive-convergence"><span>Adaptive exact convergence-check cadence (optional)</span></label>
 
                 <div class="solver-fields"><label>Iterations<input id="iterations" type="number" min="1" max="10000000" step="100" value="1000"></label><label><span id="tolerance-title">Target exploitability</span> <span class="field-unit" id="tolerance-unit">% of pot</span><input id="tolerance" type="number" min="0" step="any" value="0.35" title="Percent of the pot at the start of this solve"></label><label>Memory <span class="field-unit">MiB</span><input id="memory-limit" type="number" min="2" max="4096" step="1" value="128"></label></div>
-                <div class="field-row"><label><span class="inline-field-label">Max tree nodes </span><input id="max-nodes" type="number" min="20" max="100000" step="100" value="18000"></label></div>
+                <div class="field-row"><label><span class="inline-field-label">Max tree nodes </span><input id="max-nodes" type="number" min="20" max="250000" step="100" value="18000"></label></div>
                 <details class="advanced" id="optimization-settings"><summary>Runouts &amp; optimizations</summary>
                   <div class="field-row" id="flop-runout-row" hidden><label><span class="inline-field-label">Turn cards sampled <span class="field-unit">of 49</span></span><input id="flop-turn-samples" type="number" min="1" max="49" step="1" value="8"></label><label><span class="inline-field-label">River cards sampled <span class="field-unit">of 48 per turn</span></span><input id="flop-river-samples" type="number" min="1" max="48" step="1" value="6"></label></div>
                   <div class="field-row" id="flop-seed-row" hidden><label>Sampling seed <span class="field-unit">0–2147483647</span><input id="flop-sampling-seed" type="number" min="0" max="2147483647" step="1" value="0"></label><button type="button" id="sample-study-start" class="secondary small">Compare 3 seeds</button></div><div class="study-results" id="sample-study-results" hidden aria-live="polite"></div>
                   <label class="toggle-row"><input id="suit-isomorphism" type="checkbox" checked> Exact public-card suit isomorphism (eligible turn and flop trees)</label>
+                  <label id="flop-sampling-method-row">Flop sampling method<select id="flop-sampling-method"><option value="legacy">Legacy seed mapping</option><option value="uniform">Uniform cards</option><option value="suit-orbits">Suit orbits</option></select></label>
                   <label class="toggle-row"><input id="river-hand-symmetry" type="checkbox"> River-only exact private-hand symmetry (compact strategy-state rows; reference JS path)</label>
                   <p class="subtle-note">River symmetry applies only when the fixed board and <strong>both weighted ranges</strong> allow suit permutations. Flop symmetry requires an invariant sampled runout set; otherwise it safely disables itself.</p>
                   <div class="advanced" id="frequency-prune-controls">
@@ -308,6 +309,6 @@
   </div>
   <script src="pokertools-host.js?v=solver-layout"></script>
   <script src="flop-combo-order.js"></script>
-  <script src="core.js?v=frequency-increments"></script><script src="checkpoint-format.js"></script><script src="wasm-kernel-data.js"></script><script src="compiled-traversal.js?v=frequency-increments"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js?v=solver-layout"></script>
+  <script src="core.js?v=constrained-ev"></script><script src="checkpoint-format.js"></script><script src="wasm-kernel-data.js"></script><script src="native-kernel-data.js"></script><script src="compiled-traversal.js?v=constrained-ev"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js?v=constrained-ev"></script>
 </body>
 </html>

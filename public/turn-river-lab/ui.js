@@ -13,7 +13,7 @@ const view={filter:newFilter(),
  weights:[new Float64Array(1326),new Float64Array(1326)],rangeP:0,rangeCat:'AKs',rangePresets:['example','example'],viewCat:null,
  game:null,report:null,node:0,parents:[],worker:null,fallback:null,
  active:false,stopRequested:false,generation:0,limit:2000,origin:'',solverStatus:'ready',source:null,solveTargetPercent:null,
- fullReportReady:false,fullReportPromise:null,fullReportResolve:null,fullReportReject:null,detailPending:new Set(),fixedActionWarmup:null,fixedPrunePlanned:null,solveRun:null,solveLog:'',benchmark:null,nodeLocks:[],lockCat:'AKs',studyBaseline:null,selectedLockCombos:new Set(),sampleStudy:null
+ fullReportReady:false,fullReportPromise:null,fullReportResolve:null,fullReportReject:null,detailPending:new Set(),detailWaiters:new Map(),fixedActionWarmup:null,fixedPrunePlanned:null,solveRun:null,solveLog:'',benchmark:null,nodeLocks:[],lockCat:'AKs',studyBaseline:null,selectedLockCombos:new Set(),sampleStudy:null
 };
 function escapeHtml(x){return String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function cardHtml(id){const s=C.cardText(id),suit=s[1];return `<span class="mini-card s-${suit}" title="${s[0]} of ${suitNames[suit]}" aria-label="${s[0]} of ${suitNames[suit]}">${s[0]}</span>`;}
@@ -87,7 +87,12 @@ function solveCompletionText({kind,report,config:cfg,game,mode,run,targetPercent
  out(cfg.nodeLocks?.length?'Locked-game gap × 2':'NashConv',numeric(report.nashConv,4)+' chips');
  if(cfg.equilibrium==='qre')out('Regularized QRE gap',numeric(report.qreResidual,4)+' chips/player');
  out('Tree PWL',Number.isFinite(report.tpwl)?numeric(100*report.tpwl,4)+'%':'—');
- out('OOP EV',numeric(report.value0,4)+' chips');
+ out('OOP profile EV',numeric(report.value0,4)+' chips');
+ const bounds=report.equilibriumBounds?.foldZero?.[0];
+ if(bounds){
+  out('OOP equilibrium EV',numeric(bounds.lower,4)+' to '+numeric(bounds.upper,4)+' chips');
+  out('EV uncertainty',numeric(report.equilibriumBounds.width,4)+' chips');
+ }
  out('Pot accounting error',numeric(report.zeroSumError,8)+' chips');
  out('Solver memory',Number.isFinite(report.memoryBytes)?numeric(report.memoryBytes/1048576,2)+' MiB':'—');
  breakSection('Game and betting tree');
@@ -472,7 +477,7 @@ function renderBoard(){
  $('turn-entry-row').hidden=view.mode!=='turn';
  $('flop-entry-row').hidden=view.mode!=='flop';
  $('river-entry-row').hidden=view.mode!=='river';
- $('flop-runout-row').hidden=view.mode!=='flop';
+ $('flop-sampling-method-row').hidden=view.mode!=='flop';$('flop-runout-row').hidden=view.mode!=='flop';
  $('flop-seed-row').hidden=view.mode!=='flop';
  const pickerOpen=!$('card-picker').hidden;
  $('board-cards').innerHTML=view.board.map((id,i)=>{
@@ -580,7 +585,7 @@ function config(){
   turnRaiseSizes0:parse($('turn-raise-sizes0').value),turnRaiseSizes1:parse($('turn-raise-sizes1').value),
   flopRaiseSizes0:parse($('flop-raise-sizes0').value),flopRaiseSizes1:parse($('flop-raise-sizes1').value),
   flopTurnSamples:positive('flop-turn-samples'),flopRiverSamples:positive('flop-river-samples'),
-  flopSamplingSeed:Number($('flop-sampling-seed').value),
+  flopSamplingSeed:Number($('flop-sampling-seed').value),flopSamplingMethod:$('flop-sampling-method').value,
   maxRaises:parseInt($('raises').value,10),allIn:$('allin').checked,maxNodes:positive('max-nodes',20),
   equilibrium,frequencyIncrements,gtoAlgorithm:$('gto-algorithm').value,qreTemperaturePercent:Number($('qre-temperature').value),
   scheduledAlphaStart:Number($('scheduled-alpha-start').value),scheduledAlphaGain:Number($('scheduled-alpha-gain').value),
@@ -645,6 +650,8 @@ function cancel(){
  if($('save-checkpoint'))$('save-checkpoint').disabled=true;
  if(view.fullReportReject)view.fullReportReject(Error('Solve was replaced.'));
  view.fullReportPromise=null;view.fullReportResolve=null;view.fullReportReject=null;view.detailPending.clear();
+ for(const pending of view.detailWaiters.values())pending.reject(Error('Solve was replaced.'));
+ view.detailWaiters.clear();
  view.generation++;
  if(view.worker){
   try{view.worker.postMessage({type:'reset'});}catch(_){view.worker.terminate();view.worker=null;}
@@ -851,8 +858,24 @@ function requestNodeDetail(id){
   const generation=view.generation;
   setTimeout(()=>{if(generation!==view.generation)return;
    try{acceptNodeDetail(id,view.fallback.solver.nodeReport(id));}
-   catch(err){view.detailPending.delete(id);notify('Could not calculate selected-node EV: '+err.message,'warn');}},0);
- }
+   catch(err){rejectNodeDetail(id,err);}},0);
+ }else rejectNodeDetail(id,Error('The completed numerical state is unavailable.'));
+}
+function ensureNodeDetail(id){
+ const ready=view.report?.nodes[id];if(ready)return Promise.resolve(ready);
+ const pending=view.detailWaiters.get(id);if(pending)return pending.promise;
+ let resolve,reject;
+ const promise=new Promise((done,failed)=>{resolve=done;reject=failed;});
+ view.detailWaiters.set(id,{promise,resolve,reject});
+ requestNodeDetail(id);
+ return promise;
+}
+function rejectNodeDetail(id,error){
+ view.detailPending.delete(id);
+ const pending=view.detailWaiters.get(id);
+ view.detailWaiters.delete(id);
+ if(pending)pending.reject(error);
+ else notify('Selected-node report failed: '+error.message,'warn');
 }
 function requestSelectedDetails(){
  if(!view.report||view.active)return;
@@ -860,8 +883,10 @@ function requestSelectedDetails(){
 }
 function acceptNodeDetail(id,record){
  view.detailPending.delete(id);
- if(!view.report||!record)return;
+ if(!view.report||!record){rejectNodeDetail(id,Error('Selected decision unavailable.'));return;}
  view.report.nodes[id]=record;
+ view.detailWaiters.get(id)?.resolve(record);
+ view.detailWaiters.delete(id);
  if(getPath(view.node).includes(id)){renderExplorer();renderTree();}
  requestSelectedDetails();
 }
@@ -884,6 +909,11 @@ async function ensureFullReport(){
 function acceptFullReport(report){
  const done=view.fullReportResolve;
  view.fullReportReady=true;view.fullReportPromise=null;view.fullReportResolve=null;view.fullReportReject=null;view.detailPending.clear();
+ for(const [id,pending] of view.detailWaiters){
+  if(report.nodes[id])pending.resolve(report.nodes[id]);
+  else pending.reject(Error('Selected decision unavailable.'));
+ }
+ view.detailWaiters.clear();
  updateReport(report,'finished');
  if(done)done(report);
 }
@@ -896,7 +926,8 @@ function rejectFullReport(error){
 // authoritative culling masks. Match aliases to the canonical decision node.
 function culledAtNode(nodeId){
  const n=view.game?.nodes[nodeId];if(!n)return null;
- const id=n.isoAlias?.source??nodeId;
+ let id=nodeId;
+ while(view.game.nodes[id]?.isoAlias)id=view.game.nodes[id].isoAlias.source;
  const rows=view.report?.actionPruning?.culledNodes;
  return rows?.find(row=>row[0]===id)?.[1]||null;
 }
@@ -906,7 +937,7 @@ function culledAtNode(nodeId){
 // node-lock constraints. Changing the sampling seed invalidates comparison.
 function studyFingerprint(cfg){
  const fields=['board','pot','stack','maxRaises','allIn','flopTurnSamples','flopRiverSamples',
-  'flopSamplingSeed','flopEntryMode','turnEntryMode','riverEntryMode',
+  'flopSamplingSeed','flopSamplingMethod','flopEntryMode','turnEntryMode','riverEntryMode',
   'flopSizes0','flopSizes1','flopDonkSizes0','flopRaiseSizes0','flopRaiseSizes1',
   'turnSizes0','turnSizes1','turnDonkSizes0','turnRaiseSizes0','turnRaiseSizes1',
   'sizes0','sizes1','riverDonkSizes0','raiseSizes0','raiseSizes1'];
@@ -925,8 +956,7 @@ async function currentNodeReport(){
  if(view.active||view.benchmark?.running||view.sampleStudy?.running)throw Error('Finish the current solve first.');
  if(!view.report)throw Error('Solve a game before copying or comparing its strategy.');
  const node=getSelected();if(!node||node.terminal||node.chance)throw Error('Select a decision node.');
- await ensureFullReport();
- const record=view.report?.nodes?.[node.id];
+ const record=await ensureNodeDetail(node.id);
  if(!record||!Array.isArray(record.hands)||record.hands.length===0)
   throw Error('No complete hand-level strategy is available at this decision.');
  return {node,record};
@@ -937,7 +967,9 @@ async function captureStudyBaseline(){
  view.studyBaseline={key:studyFingerprint(cfg),nodeId:node.id,history:node.history.slice(),player:node.p,
   actions:node.actions.map(a=>a.label),rangeEV:record.rangeEV??null,
   frequencies:record.actions.slice(),hands:record.hands.map(h=>[h[0],h[1],h[2],h[3].slice()]),
-  iteration:view.report.iteration,algorithm:cfg.gtoAlgorithm,captured:new Date().toISOString()};
+  iteration:view.report.iteration,algorithm:cfg.gtoAlgorithm,captured:new Date().toISOString(),
+  bounds:Object.fromEntries(['rulesFingerprint','startingPot','equilibrium','frequencyProjected','lockPlayers','equilibriumBounds']
+    .map(k=>[k,view.report[k]]))};
  renderStudyComparison();
  notify('Saved baseline for node #'+node.id+'. Re-solve with locks to compare changes.');
 }
@@ -984,11 +1016,14 @@ function renderStudyComparison(){
  const evOld=base.rangeEV,evNew=rec.rangeEV;
  const dEv=Number.isFinite(evOld)&&Number.isFinite(evNew)?' (Δ '+evText(evNew-evOld,3)+' chips)':'';
  const rows=labels.map((label,k)=>`<tr><td>${escapeHtml(label)}</td><td>${fmt(100*(base.frequencies[k]||0),2)}%</td><td>${fmt(100*(rec.actions[k]||0),2)}%</td><td>${evText(100*((rec.actions[k]||0)-(base.frequencies[k]||0)),2)} pp</td></tr>`).join('');
+ let evLoss=null;
+ if(base.bounds?.equilibriumBounds)try{evLoss=C.compareEvLoss(base.bounds,view.report,node.p);}catch(_){}
  const top=diffs.slice(0,8).map(x=>C.ALL_COMBOS[x.id].map(C.cardText).join('')+' '+fmt(100*x.delta,1)+' pp').join(' · ');
  el.innerHTML=`<strong>Baseline vs. current solution · node #${base.nodeId}</strong><div>Range EV: ${evText(evOld,3)} → ${evText(evNew,3)} chips${dEv}</div>`+
   `<table><thead><tr><th>Action</th><th>Baseline</th><th>Current</th><th>Δ frequency</th></tr></thead><tbody>${rows}</tbody></table>`+
   `<div><strong>Largest hand-mix changes:</strong> ${escapeHtml(top||'No overlapping hand data')}</div>`+
-  '<p class="muted">Same configured game and weighted ranges. These differences do not by themselves indicate a better equilibrium.</p>';
+  (evLoss?'<div>Equilibrium EV loss: '+fmt(evLoss.minimum,4)+' to '+fmt(evLoss.maximum,4)+' chips ('+
+    fmt(evLoss.percentOfPot.minimum,4)+'% to '+fmt(evLoss.percentOfPot.maximum,4)+'% of pot)</div>':'');
 }
 function renderPreSolveQuality(){
  const el=$('pre-solve-quality');if(!el)return;
@@ -1275,7 +1310,9 @@ function updateReport(report,kind){
  $('stat-exploit').title=`Best-response exploitability last checked at iteration ${report.iteration.toLocaleString()}. It updates less often than the iteration counter.`;
  $('stat-nash').textContent=(report.lockedNodes?'Constrained NashConv: ':'NashConv: ')+fmt(report.nashConv,4)+' chips'+(report.actionPruning?.enabled?' · '+report.actionPruning.prunedActions+' culled bet/raise sizes':'');
  $('stat-tpwl').textContent='Tree PWL: '+(report.tpwl===null?'—':fmt(100*report.tpwl,4)+'%')+' · '+report.tpwlNodes+' assessed nodes';
- $('stat-ev').textContent='OOP EV: '+evText(report.value0)+' chips';
+ const bounds=report.equilibriumBounds?.foldZero?.[0];
+ $('stat-ev').textContent='OOP profile EV: '+evText(report.value0)+' chips'+
+  (bounds?' · equilibrium '+fmt(bounds.lower,3)+' to '+fmt(bounds.upper,3):'');
  $('stat-zero').textContent='Pot accounting error: '+fmt(report.zeroSumError,8);
  $('export').disabled=false;drawChart(report.history);
  renderPreSolveQuality();renderExplorer();renderTree();
@@ -1334,7 +1371,7 @@ function workerMain(){
   if(m.type!=='start')return;
   job=null;completed=null;runId=m.runId??0;
   try {
-   const game=core.makeGame(m.config);game.profileEnabled=!!m.config.profileEnabled;
+   const game=core.makeGame(m.config,{deferState:true});game.profileEnabled=!!m.config.profileEnabled;
    // Keep the numerical state exclusively in the worker; compilation optional.
    try{game.compiled=createCompiledTraversal(game,WASM_TRAVERSAL_BYTES,m.config.memoryLimitBytes);}catch(_){game.compiled=null;}
    const solver=m.checkpoint?core.CFRSolver.resume(game,m.checkpoint):new core.CFRSolver(game);
@@ -1382,7 +1419,7 @@ function workerMain(){
 function runFallback(cfg,max,tolerance,batch,generation,checkpoint=null){
  let solver;
  try {
-  const game=C.makeGame(cfg);game.profileEnabled=!!cfg.profileEnabled;
+  const game=C.makeGame(cfg,{deferState:true});game.profileEnabled=!!cfg.profileEnabled;
   try{game.compiled=createCompiledTraversal(game,WASM_TRAVERSAL_BYTES,cfg.memoryLimitBytes);}catch(_){game.compiled=null;}
   solver=checkpoint?C.CFRSolver.resume(game,checkpoint):new C.CFRSolver(game);
  }catch(err){
@@ -1454,7 +1491,7 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
  if(typeof Worker!=='undefined'&&typeof Blob!=='undefined'&&typeof URL.createObjectURL==='function'){
   try{
    if(!view.worker){
-   const script=`const createSolverCore=${createSolverCore.toString()};\nconst createCompiledTraversal=${createCompiledTraversal.toString()};\nconst WASM_TRAVERSAL_BYTES=${JSON.stringify(WASM_TRAVERSAL_BYTES)};\nconst WASM_TRAVERSAL_BYTES_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_SCALAR)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR)};\nconst createAdaptiveBatchController=${createAdaptiveBatchController.toString()};\nconst createReportScheduler=${createReportScheduler.toString()};\nconst solverProgress=${solverProgress.toString()};\nconst solutionConverged=${solutionConverged.toString()};\n(${workerMain.toString()})();`;
+   const script=`const createSolverCore=${createSolverCore.toString()};\nconst createCompiledTraversal=${createCompiledTraversal.toString()};\nconst WASM_TRAVERSAL_BYTES=${JSON.stringify(WASM_TRAVERSAL_BYTES)};\nconst WASM_TRAVERSAL_BYTES_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_SCALAR)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR)};\nconst WASM_LOCK_KERNEL_BYTES=${JSON.stringify(WASM_LOCK_KERNEL_BYTES)};\nconst createAdaptiveBatchController=${createAdaptiveBatchController.toString()};\nconst createReportScheduler=${createReportScheduler.toString()};\nconst solverProgress=${solverProgress.toString()};\nconst solutionConverged=${solutionConverged.toString()};\n(${workerMain.toString()})();`;
    const blobUrl=URL.createObjectURL(new Blob([script],{type:'text/javascript'}));
    const worker=new Worker(blobUrl);setTimeout(()=>URL.revokeObjectURL(blobUrl),2000);view.worker=worker;
    }
@@ -1472,9 +1509,8 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
     if(m.type==='detail')acceptNodeDetail(m.id,m.record);
     if(m.type==='full-report')acceptFullReport(m.report);
     if(m.type==='detail-error'){
-     if(m.id!==undefined)view.detailPending.delete(m.id);
      if(m.id===undefined)rejectFullReport(Error(m.message));
-     else notify('Selected-node report failed: '+m.message,'warn');
+     else rejectNodeDetail(m.id,Error(m.message));
     }
     if(m.type==='finished')finished(m.kind,m.report);
    };
@@ -1510,7 +1546,7 @@ function solutionData(){
    qreResidual:'Half the sum of entropy-regularized best-response values, in chips per player; separate from ordinary Nash exploitability. Both must meet the target for QRE convergence.',
    averaging:cfg.gtoAlgorithm==='dcfr-scheduled-cubic'?'Scheduled DCFR hybrid discount with t^'+cfg.scheduledAveragingPower+' averaging':cfg.equilibrium==='gto'&&cfg.gtoAlgorithm==='lcfr'?'Linear CFR with t/(t+1) signed regret discount and linear averaging t':cfg.gtoAlgorithm==='dcfr-cubic'?'DCFR signed regret discounts and cubic averaging t³':cfg.gtoAlgorithm==='dcfr-2-0.5-2'?'DCFR α=2 β=0.5 γ=2 signed regrets and quadratic averaging':cfg.gtoAlgorithm==='dcfr-predictive'?'Predictive DCFR signed regret discounts with one-step prediction and quadratic averaging t²':cfg.gtoAlgorithm==='dcfr-adaptive'?'Adaptive DCFR smooth discount schedule and quadratic averaging t²':cfg.gtoAlgorithm==='dcfr-scheduled'?'Scheduled DCFR positive-regret discounts and quadratic averaging t²':cfg.gtoAlgorithm==='dcfr'?'DCFR signed regret discounting and quadratic averaging t²':cfg.equilibrium==='gto'&&cfg.gtoAlgorithm==='optimistic'?'CFR+ with one-step optimistic regret prediction, linear averaging t':'Linear CFR+ weighting t with own realization reach (delay 0)',
    riverChance:'For a complete turn, 44 cards are legal for each disjoint private hand pair. For a flop, 45 turns then 44 rivers remain; sampled branches use inverse-probability weights.',
-   sampledChance:view.game.sampledChance,flopTurnSamples:cfg.flopTurnSamples,flopRiverSamples:cfg.flopRiverSamples,flopSamplingSeed:cfg.flopSamplingSeed,exactSuitIsomorphism:cfg.useSuitIsomorphism,suitOrbitInfo:view.game.suitIsomorphism,riverPrivateSymmetry:{enabled:view.game.riverPrivateSymmetry?.enabled,groupSize:view.game.riverPrivateSymmetry?.groupSize,representatives:view.game.riverPrivateSymmetry?.representatives,savedRows:view.game.riverPrivateSymmetry?.savedRows,reason:view.game.riverPrivateSymmetry?.reason},
+   sampledChance:view.game.sampledChance,flopTurnSamples:cfg.flopTurnSamples,flopRiverSamples:cfg.flopRiverSamples,flopSamplingSeed:cfg.flopSamplingSeed,flopSamplingMethod:cfg.flopSamplingMethod,exactSuitIsomorphism:cfg.useSuitIsomorphism,suitOrbitInfo:view.game.suitIsomorphism,riverPrivateSymmetry:{enabled:view.game.riverPrivateSymmetry?.enabled,groupSize:view.game.riverPrivateSymmetry?.groupSize,representatives:view.game.riverPrivateSymmetry?.representatives,savedRows:view.game.riverPrivateSymmetry?.savedRows,reason:view.game.riverPrivateSymmetry?.reason},
    actionPruning:view.report?.actionPruning??view.game.actionPruning,
    nodeLocks:cfg.nodeLocks||[],unrestrictedExploitability:view.report?.unrestrictedExploitability??null},
   source:view.source,
@@ -1522,7 +1558,7 @@ function solutionData(){
    qreTemperaturePercent:cfg.qreTemperaturePercent,targetExploitabilityPercent:view.solveTargetPercent,
    board:cfg.board.map(C.cardText),pot:cfg.pot,stack:cfg.stack,oopBetSizesPercent:cfg.sizes0,
    ipBetSizesPercent:cfg.sizes1,oopTurnBetSizesPercent:cfg.turnSizes0,ipTurnBetSizesPercent:cfg.turnSizes1,
-   oopTurnDonkBetSizesPercent:cfg.turnDonkSizes0,turnEntryMode:cfg.turnEntryMode,oopFlopDonkBetSizesPercent:cfg.flopDonkSizes0,flopEntryMode:cfg.flopEntryMode,oopRiverDonkBetSizesPercent:cfg.riverDonkSizes0,riverEntryMode:cfg.riverEntryMode,oopFlopBetSizesPercent:cfg.flopSizes0,ipFlopBetSizesPercent:cfg.flopSizes1,oopRaiseSizesPercent:cfg.raiseSizes0,ipRaiseSizesPercent:cfg.raiseSizes1,oopTurnRaiseSizesPercent:cfg.turnRaiseSizes0,ipTurnRaiseSizesPercent:cfg.turnRaiseSizes1,oopFlopRaiseSizesPercent:cfg.flopRaiseSizes0,ipFlopRaiseSizesPercent:cfg.flopRaiseSizes1,flopTurnSamples:cfg.flopTurnSamples,flopRiverSamples:cfg.flopRiverSamples,flopSamplingSeed:cfg.flopSamplingSeed,maxRaises:cfg.maxRaises,allIn:cfg.allIn,useSuitIsomorphism:cfg.useSuitIsomorphism,useRiverHandSymmetry:cfg.useRiverHandSymmetry,
+   oopTurnDonkBetSizesPercent:cfg.turnDonkSizes0,turnEntryMode:cfg.turnEntryMode,oopFlopDonkBetSizesPercent:cfg.flopDonkSizes0,flopEntryMode:cfg.flopEntryMode,oopRiverDonkBetSizesPercent:cfg.riverDonkSizes0,riverEntryMode:cfg.riverEntryMode,oopFlopBetSizesPercent:cfg.flopSizes0,ipFlopBetSizesPercent:cfg.flopSizes1,oopRaiseSizesPercent:cfg.raiseSizes0,ipRaiseSizesPercent:cfg.raiseSizes1,oopTurnRaiseSizesPercent:cfg.turnRaiseSizes0,ipTurnRaiseSizesPercent:cfg.turnRaiseSizes1,oopFlopRaiseSizesPercent:cfg.flopRaiseSizes0,ipFlopRaiseSizesPercent:cfg.flopRaiseSizes1,flopTurnSamples:cfg.flopTurnSamples,flopRiverSamples:cfg.flopRiverSamples,flopSamplingSeed:cfg.flopSamplingSeed,flopSamplingMethod:cfg.flopSamplingMethod,maxRaises:cfg.maxRaises,allIn:cfg.allIn,useSuitIsomorphism:cfg.useSuitIsomorphism,useRiverHandSymmetry:cfg.useRiverHandSymmetry,
    nodeLocks:cfg.nodeLocks||[],useActionFrequencyPruning:cfg.useActionFrequencyPruning,actionPruneThresholdPercent:cfg.actionPruneThresholdPercent,actionPruneWarmupPercent:cfg.actionPruneWarmupPercent,actionPruneWarmupIterations:cfg.actionPruneWarmupIterations,actionPruneRecheckIterations:cfg.actionPruneRecheckIterations,actionPrunePlannedIterations:cfg.actionPrunePlannedIterations,useRegretPruning:cfg.useRegretPruning,
    ranges:[cfg.weights0,cfg.weights1].map(w=>Array.from(w,(v,id)=>v>0?{hand:C.ALL_COMBOS[id].map(C.cardText),weight:v}:null).filter(Boolean))},
   results:view.report,tree:view.game.nodes.map(n=>n.terminal?{id:n.id,terminal:n.type,winner:n.winner,pot:n.pot,turn:n.turn,river:n.river,history:n.history}:
@@ -1620,13 +1656,13 @@ function restoreSolution(data){
     r.history.some(row=>!Array.isArray(row)||row.length!==2||!Number.isFinite(row[0])||!Number.isFinite(row[1])))
     throw Error('Not a TurnRiverLab solution file.');
  const board=d.board.map(C.cardId),w=d.ranges.map(range=>{const a=new Float64Array(1326);for(const h of range){const [x,y]=h.hand.map(C.cardId);if(x<0||y<0||x===y||!Number.isFinite(h.weight)||h.weight<0||h.weight>1)throw Error('Invalid saved range.');a[C.comboId(x,y)]=h.weight;}return a;});
- const cfg={board,pot:d.pot,stack:d.stack,frequencyIncrements:d.frequencyIncrements,flopSamplingSeed:d.flopSamplingSeed,nodeLocks:d.nodeLocks||[],useSuitIsomorphism:d.useSuitIsomorphism!==false,useRiverHandSymmetry:!!d.useRiverHandSymmetry,
+ const cfg={board,pot:d.pot,stack:d.stack,frequencyIncrements:d.frequencyIncrements,flopSamplingSeed:d.flopSamplingSeed,flopSamplingMethod:d.flopSamplingMethod,nodeLocks:d.nodeLocks||[],useSuitIsomorphism:d.useSuitIsomorphism!==false,useRiverHandSymmetry:!!d.useRiverHandSymmetry,
   useActionFrequencyPruning:!!d.useActionFrequencyPruning,actionPruneThresholdPercent:d.actionPruneThresholdPercent,actionPruneWarmupPercent:d.actionPruneWarmupPercent,actionPruneWarmupIterations:d.actionPruneWarmupIterations,actionPruneRecheckIterations:d.actionPruneRecheckIterations,actionPrunePlannedIterations:d.actionPrunePlannedIterations,useRegretPruning:!!d.useRegretPruning,sizes0:d.oopBetSizesPercent,sizes1:d.ipBetSizesPercent,turnSizes0:d.oopTurnBetSizesPercent,turnSizes1:d.ipTurnBetSizesPercent,
   turnDonkSizes0:d.oopTurnDonkBetSizesPercent,turnEntryMode:d.turnEntryMode,flopDonkSizes0:d.oopFlopDonkBetSizesPercent,flopEntryMode:d.flopEntryMode,riverDonkSizes0:d.oopRiverDonkBetSizesPercent,riverEntryMode:d.riverEntryMode,flopSizes0:d.oopFlopBetSizesPercent,flopSizes1:d.ipFlopBetSizesPercent,raiseSizes0:d.oopRaiseSizesPercent,raiseSizes1:d.ipRaiseSizesPercent,turnRaiseSizes0:d.oopTurnRaiseSizesPercent,turnRaiseSizes1:d.ipTurnRaiseSizesPercent,flopRaiseSizes0:d.oopFlopRaiseSizesPercent,flopRaiseSizes1:d.ipFlopRaiseSizesPercent,flopTurnSamples:d.flopTurnSamples,flopRiverSamples:d.flopRiverSamples,maxRaises:d.maxRaises,allIn:d.allIn,equilibrium:d.equilibrium||'gto',gtoAlgorithm:d.gtoAlgorithm||'cfrplus',qreTemperaturePercent:d.qreTemperaturePercent||0.05,
   scheduledAlphaStart:d.scheduledAlphaStart??1,scheduledAlphaGain:d.scheduledAlphaGain??0.5,
   scheduledRampLength:d.scheduledRampLength??16,scheduledAveragingPower:d.scheduledAveragingPower??3,
-  useAdaptiveConvergence:!!d.useAdaptiveConvergence,weights0:w[0],weights1:w[1],maxNodes:100000,memoryLimitBytes:Number($('memory-limit').value)*1048576};
- const g=C.makeGame(cfg);if(!Array.isArray(r.nodes)||r.nodes.length!==g.nodes.length||!Array.isArray(data.tree)||data.tree.length!==g.nodes.length)throw Error('Saved report does not match the game tree.');
+  useAdaptiveConvergence:!!d.useAdaptiveConvergence,weights0:w[0],weights1:w[1],maxNodes:250000,memoryLimitBytes:Number($('memory-limit').value)*1048576};
+ const g=C.makeGame(cfg,{preview:true});if(!Array.isArray(r.nodes)||r.nodes.length!==g.nodes.length||!Array.isArray(data.tree)||data.tree.length!==g.nodes.length)throw Error('Saved report does not match the game tree.');
  for(const n of g.nodes){const rec=r.nodes[n.id],old=data.tree[n.id];if(!old||old.id!==n.id||old.pot!==n.pot||JSON.stringify(old.history)!==JSON.stringify(n.history))throw Error('Saved tree differs from this engine.');if(n.terminal||n.chance)continue;if(!rec||rec.player!==n.p||!Array.isArray(rec.actions)||rec.actions.length!==n.actions.length||
    rec.actions.some(v=>!Number.isFinite(v)||v<0||v>1+1e-9)||
    !Array.isArray(rec.hands)||rec.hands.length!==g.players[n.p].ids.length||
@@ -1656,7 +1692,7 @@ function restoreSolution(data){
  $('action-prune-recheck').value=cfg.actionPruneRecheckIterations??100;
  view.fixedActionWarmup=cfg.useActionFrequencyPruning?cfg.actionPruneWarmupIterations??null:null;
  view.fixedPrunePlanned=cfg.useActionFrequencyPruning?cfg.actionPrunePlannedIterations??null:null;
- $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled; $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;$('max-nodes').value=Math.max(18000,g.nodes.length);$('iterations').value=r.iteration;view.limit=r.iteration;
+ $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled; $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('flop-sampling-method').value=cfg.flopSamplingMethod??'legacy';$('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;$('max-nodes').value=Math.max(18000,g.nodes.length);$('iterations').value=r.iteration;view.limit=r.iteration;
  view.fullReportReady=true;view.game=g;view.parents=new Array(g.nodes.length).fill(null);for(const n of g.nodes)if(!n.terminal){for(const a of n.chance?n.runouts:n.actions)view.parents[a.child]=[n.id,a.label];}
  setSolverTab('tree');showSource();renderBoard();renderRangeTab();renderSetupSummaries();updateReport(r,'finished');$('save-local').disabled=false;setStatus('SAVED SOLUTION','complete');$('progress-text').textContent='Saved result loaded';notify(d.gtoAlgorithm==='dcfr-2-0.5-2'&&d.algorithmRevision!=='dcfr-2-0.5-2-quadratic-v2'?
  'Legacy DCFR 2/0.5/2 solution loaded: before v16.2 this method used linear averaging. Displayed results remain historical; re-solve for corrected quadratic averaging.':
@@ -1676,15 +1712,15 @@ function downloadCheckpoint(snapshot){
 function applyCheckpointConfig(cfg){
  if(!Array.isArray(cfg.board)||![3,4,5].includes(cfg.board.length))throw Error('Checkpoint has an invalid board');
  setFrequencyIncrements(cfg.frequencyIncrements);
- cancel();view.nodeLocks=(cfg.nodeLocks||[]).map(v=>({...v}));view.board=cfg.board.slice();view.weights=[Float64Array.from(cfg.weights0),Float64Array.from(cfg.weights1)];
+ cancel();view.nodeLocks=(cfg.nodeLocks||[]).map(v=>({...v}));view.board=cfg.board.map(C.cardId);view.weights=[Float64Array.from(cfg.weights0),Float64Array.from(cfg.weights1)];
  view.source=null;view.rangePresets=[null,null];$('range-editor').hidden=true;
  view.mode=cfg.board.length===3?'flop':cfg.board.length===4?'turn':'river';view.slot=view.board.length-1;
  $('street-mode').value=view.mode;$('pot').value=cfg.pot;$('stack').value=cfg.stack;
- $('solver-method').value=cfg.equilibrium;$('gto-algorithm').value=cfg.gtoAlgorithm||'cfrplus';ensureAlgorithmVisible(cfg.gtoAlgorithm||'cfrplus');$('qre-temperature').value=cfg.qreTemperaturePercent||.05;
+ $('solver-method').value=cfg.equilibrium??'gto';$('gto-algorithm').value=cfg.gtoAlgorithm||'dcfr';ensureAlgorithmVisible(cfg.gtoAlgorithm||'dcfr');$('qre-temperature').value=cfg.qreTemperaturePercent||.05;
  for(const [id,val] of [['scheduled-alpha-start',cfg.scheduledAlphaStart??1],['scheduled-alpha-gain',cfg.scheduledAlphaGain??0.5],
   ['scheduled-ramp-length',cfg.scheduledRampLength??16],['scheduled-averaging-power',cfg.scheduledAveragingPower??3]])$(id).value=val;
  $('adaptive-convergence').checked=!!cfg.useAdaptiveConvergence;updateSolverMethod();
- const fields={'sizes0':cfg.sizes0,'sizes1':cfg.sizes1,'turn-sizes0':cfg.turnSizes0,'turn-sizes1':cfg.turnSizes1,
+ const fields={'sizes0':cfg.sizes0,'sizes1':cfg.sizes1,'turn-sizes0':cfg.turnSizes0??cfg.sizes0,'turn-sizes1':cfg.turnSizes1??cfg.sizes1,
  'turn-donk-sizes0':cfg.turnDonkSizes0??[],
  'flop-donk-sizes0':cfg.flopDonkSizes0??[],
  'river-donk-sizes0':cfg.riverDonkSizes0??[],
@@ -1692,7 +1728,7 @@ function applyCheckpointConfig(cfg){
  'turn-raise-sizes0':cfg.turnRaiseSizes0,'turn-raise-sizes1':cfg.turnRaiseSizes1,
  'flop-raise-sizes0':cfg.flopRaiseSizes0,'flop-raise-sizes1':cfg.flopRaiseSizes1};
  for(const [id,v] of Object.entries(fields))if(Array.isArray(v))$(id).value=v.join(', ');
- $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;
+ $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('flop-sampling-method').value=cfg.flopSamplingMethod??'legacy';
  $('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;
  $('max-nodes').value=cfg.maxNodes;$('memory-limit').value=Math.min(4096,Math.max(2,Math.ceil(cfg.memoryLimitBytes/1048576)||128));
  $('turn-entry-mode').value=cfg.turnEntryMode||'normal';$('flop-entry-mode').value=cfg.flopEntryMode||'normal';$('river-entry-mode').value=cfg.riverEntryMode||'normal';
@@ -1720,8 +1756,9 @@ function checkpointWire(){
    if(cp.checkpoint.iteration>=10000000)throw Error('The checkpoint has reached the iteration limit');
    applyCheckpointConfig(cp.config);
    $('iterations').value=Math.max(Number($('iterations').value)||0,cp.checkpoint.iteration+100);
-   startSolver(cp.checkpoint);
-   notify('Resuming exact numerical checkpoint at iteration '+cp.checkpoint.iteration+'.');
+   const original={...cp.config,board:view.board.slice(),memoryLimitBytes:Number($('memory-limit').value)*1048576};
+   if(startSolver(cp.checkpoint,original))
+    notify('Resuming numerical checkpoint at iteration '+cp.checkpoint.iteration+'.');
   }catch(error){notify('Could not resume checkpoint: '+error.message,'error');}
  };
 }
@@ -1803,7 +1840,7 @@ function wire(){
      notify('This solve uses an experimental algorithm. Choose a recommended method before hiding the others.','warn');
    }else setExperimentalAlgorithmVisibility(e.target.checked);
  });
- for(const id of ['qre-temperature','pot','stack','sizes0','sizes1','turn-sizes0','turn-sizes1','turn-donk-sizes0','turn-entry-mode','flop-donk-sizes0','flop-entry-mode','river-donk-sizes0','river-entry-mode','flop-sizes0','flop-sizes1','raise-sizes0','raise-sizes1','turn-raise-sizes0','turn-raise-sizes1','flop-raise-sizes0','flop-raise-sizes1','flop-turn-samples','flop-river-samples','flop-sampling-seed','raises','max-nodes','allin','memory-limit','suit-isomorphism','river-hand-symmetry','action-frequency-pruning','action-prune-threshold','action-prune-warmup','action-prune-recheck','scheduled-alpha-start','scheduled-alpha-gain','scheduled-ramp-length','scheduled-averaging-power','adaptive-convergence','zero-reach-pruning','enable-profile'])$(id).addEventListener('change',()=>{if(id==='pot'||id==='stack'){view.source=null;showSource();}if(id.startsWith('action-prune')){view.fixedActionWarmup=null;view.fixedPrunePlanned=null;}renderBoard();invalidate();});
+ for(const id of ['qre-temperature','pot','stack','sizes0','sizes1','turn-sizes0','turn-sizes1','turn-donk-sizes0','turn-entry-mode','flop-donk-sizes0','flop-entry-mode','river-donk-sizes0','river-entry-mode','flop-sizes0','flop-sizes1','raise-sizes0','raise-sizes1','turn-raise-sizes0','turn-raise-sizes1','flop-raise-sizes0','flop-raise-sizes1','flop-turn-samples','flop-river-samples','flop-sampling-seed','flop-sampling-method','raises','max-nodes','allin','memory-limit','suit-isomorphism','river-hand-symmetry','action-frequency-pruning','action-prune-threshold','action-prune-warmup','action-prune-recheck','scheduled-alpha-start','scheduled-alpha-gain','scheduled-ramp-length','scheduled-averaging-power','adaptive-convergence','zero-reach-pruning','enable-profile'])$(id).addEventListener('change',()=>{if(id==='pot'||id==='stack'){view.source=null;showSource();}if(id.startsWith('action-prune')){view.fixedActionWarmup=null;view.fixedPrunePlanned=null;}renderBoard();invalidate();});
  $('solve-console-copy').addEventListener('click',async()=>{
   const text=view.solveLog;if(!text)return;
   try{

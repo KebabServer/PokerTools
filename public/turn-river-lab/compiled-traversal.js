@@ -4,9 +4,9 @@ function createCompiledTraversal(game, base64, limitBytes) {
   limitBytes=Number(limitBytes)||0;
   // River-only private-hand orbit compression remains a reference-JS layout.
   // Whole-action culling uses native action masks and can stay compiled.
-  if(game.riverPrivateSymmetry?.enabled)return null;
-  if(typeof WebAssembly==='undefined'||typeof atob!=='function'||!game.stateStorage)return null;
-  const stateSize=game.stateStorage.length;
+  if(game.riverPrivateSymmetry?.enabled||game.stack>0x7fffffff)return null;
+  if(typeof WebAssembly==='undefined'||typeof atob!=='function'||game.stateLength===undefined)return null;
+  const stateSize=game.stateLength;
   // Avoid a large fixed mobile allocation: cover state plus a bounded arena
   // for live reach/CFV vectors. Fall back to JS when the arena is exhausted.
   const n0=game.players[0].ids.length,n1=game.players[1].ids.length,maxN=Math.max(n0,n1);
@@ -47,9 +47,13 @@ function createCompiledTraversal(game, base64, limitBytes) {
   // Validate the originally requested SIMD module before switching kernels.
   let requestedSimdSupported=true;
   if(!extendedCache&&!explicitScalar){
-    const source=atob(base64),probe=new Uint8Array(source.length);
-    for(let i=0;i<source.length;i++)probe[i]=source.charCodeAt(i);
-    requestedSimdSupported=WebAssembly.validate(probe);
+    const validation=createCompiledTraversal._simdValidation||(createCompiledTraversal._simdValidation=new Map());
+    if(!validation.has(base64)){
+      const source=atob(base64),probe=new Uint8Array(source.length);
+      for(let i=0;i<source.length;i++)probe[i]=source.charCodeAt(i);
+      validation.set(base64,WebAssembly.validate(probe));
+    }
+    requestedSimdSupported=validation.get(base64);
   }
   const chosenBinary=extendedCache||modernTraversal||typeof WASM_TRAVERSAL_BYTES_CLASSIC!=='string'
     ?base64:(explicitScalar||!requestedSimdSupported)&&typeof WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR==='string'
@@ -66,15 +70,25 @@ function createCompiledTraversal(game, base64, limitBytes) {
     const result=own+rest;memo.set(key,result);return result;
   }
   const scratchBudget=Math.max(2*1024*1024,maxDepth(game.root,0)+maxDepth(game.root,1)+1024*1024);
+  const sourceBacked=game.equilibrium==='gto'&&typeof WASM_LOCK_KERNEL_BYTES==='string';
+  const nativeStackBytes=sourceBacked?128*1024:0;
+  const learnable=game.nodes.filter(n=>!n.terminal&&!n.chance&&!n.isoAlias&&(!game.compactState||n.actions.length>1));
+  const lockCapacity=sourceBacked?Math.min(game.maxNodeLocks,learnable.length):0;
   let layouts=0,runouts=0;
-  for(const pair of game.riverPayoffLayouts.values())for(const l of pair)
+  for(const pair of new Set(game.riverPayoffLayouts.values()))for(const l of pair)
     for(const key of ['mineOrder','oppOrder','groupStart','weakEnd','tieEnd'])layouts+=l[key].byteLength+16;
-  for(const node of game.nodes)if(node.chance)runouts+=node.runouts.length;
-  const staticBudget=1048576+game.nodes.length*160+runouts*64+layouts+maxN*24;
+  const valid=new Set();
+  for(const node of game.nodes){
+    if(node.chance)runouts+=node.runouts.length;
+    if(node.valid)valid.add(node.valid);
+  }
+  for(const pair of valid)layouts+=pair[0].byteLength+pair[1].byteLength;
+  const staticBudget=1048576+game.nodes.length*(sourceBacked?176:160)+runouts*64+
+    layouts+maxN*(24+lockCapacity);
   // Bounded v15 caches live in the worker's existing WASM linear memory.
   // No SharedArrayBuffer, threads, dynamic WASM memory growth or backend.
   const cacheBudget=(extendedCache?256*1024:0)+(extendedCache&&reuseShowdowns?16*3*maxN*8:0)+512;
-  const bytes=131072+stateSize*8+staticBudget+scratchBudget+cacheBudget;
+  const bytes=131072+stateSize*8+staticBudget+scratchBudget+cacheBudget+nativeStackBytes;
   const pages=Math.ceil(bytes/65536);
   // The worker's memory budget also applies to compiled scratch capacity.
   // Refuse optional compilation instead of exceeding a mobile allocation limit.
@@ -90,7 +104,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
     const decoded=atob(source),bytes=new Uint8Array(decoded.length);
     for(let i=0;i<decoded.length;i++)bytes[i]=decoded.charCodeAt(i);
     const m=WebAssembly.validate(bytes)?new WebAssembly.Module(bytes):null;
-    if(modules.size>=4)modules.clear();
+    if(modules.size>=8)modules.clear();
     modules.set(source,m);
     return m;
   }
@@ -107,15 +121,23 @@ function createCompiledTraversal(game, base64, limitBytes) {
   const memory=new WebAssembly.Memory({initial:pages,maximum:pages});
   const instance=new WebAssembly.Instance(module,{env:{memory,host_log:Math.log,host_exp:Math.exp}});
   const storage=new Float64Array(memory.buffer,131072,stateSize);
-  storage.set(game.stateStorage);
-  function migrate(arr){return new Float64Array(memory.buffer,131072+arr.byteOffset,arr.length);}
-  for(const node of game.nodes)if(!node.terminal&&!node.chance&&!node.isoAlias){
-    node.regret=migrate(node.regret);node.averageSum=migrate(node.averageSum);
-    node.current=migrate(node.current);
-    if(node.qreLog){node.qreLog=migrate(node.qreLog);node.qreEntropy=migrate(node.qreEntropy);}
-    if(node.previousDelta)node.previousDelta=migrate(node.previousDelta);
+  if(!game.stateStorage)game.allocateState(storage);
+  else{
+    storage.set(game.stateStorage);
+    const migrated=new WeakMap();
+    function migrate(arr){
+      if(!migrated.has(arr))migrated.set(arr,new Float64Array(memory.buffer,131072+arr.byteOffset-game.stateStorage.byteOffset,arr.length));
+      return migrated.get(arr);
+    }
+    for(const node of game.nodes)if(node.current){
+      node.regret=migrate(node.regret);node.averageSum=migrate(node.averageSum);
+      node.current=migrate(node.current);
+      if(node.qreLog){node.qreLog=migrate(node.qreLog);node.qreEntropy=migrate(node.qreEntropy);}
+      if(node.previousDelta)node.previousDelta=migrate(node.previousDelta);
+    }
+    game.forcedPolicies=game.forcedPolicies.map(migrate);
+    game.stateStorage=storage;
   }
-  game.stateStorage=storage;
   game.memory+=actualBytes-stateSize*8;
   const start=131072+stateSize*8;
   let used=start;
@@ -124,7 +146,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
     if(used+bytes>memory.buffer.byteLength)return null;
     const addr=used;used+=bytes;return addr;
   }
-  const decisions=game.nodes.filter(n=>!n.terminal&&!n.chance&&!n.isoAlias);
+  const decisions=learnable;
   const metaAddr=allocate(decisions.length*6*4,4);
   if(metaAddr===null)return null;
   const meta=new Int32Array(memory.buffer,metaAddr,decisions.length*6);
@@ -143,6 +165,12 @@ function createCompiledTraversal(game, base64, limitBytes) {
     const addr=allocate(n*8,8);
     return addr===null?new Float64Array(n):new Float64Array(memory.buffer,addr,n);
   }
+  function variantFor(game){
+    if(game.gtoAlgorithm==='dcfr-predictive')return 3;
+    if(game.gtoAlgorithm==='optimistic')return 2;
+    return ['dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','lcfr','dcfr-cubic','dcfr-2-0.5-2']
+      .includes(game.gtoAlgorithm)?1:0;
+  }
   const exports=instance.exports;
   // Opt into native fused policy updates only for established DCFR and trees
   // without private-hand row sharing or heuristic action pruning. Older WASM
@@ -150,7 +178,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
   const fusedPolicy=game.equilibrium==='gto'&&game.gtoAlgorithm==='dcfr'&&
     !game.actionPruning?.enabled&&!game.riverPrivateSymmetry?.enabled&&!game.hasFrequencyIncrements&&
     typeof exports.set_fused_dcfr_policy==='function'&&typeof exports.full_traverse==='function';
-  let full=null,variantNodePtr=0,statsPtr=null;
+  let full=null,native=null,variantNodePtr=0,statsPtr=null;
   if(typeof exports.full_traverse==='function')try{
     const cache=new WeakMap();
     function copyTyped(array){
@@ -174,7 +202,9 @@ function createCompiledTraversal(game, base64, limitBytes) {
     }
     const maps=new WeakMap();
     function mapPtr(m){if(!m)return 0;if(!maps.has(m))maps.set(m,copyTyped(m));return maps.get(m);}
-    const rows=[];
+    const nodePtr=allocate(game.nodes.length*22*4,4);
+    if(nodePtr===null)throw Error('No WASM space for node metadata');
+    const rows=new Int32Array(memory.buffer,nodePtr,game.nodes.length*22);
     for(const node of game.nodes){
       const kind=node.terminal?0:node.chance?2:1;
       let childPtr=0,ng=0,groupPtr=0;
@@ -193,44 +223,40 @@ function createCompiledTraversal(game, base64, limitBytes) {
       const payoffs=node.riverPayoff;
       // Native masks are zero-copy views and survive checkpoint restore.
       let prunedPtr=0;
-      if(game.actionPruning?.enabled&&kind===1){
+      if(game.actionPruning?.enabled&&kind===1&&!node.isoAlias&&node.actions.length>1){
         prunedPtr=allocate(node.actions.length,1);
         if(prunedPtr===null)throw Error('No WASM memory for action-culling masks');
         const existing=node.pruned;
         node.pruned=new Uint8Array(memory.buffer,prunedPtr,node.actions.length);
         if(existing)node.pruned.set(existing);
       }
-      rows.push(kind,node.p??-1,node.actions?.length??0,childPtr,ng,groupPtr,
+      rows.set([kind,node.p??-1,node.actions?.length??0,childPtr,ng,groupPtr,
         node.current?.byteOffset??0,node.regret?.byteOffset??0,node.averageSum?.byteOffset??0,
         node.qreEntropy?.byteOffset??0,node.qreLog?.byteOffset??0,
         copyTyped(node.valid?.[0]),copyTyped(node.valid?.[1]),
         layoutPtr(payoffs?.[0]),layoutPtr(payoffs?.[1]),
         node.terminal&&node.type==='fold'?node.winner:-1,
         node.c?.[0]??0,node.c?.[1]??0,node.turn??-1,node.river??-1,
-        node.previousDelta?.byteOffset??0,prunedPtr);
+        node.previousDelta?.byteOffset??0,prunedPtr],node.id*22);
     }
-    const nodePtr=ints(rows),reachPtrs=[],outPtrs=[],ownPtrs=[];
+    const reachPtrs=[],outPtrs=[],ownPtrs=[];
     variantNodePtr=nodePtr;
     for(let p=0;p<2;p++){
       reachPtrs[p]=allocate(game.players[1-p].ids.length*8,8);
-      outPtrs[p]=allocate(game.players[p].ids.length*8,8);
+      outPtrs[p]=allocate(game.players[p].ids.length*(sourceBacked?24:8),8);
       ownPtrs[p]=allocate(game.players[p].ids.length*8,8);
       if(reachPtrs[p]===null||outPtrs[p]===null||ownPtrs[p]===null)throw Error('No WASM traversal space');
     }
-    // Parent paths are structural metadata only; no second numerical game.
-    // Follow full uncompressed runouts when computing the reach of a selected
-    // canonical decision, even if solving used exact suit-isomorphic orbits.
-    const parents=new Array(game.nodes.length);
-    for(const node of game.nodes)if(!node.terminal){
-      const edges=node.chance?node.runouts:node.actions;
-      for(let k=0;k<edges.length;k++)parents[edges[k].child]=[node.id,k];
-    }
-    const handIndices=game.players.map(p=>new Map(Array.from(p.ids,(id,i)=>[id,i])));
+    const parents=game.paths??null;
+    const handIndices=game.players.map(p=>p.index);
     function averageChancePolicy(node,hand,k){
       const a=node.actions.length,off=hand*a;
+      if(a===1)return 1;
+      if(node.lockedMask?.[hand])return node.current[off+k];
       if(node.pruned?.[k])return 0;
-      let sum=0;for(let j=0;j<a;j++)if(!node.pruned?.[j])sum+=node.averageSum[off+j];
-      return sum>0?node.averageSum[off+k]/sum:node.current[off+k];
+      const mapped=(node.suitRows?.[hand]??hand)*a;
+      let sum=0;for(let j=0;j<a;j++)if(!node.pruned?.[j])sum+=node.averageSum[mapped+j];
+      return sum>0?node.averageSum[mapped+k]/sum:node.current[mapped+k];
     }
     // Larger collision-resistant reach basis table and payout-independent
     // showdown mass vectors. If allocation is unavailable, C keeps the old
@@ -244,9 +270,74 @@ function createCompiledTraversal(game, base64, limitBytes) {
       if(addr!==null)exports.configure_showdown_cache(addr,maxN);
     }
     statsPtr=extendedCache&&typeof exports.cache_statistics==='function'?allocate(4*4,4):null;
+    if(sourceBacked)try{
+      const nativeModule=compiledModule(WASM_LOCK_KERNEL_BYTES);
+      if(nativeModule){
+        const addon=new WebAssembly.Instance(nativeModule,{env:{memory}}).exports;
+        const decisionPtr=allocate(game.nodes.length*16,4);
+        const masks=allocate(lockCapacity*maxN,1);
+        if(decisionPtr===null||masks===null)throw Error('No WASM memory for lock metadata');
+        const metadata=new Int32Array(memory.buffer,decisionPtr,game.nodes.length*4);
+        for(const node of game.nodes)if(node.current){
+          const off=node.id*4;
+          metadata[off+1]=mapPtr(node.suitRows);
+          metadata[off+2]=-1;
+          metadata[off+3]=node.frequencyUnits??0;
+        }
+        const workspaceEnd=memory.buffer.byteLength-nativeStackBytes;
+        const workspaceStart=Math.ceil(used/8)*8;
+        const evaluated=[null,null];
+        let lockedIds=[];
+        native={
+          refreshLocks(){
+            for(const id of lockedIds){metadata[4*id]=0;metadata[4*id+2]=-1;}
+            lockedIds=[];
+            let slot=0;
+            for(const entry of game.nodeLocks){
+              const node=game.nodes[entry.nodeId];
+              if(node.isoAlias||node.actions.length===1)continue;
+              const offset=masks+slot++*maxN,index=node.id*4,mask=node.lockedMask;
+              new Uint8Array(memory.buffer,offset,mask.length).set(mask);
+              metadata[index]=offset;
+              metadata[index+2]=node.allLocked?node.lockedActions.reduce((bits,on,k)=>bits|(on<<k),0):-1;
+              lockedIds.push(node.id);
+            }
+          },
+          train(id,target,reach,weight,returnVector){
+            addon.__stack_pointer.value=memory.buffer.byteLength;
+            new Float64Array(memory.buffer,reachPtrs[target],reach.length).set(reach);
+            if(!addon.train_locked(nodePtr,decisionPtr,playerPtr,id,target,game.pot,reachPtrs[target],outPtrs[target],
+                weight?ownPtrs[target]:0,workspaceStart,workspaceEnd,weight,variantFor(game),
+                game._positiveDiscount??1,game._negativeDiscount??1,
+                fusedPolicy&&game.compiled?.fusesPolicy!==false?1:0,
+                16*Number.EPSILON*Math.max(1,game.pot+game.stack)))
+              throw Error('WASM locked traversal scratch overflow');
+            if(returnVector)return Float64Array.from(new Float64Array(memory.buffer,outPtrs[target],game.players[target].ids.length));
+          },
+          evaluate(target,includeProfile,includeUnrestricted){
+            addon.__stack_pointer.value=memory.buffer.byteLength;
+            const reach=game.players[1-target].priors,priors=game.players[target].priors,n=priors.length;
+            new Float64Array(memory.buffer,reachPtrs[target],reach.length).set(reach);
+            const trackUnrestricted=includeUnrestricted&&game.nodeLocks.some(lock=>lock.player===target);
+            if(!addon.evaluate_gto(nodePtr,decisionPtr,playerPtr,game.root,target,game.pot,
+                reachPtrs[target],outPtrs[target],workspaceStart,workspaceEnd,+includeProfile,+trackUnrestricted))
+              throw Error('WASM best-response scratch overflow');
+            const size=1+Number(includeProfile)+Number(trackUnrestricted);
+            const values=evaluated[target]??=new Float64Array(memory.buffer,outPtrs[target],n*3);
+            const totals=new Float64Array(size);
+            for(let v=0;v<size;v++)for(let i=0;i<n;i++)totals[v]+=priors[i]*values[v*n+i];
+            const constrained=totals[0]/game.jointZ;
+            return {constrained,profile:includeProfile?totals[1]/game.jointZ:null,
+              unrestricted:includeUnrestricted?(trackUnrestricted?totals[size-1]/game.jointZ:constrained):null};
+          }
+        };
+        native.refreshLocks();
+      }
+    }catch(_){native=null;}
     const workspaceStart=Math.ceil(used/8)*8;
     if(memory.buffer.byteLength-workspaceStart<scratchBudget-512*1024)throw Error('WASM workspace too small');
-    full={run(id,target,reach,weight){
+    full={run(id,target,reach,weight,returnVector=true){
+      if(game.nodeLocks.length&&native)return native.train(id,target,reach,weight,returnVector);
       if(typeof exports.set_cache_mode==='function')exports.set_cache_mode(extendedCache?1:0);
       if(typeof exports.set_zero_reach_pruning==='function')exports.set_zero_reach_pruning(game.zeroReachPruning?1:0);
       if(typeof exports.set_sparse_traversal==='function')exports.set_sparse_traversal(game.sparseTraversal!==false?1:0);
@@ -263,13 +354,14 @@ function createCompiledTraversal(game, base64, limitBytes) {
       if(!exports.full_traverse(nodePtr,playerPtr,id,target,game.equilibrium==='qre'?1:0,
           game.qreTemperature,game.pot,weight,reachPtrs[target],outPtrs[target],
           weight?ownPtrs[target]:0,workspaceStart,memory.buffer.byteLength,
-          (['dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','dcfr-predictive','lcfr','dcfr-cubic','dcfr-2-0.5-2'].includes(game.gtoAlgorithm))? (game.gtoAlgorithm==='dcfr-predictive'?3:1):game.gtoAlgorithm==='optimistic'?2:0,
+          variantFor(game),
           game._positiveDiscount||1,game._negativeDiscount||1))
         throw Error('WASM traversal scratch overflow');
       if(typeof exports.pruned_terminal_hands==='function')game.prunedTerminalHands=(game.prunedTerminalHands||0)+exports.pruned_terminal_hands();
-      return Float64Array.from(new Float64Array(memory.buffer,outPtrs[target],game.players[target].ids.length));
+      if(returnVector)return Float64Array.from(new Float64Array(memory.buffer,outPtrs[target],game.players[target].ids.length));
     },
     exactBest(target,regularizedBest){
+      exports.set_regret_pruning?.(0,0);
       if(typeof exports.set_cache_mode==='function')exports.set_cache_mode(extendedCache?1:0);
       if(typeof exports.set_zero_reach_pruning==='function')exports.set_zero_reach_pruning(game.zeroReachPruning?1:0);
       const reach=game.players[1-target].priors;
@@ -283,6 +375,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
       return total/game.jointZ;
     },
     profileVector(target,id,reach){
+      exports.set_regret_pruning?.(0,0);
       if(typeof exports.set_cache_mode==='function')exports.set_cache_mode(extendedCache?1:0);
       if(typeof exports.set_zero_reach_pruning==='function')exports.set_zero_reach_pruning(game.zeroReachPruning?1:0);
       if(typeof exports.profile_evaluate!=='function')throw Error('Native profile evaluator unavailable');
@@ -299,6 +392,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
       return value/game.jointZ;
     },
     nodeDetail(id){
+      if(!parents)throw Error('Prepared path metadata unavailable');
       const node=game.nodes[id];
       if(!node||node.terminal||node.chance)return null;
       const target=node.p,mine=game.players[target],opp=game.players[1-target];
@@ -306,13 +400,14 @@ function createCompiledTraversal(game, base64, limitBytes) {
         const source=this.nodeDetail(node.isoAlias.source);
         const map=node.isoAlias.map,idx=handIndices[target];
         return {...source,id,player:target,hands:source.hands.map(h=>{
-          const i=idx.get(h[0]);return [mine.ids[map[i]],h[1],h[2],h[3].slice(),h[4].slice()];
-        })};
+          const i=idx[h[0]];return [mine.ids[map[i]],h[1],h[2],h[3].slice(),h[4].slice()];
+        }).sort((a,b)=>a[0]-b[0])};
       }
       const path=[];let cursor=id;
       while(cursor!==game.root){
-        const item=parents[cursor];if(!item)throw Error('Selected node has no root path');
-        path.push(item);cursor=item[0];
+        const parent=parents.parents[cursor];
+        if(parent<0)throw Error('Selected node has no root path');
+        path.push([parent,parents.edges[cursor]]);cursor=parent;
       }
       let oppReach=Float64Array.from(opp.priors),ownReach=new Float64Array(mine.ids.length).fill(1);
       for(let t=path.length-1;t>=0;t--){
@@ -356,7 +451,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
       return {id,player:target,rangeEV:denom>cutoff?shifted(numerator/denom):null,
         reachMass:denom/game.jointZ,actions:denom>cutoff?Array.from(agg,v=>v/denom):Array(a).fill(0),hands};
     }};
-  }catch(_){full=null;}
+  }catch(_){full=null;native=null;}
   // Culling requires a native full-tree skip mask. A partial native bridge
   // must not refresh unmasked policies or silently accept a slow alternate.
   if(game.actionPruning?.enabled&&!full)return null;
@@ -364,8 +459,14 @@ function createCompiledTraversal(game, base64, limitBytes) {
   // evaluators use the same increment-constrained policy as the reports.
   const evaluateNative=full&&!game.hasFrequencyIncrements;
   return {
-    memory,fusesPolicy:!!(full&&fusedPolicy),mode:full?'wasm-full-tree-f64':'wasm-f64',simd:simdEnabled&&typeof exports.kernel_features==='function'&&exports.kernel_features()===1,fullTraversal:!!full,
-    traverse:full?(id,target,reach,weight)=>full.run(id,target,reach,weight):null,
+    memory,
+    get fusesPolicy(){return !!(full&&fusedPolicy&&(!game.nodeLocks.length||native));},
+    get mode(){return game.nodeLocks.length?(native?'wasm-locked-tree-f64':'javascript-locks'):full?'wasm-full-tree-f64':'wasm-f64';},
+    simd:simdEnabled&&typeof exports.kernel_features==='function'&&exports.kernel_features()===1,fullTraversal:!!full,
+    handlesLocks:!!native,
+    refreshLocks:native?.refreshLocks??null,
+    evaluateValues:native?.evaluate??null,
+    traverse:full?(id,target,reach,weight,returnVector)=>full.run(id,target,reach,weight,returnVector):null,
     profileEV:evaluateNative&&typeof exports.profile_evaluate==='function'?(target)=>full.profileEV(target):null,
     nodeDetail:evaluateNative&&typeof exports.profile_evaluate==='function'?(id)=>full.nodeDetail(id):null,
     exactBest:evaluateNative&&typeof exports.exact_best_response==='function'?(target,regularized)=>full.exactBest(target,regularized):null,
@@ -377,7 +478,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
     }:null,
     allocateVector:allocVector,
     updatePolicy(player,qre){
-      const variant=(['dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','dcfr-predictive','lcfr','dcfr-cubic','dcfr-2-0.5-2'].includes(game.gtoAlgorithm))? (game.gtoAlgorithm==='dcfr-predictive'?3:1):game.gtoAlgorithm==='optimistic'?2:0;
+      const variant=variantFor(game);
       const tieFloor=qre?0:16*Number.EPSILON*Math.max(1,game.pot+game.stack);
       if(!qre&&variant&&full)exports.policy_variant(variantNodePtr,metaAddr,decisions.length,player,variant,tieFloor);
       else if(!qre&&variant){
