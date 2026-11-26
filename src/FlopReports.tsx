@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { FlopActionLabel, FlopReportChart } from './FlopReportChart.tsx'
-import { FlopSizingTrainer } from './FlopSizingTrainer.tsx'
+import { FlopSizingTrainer, type FlopTrainingMode } from './FlopSizingTrainer.tsx'
 import { parseFlopReport, type FlopReport } from './flopReport.ts'
 import { readStudyFile } from './studyFiles.ts'
 import { flopReportGroups, flopReportLines, type FlopReportLine } from './flopReportCatalog.ts'
@@ -13,6 +13,7 @@ type LoadedReport = { file: string; data: FlopReport | null }
 
 export default function FlopReports() {
   const [view, setView] = useState<ReportView>('Reports')
+  const [trainingMode, setTrainingMode] = useState<FlopTrainingMode>('Sizing')
   const [groupIndex, setGroup] = useState(0)
   const [matchupId, setMatchup] = useState(flopReportGroups[0].matchups[0].id)
   const [lineId, setLine] = useState<FlopReportLine>('cbet')
@@ -102,7 +103,7 @@ export default function FlopReports() {
       </>}
     </div>
     <div role="tabpanel" id="flop-view-Trainer" aria-labelledby="flop-tab-Trainer" hidden={view !== 'Trainer'}>
-      {report && <FlopSizingTrainer key={file} report={report} />}
+      {report && <FlopSizingTrainer key={file} report={report} mode={trainingMode} setMode={setTrainingMode} />}
     </div>
   </div>
 }

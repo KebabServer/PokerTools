@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { readCards } from '../src/cards.ts'
 import { flopTexture, parseFlopReport } from '../src/flopReport.ts'
 import { flopReportGroups } from '../src/flopReportCatalog.ts'
-import { flopSizingQuestions } from '../src/flopSizingTrainer.ts'
+import { bandForRoll, flopActionBands, flopSizingQuestions } from '../src/flopSizingTrainer.ts'
 import { convertFourBetReport } from '../scripts/convert-4bet-reports.mjs'
 import { readStudySnapshot, reportSnapshotNames } from './studySnapshot.js'
 
@@ -82,6 +82,23 @@ test('the trainer accepts tied raise sizes and can prefer all-in', () => {
 test('the trainer requires a choice between multiple sizes', () => {
   const report = parseFlopReport('flop,ip_ev,oop_ev,Check,B33\nAh8d3c,,,0.5,0.5')
   assert.deepEqual(flopSizingQuestions(report).questions, [])
+})
+
+test('frequency rolls use report order, put boundaries in the next band and include 100 in the last band', () => {
+  const bands = flopActionBands([.4, .2, .4, 0])
+  assert.deepEqual(bands, [
+    { index: 0, start: 0, end: 40 },
+    { index: 1, start: 40, end: 60 },
+    { index: 2, start: 60, end: 100 },
+  ])
+  assert.deepEqual([0, 39, 40, 59, 60, 99, 100].map(roll => bandForRoll(bands, roll).index),
+    [0, 0, 1, 1, 2, 2, 2])
+})
+
+test('frequency bands normalize rounding in reports and skip zero-frequency actions', () => {
+  const bands = flopActionBands([0, .33333, 0, .66666])
+  assert.deepEqual(bands, [{ index: 1, start: 0, end: 33.333 }, { index: 3, start: 33.333, end: 100 }])
+  assert.equal(bandForRoll(flopActionBands([0, 1, 0]), 100).index, 1)
 })
 
 function fourBetExport({ actor, ip, oop, bets }) {

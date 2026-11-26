@@ -18,7 +18,7 @@
   font-weight: 650;
 }
 .flop-report-tabs button:hover { color: #fff; }
-.flop-report-tabs button[aria-selected="true"] { background: #383838; color: #fff; }
+.flop-report-tabs button:is([aria-selected="true"], [aria-pressed="true"]) { background: #383838; color: #fff; }
 .flop-report-controls {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(0, 1fr));
@@ -184,7 +184,9 @@
   border-radius: 6px;
 }
 .flop-trainer-score { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; text-align: right; }
+.flop-trainer-session { display: grid; justify-items: end; gap: 4px; }
 .flop-trainer h2 { margin: 12px 0 9px; font-size: 1rem; line-height: 1.3; }
+.flop-trainer-roll-hint { margin: -3px 0 8px; font-size: .8rem; }
 .flop-trainer-choices { display: flex; flex-wrap: wrap; gap: 6px; }
 .flop-trainer-choice {
   flex: 1 0 47px;
@@ -200,7 +202,22 @@
 .flop-trainer-result[data-result="correct"] strong { color: #a1e5c6; }
 .flop-trainer-result[data-result="incorrect"] strong { color: #ffc5cc; }
 .flop-trainer-next { flex: none; padding-inline: 12px; white-space: nowrap; }
-.flop-trainer-feedback { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.flop-trainer-feedback { margin-top: 12px; }
+.flop-trainer-gradient {
+  position: relative;
+  height: 14px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.flop-trainer-roll-marker {
+  position: absolute;
+  inset-block: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: #fff;
+  box-shadow: 0 0 0 1px #161616;
+}
 .flop-trainer-feedback h3 { margin-bottom: 6px; font-size: .82rem; }
 
 @media (max-width: 680px) {
@@ -211,6 +228,9 @@
   .flop-plot canvas { height: 116px; }
 }
 @media (max-width: 440px) {
+  .main-wrap[data-tool="flop-reports"] { padding-top: 14px; }
   .flop-reports .tool-heading h1 { font-size: 1.25rem; }
+  .flop-trainer-feedback { margin-top: 8px; }
   .flop-trainer-feedback .flop-board-actions { gap: 5px 8px; }
+  .flop-trainer-choices:has(> :nth-child(6)) { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
