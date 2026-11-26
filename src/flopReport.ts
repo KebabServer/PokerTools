@@ -25,6 +25,7 @@ export type FlopBoard = {
 export type FlopTextureGroup = { id: Texture; label: string; boards: FlopBoard[] }
 export type FlopAction = { label: string; color: string }
 export type FlopReport = { groups: FlopTextureGroup[]; actions: FlopAction[]; boardCount: number }
+export type FlopBoardOrder = 'default' | 'low'
 
 const actionColors: Record<string, string> = {
   Fold: '#5488cf',
@@ -76,12 +77,23 @@ function parseFrequency(value: string) {
   return frequency
 }
 
-function byRankThenBoard(a: FlopBoard, b: FlopBoard) {
-  return b.groupRank - a.groupRank
-    || (b.cards[0] >> 2) - (a.cards[0] >> 2)
+function byBoardRanks(a: FlopBoard, b: FlopBoard) {
+  return (b.cards[0] >> 2) - (a.cards[0] >> 2)
     || (b.cards[1] >> 2) - (a.cards[1] >> 2)
     || (b.cards[2] >> 2) - (a.cards[2] >> 2)
     || a.code.localeCompare(b.code)
+}
+
+export function flopChartRank(board: FlopBoard, order: FlopBoardOrder) {
+  return order === 'low' ? board.cards[2] >> 2 : board.groupRank
+}
+
+function compareBoards(order: FlopBoardOrder) {
+  return (a: FlopBoard, b: FlopBoard) => flopChartRank(b, order) - flopChartRank(a, order) || byBoardRanks(a, b)
+}
+
+export function orderFlopBoards(boards: FlopBoard[], order: FlopBoardOrder) {
+  return order === 'low' ? [...boards].sort(compareBoards(order)) : boards
 }
 
 // The flop exports use unquoted comma-separated fields with one board per line.
@@ -128,6 +140,6 @@ export function parseFlopReport(text: string): FlopReport {
   }
 
   if (!boardCount) throw new Error('This report has no flop boards.')
-  for (const { boards } of groups) boards.sort(byRankThenBoard)
+  for (const { boards } of groups) boards.sort(compareBoards('default'))
   return { groups, actions, boardCount }
 }

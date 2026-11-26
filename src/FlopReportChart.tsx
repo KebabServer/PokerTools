@@ -1,14 +1,14 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, MouseEvent, PointerEvent } from 'react'
 import { ArrowLeft, ArrowRight, X } from 'lucide-react'
 import { ranks } from './cards.ts'
 import { PlayingCard } from './PlayingCard.tsx'
-import type { FlopAction, FlopBoard, FlopTextureGroup } from './flopReport.ts'
+import { flopChartRank, orderFlopBoards, type FlopAction, type FlopBoard, type FlopBoardOrder, type FlopTextureGroup } from './flopReport.ts'
 
 const rankAxisHeight = 20
 const percent = new Intl.NumberFormat('en', { style: 'percent', maximumFractionDigits: 1 })
 
-function drawChart(canvas: HTMLCanvasElement, boards: FlopBoard[], actions: FlopAction[]) {
+function drawChart(canvas: HTMLCanvasElement, boards: FlopBoard[], actions: FlopAction[], order: FlopBoardOrder) {
   const { width, height } = canvas.getBoundingClientRect()
   if (!width || !height) return
 
@@ -20,6 +20,7 @@ function drawChart(canvas: HTMLCanvasElement, boards: FlopBoard[], actions: Flop
 
   const plotHeight = Math.round((height - rankAxisHeight) * pixelRatio)
   const boardWidth = canvas.width / boards.length
+  const groupRanks = boards.map(board => flopChartRank(board, order))
   let firstInRank = 0
 
   for (const [index, board] of boards.entries()) {
@@ -37,17 +38,18 @@ function drawChart(canvas: HTMLCanvasElement, boards: FlopBoard[], actions: Flop
       top = bottom
     }
 
-    if (board.groupRank !== boards[index + 1]?.groupRank) {
+    const rank = groupRanks[index]
+    if (rank !== groupRanks[index + 1]) {
       const groupWidth = (index + 1 - firstInRank) * boardWidth
       if (groupWidth >= 10 * pixelRatio) {
         ctx.fillStyle = '#b4b4b4'
         ctx.font = `${11 * pixelRatio}px system-ui, sans-serif`
         ctx.textAlign = 'center'
-        ctx.fillText(ranks[board.groupRank], right - groupWidth / 2, plotHeight + 15 * pixelRatio)
+        ctx.fillText(ranks[rank], right - groupWidth / 2, plotHeight + 15 * pixelRatio)
       }
       firstInRank = index + 1
     }
-    if (index && boards[index - 1].groupRank !== board.groupRank) {
+    if (index && groupRanks[index - 1] !== rank) {
       ctx.fillStyle = '#17171799'
       ctx.fillRect(left, 0, Math.round(pixelRatio), plotHeight)
     }
@@ -82,24 +84,28 @@ function BoardDetails({ board, actions }: { board: FlopBoard; actions: FlopActio
   </>
 }
 
-export function FlopReportChart({ group, actions }: { group: FlopTextureGroup; actions: FlopAction[] }) {
-  const { boards, label } = group
+export function FlopReportChart({ group, actions, order }: { group: FlopTextureGroup; actions: FlopAction[]; order: FlopBoardOrder }) {
+  const boards = useMemo(() => orderFlopBoards(group.boards, order), [group.boards, order])
+  const { label } = group
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const chartButtonRef = useRef<HTMLButtonElement>(null)
   const headingId = useId()
   const detailsId = useId()
-  const [selected, setSelected] = useState<number | null>(null)
-  const [hovered, setHovered] = useState<{ index: number; x: number; y: number } | null>(null)
+  const [selectedBoard, setSelectedBoard] = useState<FlopBoard | null>(null)
+  const [preview, setHovered] = useState<{ boards: FlopBoard[]; index: number; x: number; y: number } | null>(null)
+  const selectedIndex = selectedBoard ? boards.indexOf(selectedBoard) : -1
+  const selected = selectedIndex < 0 ? null : selectedIndex
+  const hovered = preview?.boards === boards ? preview : null
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const redraw = () => drawChart(canvas, boards, actions)
+    const redraw = () => drawChart(canvas, boards, actions, order)
     redraw()
     const observer = new ResizeObserver(redraw)
     observer.observe(canvas)
     return () => observer.disconnect()
-  }, [boards, actions])
+  }, [boards, actions, order])
 
   function boardAt(event: MouseEvent<HTMLButtonElement> | PointerEvent<HTMLButtonElement>) {
     const { left, width } = event.currentTarget.getBoundingClientRect()
@@ -108,7 +114,7 @@ export function FlopReportChart({ group, actions }: { group: FlopTextureGroup; a
 
   function select(index: number) {
     setHovered(null)
-    setSelected(Math.max(0, Math.min(boards.length - 1, index)))
+    setSelectedBoard(boards[Math.max(0, Math.min(boards.length - 1, index))])
   }
 
   function handleKey(event: KeyboardEvent<HTMLButtonElement>) {
@@ -117,7 +123,7 @@ export function FlopReportChart({ group, actions }: { group: FlopTextureGroup; a
       case 'ArrowRight': select((selected ?? -1) + 1); break
       case 'Home': select(0); break
       case 'End': select(boards.length - 1); break
-      case 'Escape': setHovered(null); setSelected(null); break
+      case 'Escape': setHovered(null); setSelectedBoard(null); break
       default: return
     }
     event.preventDefault()
@@ -138,7 +144,7 @@ export function FlopReportChart({ group, actions }: { group: FlopTextureGroup; a
         aria-describedby="flop-chart-keys"
         onClick={event => select(event.detail ? boardAt(event) : selected ?? 0)}
         onPointerMove={event => {
-          if (event.pointerType === 'mouse') setHovered({ index: boardAt(event), x: event.clientX, y: event.clientY })
+          if (event.pointerType === 'mouse') setHovered({ boards, index: boardAt(event), x: event.clientX, y: event.clientY })
         }}
         onPointerLeave={() => setHovered(null)}
         onKeyDown={handleKey}
@@ -162,7 +168,7 @@ export function FlopReportChart({ group, actions }: { group: FlopTextureGroup; a
           <div>
             <button type="button" className="icon-button" aria-label="Previous flop" disabled={selected === 0} onClick={() => select(selected - 1)}><ArrowLeft size={16} /></button>
             <button type="button" className="icon-button" aria-label="Next flop" disabled={selected === boards.length - 1} onClick={() => select(selected + 1)}><ArrowRight size={16} /></button>
-            <button type="button" className="icon-button" aria-label="Close board details" onClick={() => { setSelected(null); chartButtonRef.current?.focus() }}><X size={16} /></button>
+            <button type="button" className="icon-button" aria-label="Close board details" onClick={() => { setSelectedBoard(null); chartButtonRef.current?.focus() }}><X size={16} /></button>
           </div>
         </div>
         <BoardDetails board={boards[selected]} actions={actions} />

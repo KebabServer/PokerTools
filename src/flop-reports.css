@@ -58,7 +58,10 @@
   gap: 5px 14px;
   margin-top: 16px;
 }
-.flop-report-summary > span, .flop-chart-heading > span, .flop-report-hint, .flop-inspector-nav > span {
+.flop-report-chart-options { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 5px 10px; }
+.flop-report-chart-options label { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: .82rem; }
+.flop-report-chart-options select { width: auto; }
+.flop-report-chart-options > span, .flop-chart-heading > span, .flop-report-hint, .flop-inspector-nav > span {
   color: var(--muted);
   font-size: .78rem;
   font-variant-numeric: tabular-nums;
@@ -223,6 +226,7 @@
 .flop-trainer-feedback h3 { margin-bottom: 6px; font-size: .82rem; }
 
 @media (max-width: 680px) {
+  .flop-report-chart-options { width: 100%; }
   .flop-report-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; }
   .flop-pot-types { grid-column: 1 / -1; }
   .flop-charts { grid-template-columns: minmax(0, 1fr); gap: 9px; }

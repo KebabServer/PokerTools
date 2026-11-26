@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readCards } from '../src/cards.ts'
-import { flopTexture, parseFlopReport } from '../src/flopReport.ts'
+import { flopChartRank, flopTexture, orderFlopBoards, parseFlopReport } from '../src/flopReport.ts'
 import { flopReportGroups } from '../src/flopReportCatalog.ts'
 import { bandForRoll, flopActionBands, flopSizingQuestions } from '../src/flopSizingTrainer.ts'
 import { convertFourBetReport } from '../scripts/convert-4bet-reports.mjs'
@@ -34,6 +34,19 @@ test('flop textures distinguish wheel boards, trips, and the rank of a pair', ()
   assert.equal(flopTexture(readCards('AdAhAs')).texture, 'trips')
   assert.deepEqual(flopTexture(readCards('Ah9d9c')), { texture: 'paired-rainbow', groupRank: 7 })
   assert.deepEqual(flopTexture(readCards('Ah9h9c')), { texture: 'paired-two-tone', groupRank: 7 })
+})
+
+test('lowest-card order sorts within each texture and gives the chart the lowest rank for its axis', () => {
+  const report = parseFlopReport('flop,ip_ev,oop_ev,Check\nAs7d2c,,,1\nQs8d5c,,,1\nKs8d5c,,,1\nAh9d9c,,,1\nKhKd4c,,,1')
+  const rainbow = report.groups.find(group => group.id === 'rainbow-disconnected').boards
+  const paired = report.groups.find(group => group.id === 'paired-rainbow').boards
+  const codes = boards => boards.map(board => board.code)
+  assert.deepEqual(codes(orderFlopBoards(rainbow, 'low')), ['Ks8d5c', 'Qs8d5c', 'As7d2c'])
+  assert.deepEqual(codes(orderFlopBoards(paired, 'low')), ['Ah9d9c', 'KhKd4c'])
+  assert.deepEqual(codes(orderFlopBoards(rainbow, 'default')), ['As7d2c', 'Ks8d5c', 'Qs8d5c'])
+  assert.deepEqual(codes(paired), ['KhKd4c', 'Ah9d9c'])
+  assert.equal(flopChartRank(paired[0], 'low'), 2)
+  assert.equal(flopChartRank(paired[0], 'default'), 11)
 })
 
 test('the repaired BTN reports retain both raises and all-in frequencies', () => {

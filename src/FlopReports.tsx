@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { FlopActionLabel, FlopReportChart } from './FlopReportChart.tsx'
 import { FlopSizingTrainer, type FlopTrainingMode } from './FlopSizingTrainer.tsx'
-import { parseFlopReport, type FlopReport } from './flopReport.ts'
+import { parseFlopReport, type FlopBoardOrder, type FlopReport } from './flopReport.ts'
 import { readStudyFile } from './studyFiles.ts'
 import { flopReportGroups, flopReportLines, type FlopReportLine } from './flopReportCatalog.ts'
 import './flop-reports.css'
@@ -13,6 +13,7 @@ type LoadedReport = { file: string; data: FlopReport | null }
 
 export default function FlopReports() {
   const [view, setView] = useState<ReportView>('Reports')
+  const [boardOrder, setBoardOrder] = useState<FlopBoardOrder>('default')
   const [trainingMode, setTrainingMode] = useState<FlopTrainingMode>('Sizing')
   const [groupIndex, setGroup] = useState(0)
   const [matchupId, setMatchup] = useState(flopReportGroups[0].matchups[0].id)
@@ -91,13 +92,21 @@ export default function FlopReports() {
           <ul className="flop-legend" aria-label="Action frequencies">
             {report.actions.map(action => <li key={action.label}><FlopActionLabel action={action} /></li>)}
           </ul>
-          <span>{report.boardCount.toLocaleString('en')} flops</span>
+          <div className="flop-report-chart-options">
+            <span>{report.boardCount.toLocaleString('en')} flops</span>
+            <label>Sort by
+              <select value={boardOrder} onChange={event => setBoardOrder(event.target.value === 'low' ? 'low' : 'default')}>
+                <option value="default">High / pair rank</option>
+                <option value="low">Lowest card</option>
+              </select>
+            </label>
+          </div>
         </div>
         <p className="flop-report-hint">Hover or tap a bar to inspect the flop.</p>
         <span className="sr-only" id="flop-chart-keys">Press Enter to open details. Use the left and right arrow keys to step through flops.</span>
         <div className="flop-charts" key={file}>
           {report.groups.filter(texture => texture.boards.length).map(texture =>
-            <FlopReportChart key={texture.id} group={texture} actions={report.actions} />
+            <FlopReportChart key={texture.id} group={texture} actions={report.actions} order={boardOrder} />
           )}
         </div>
       </>}
