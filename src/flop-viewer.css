@@ -80,6 +80,7 @@
   border-top: 1px solid var(--border);
 }
 .flop-viewer-combo-cards { display: grid; justify-items: start; gap: 3px; }
+.flop-viewer-combo-mix { display: grid; gap: 6px; min-width: 0; }
 .flop-viewer-note { margin-top: 8px; font-size: .86rem; }
 .flop-viewer-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .flop-viewer-login, .flop-viewer-import { margin-top: 12px; }

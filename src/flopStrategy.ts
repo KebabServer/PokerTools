@@ -96,6 +96,11 @@ function hasNutSuit(board: number[], hole: number[], suit: number) {
 type Totals = { weight: number; shares: number[] }
 type ClassTotals = Totals & { legal: number; combos: FlopCombo[] }
 
+export function flopComboShares(frequencies: number[], weight = 1) {
+  const sum = frequencies.reduce((total, frequency) => total + frequency, 0)
+  return [...frequencies.map(frequency => weight * frequency / Math.max(100, sum)), weight * Math.max(0, 1 - sum / 100)]
+}
+
 export function summarizeFlopNode(board: number[], node: FlopNode) {
   // The last share holds reach weight for which the export lists no action.
   const totals = (): Totals => ({ weight: 0, shares: Array<number>(node.actions.length + 1).fill(0) })
@@ -112,9 +117,7 @@ export function summarizeFlopNode(board: number[], node: FlopNode) {
     if (!combo.weight || hole.some(card => board.includes(card))) continue
     const hand = hands.get(startingHandName(hole[0], hole[1]))!
     const classes = flopHandClasses(board, hole)
-    const sum = combo.frequencies.reduce((total, frequency) => total + frequency, 0)
-    const shares = combo.frequencies.map(frequency => combo.weight * frequency / Math.max(100, sum))
-    shares.push(combo.weight * Math.max(0, 1 - sum / 100))
+    const shares = flopComboShares(combo.frequencies, combo.weight)
     for (const entry of [whole, hand, made.get(classes.made)!, draws.get(classes.draw)!]) {
       entry.weight += combo.weight
       shares.forEach((share, index) => { entry.shares[index] += share })

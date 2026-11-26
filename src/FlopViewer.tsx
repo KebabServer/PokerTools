@@ -6,7 +6,7 @@ import { supabase } from './library.ts'
 import { parseFlopImport } from './flopViewerImport.ts'
 import { getFlopSpot, listFlopBoards, listFlopConfigurations, saveFlopSpots, type FlopConfiguration } from './flopViewerLibrary.ts'
 import {
-  flopActionColor, flopHands, flopMixBackground, summarizeFlopNode, unlistedAction,
+  flopActionColor, flopComboShares, flopHands, flopMixBackground, summarizeFlopNode, unlistedAction,
   type FlopNode, type FlopSpot,
 } from './flopStrategy.ts'
 import './flop-viewer.css'
@@ -113,21 +113,29 @@ function FlopMatrix({ board, node }: { board: string; node: FlopNode }) {
           <span>{amount.format(hand.weight)} weighted</span>
         </div>
         {hand.combos.length ? <ul className="flop-viewer-combo-list">
-          {hand.combos.map(combo => <li key={combo.hand}>
-            <div className="flop-viewer-combo-cards">
-              <div className="flop-viewer-cards" role="group" aria-label={combo.hand}>
-                {readCards(combo.hand).map(card => <PlayingCard key={card} card={card} />)}
+          {hand.combos.map(combo => {
+            const shares = flopComboShares(combo.frequencies)
+            const summary = actionSummary(shares, 1, labels)
+            return <li key={combo.hand}>
+              <div className="flop-viewer-combo-cards">
+                <div className="flop-viewer-cards" role="group" aria-label={combo.hand}>
+                  {readCards(combo.hand).map(card => <PlayingCard key={card} card={card} />)}
+                </div>
+                <span title="Range weight">{percent.format(combo.weight)} weight</span>
               </div>
-              <span title="Range weight">{percent.format(combo.weight)} weight</span>
-            </div>
-            <ul className="flop-viewer-combo-actions">
-              {node.actions.map((action, index) => <li key={action.label}>
-                <span className="flop-viewer-swatch" style={{ backgroundColor: colors[index] }} aria-hidden="true" />
-                {action.label} <strong>{percent.format(combo.frequencies[index] / 100)}</strong>
-                {combo.evs?.[index] != null && <span className="flop-viewer-muted">EV {amount.format(combo.evs[index]!)}</span>}
-              </li>)}
-            </ul>
-          </li>)}
+              <div className="flop-viewer-combo-mix">
+                <div className="flop-viewer-bar" role="img" aria-label={summary} title={summary}
+                  style={{ backgroundImage: flopMixBackground(shares, 1, colors) }} />
+                <ul className="flop-viewer-combo-actions">
+                  {node.actions.map((action, index) => <li key={action.label}>
+                    <span className="flop-viewer-swatch" style={{ backgroundColor: colors[index] }} aria-hidden="true" />
+                    {action.label} <strong>{percent.format(combo.frequencies[index] / 100)}</strong>
+                    {combo.evs?.[index] != null && <span className="flop-viewer-muted">EV {amount.format(combo.evs[index]!)}</span>}
+                  </li>)}
+                </ul>
+              </div>
+            </li>
+          })}
         </ul> : <p className="flop-viewer-note">No weighted combos for this hand.</p>}
       </section>}
     </div>
