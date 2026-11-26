@@ -3,6 +3,7 @@ import { cardText, deck, ranks, readCards } from './cards.ts'
 export type Combo = { cards: [number, number]; mask: bigint }
 export const gridRanks = [...ranks].reverse()
 export const gridHands = gridRanks.map((row, i) => gridRanks.map((col, j) => i === j ? row + col : i < j ? row + col + 's' : col + row + 'o'))
+const handClasses = gridHands.flat()
 const cardBits = deck.map(card => 1n << BigInt(card))
 export const cardMask = (cards: number[]) => cards.reduce((mask, card) => mask | cardBits[card], 0n)
 const combosByClass = new Map<string, Combo[]>()
@@ -69,7 +70,7 @@ export function parseRange(text: string) {
   for (const token of tokens) {
     if (token === 'RANDOM') {
       allCombos.forEach(add)
-      gridHands.flat().forEach(name => classes.add(name))
+      handClasses.forEach(name => classes.add(name))
       continue
     }
     if (/^(?:[2-9TJQKA][CDHS]){2}$/.test(token)) {
@@ -90,6 +91,29 @@ export function parseRange(text: string) {
     }
   }
   return { combos: [...byMask.values()], classes, specific, exact: tokens.length === 1 ? exact : [] }
+}
+
+type ParsedRange = ReturnType<typeof parseRange>
+
+export function rangeMatrixSelection(range: ParsedRange | null) {
+  const counts = new Map<string, number>()
+  for (const { cards: [a, b] } of range?.combos ?? []) {
+    const name = startingHandName(a, b)
+    counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  return new Map([...counts].map(([name, count]) =>
+    [name, count === combosByClass.get(name)?.length ? true : 'mixed'] as const))
+}
+
+export function toggleRangeClass(range: ParsedRange | null, hand: string, isSelected: boolean) {
+  const classes = new Set(range?.classes)
+  if (isSelected) classes.delete(hand)
+  else classes.add(hand)
+  const specific = (range?.specific ?? []).filter(combo => {
+    const [a, b] = readCards(combo)
+    return startingHandName(a, b) !== hand
+  })
+  return [...handClasses.filter(name => classes.has(name)), ...specific].join(', ')
 }
 
 export function normalizeExactField(text: string) {

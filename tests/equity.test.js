@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { calculateEquity, equityInputs } from '../src/equity.ts'
-import { parseRange } from '../src/ranges.ts'
+import { parseRange, rangeMatrixSelection, toggleRangeClass } from '../src/ranges.ts'
 
 test('river guarantees a winner with exact percentages', () => {
   const result = calculateEquity({ players: ['AsAd', 'KhKd'], board: 'Ac 9c 7h 4s 2d', dead: '' })
@@ -25,6 +25,28 @@ test('ranges expand without duplicates and apply blockers', () => {
   assert.throws(() => equityInputs({ players: ['AsKd', 'AsJc'], board: '', dead: '' }), /duplicate card/i)
   assert.throws(() => calculateEquity({ players: ['AA', 'AA', 'AA'], board: '', dead: '' }), /no legal matchup/i)
   assert.equal(options[1].combos.length, 2)
+})
+
+test('matrix toggles expand a partial class and preserve exact combos in other classes', () => {
+  const range = parseRange('77+, AsKd, 5c4c')
+  const selection = rangeMatrixSelection(range)
+  assert.equal(selection.get('AA'), true)
+  assert.equal(selection.get('AKo'), 'mixed')
+  assert.equal(selection.get('54s'), 'mixed')
+  assert.equal(selection.has('AKs'), false)
+
+  const expanded = parseRange(toggleRangeClass(range, 'AKo', false))
+  assert.equal(rangeMatrixSelection(expanded).get('AKo'), true)
+  assert.deepEqual(expanded.specific, ['5c4c'])
+  const removed = parseRange(toggleRangeClass(expanded, 'AKo', true))
+  assert.equal(rangeMatrixSelection(removed).has('AKo'), false)
+  assert.deepEqual(removed.specific, ['5c4c'])
+})
+
+test('matrix recognizes a full class entered as individual combos and removes all of them', () => {
+  const range = parseRange('AsKs, AhKh, AdKd, AcKc, AsKd')
+  assert.equal(rangeMatrixSelection(range).get('AKs'), true)
+  assert.equal(toggleRangeClass(range, 'AKs', true), 'AsKd')
 })
 
 test('each legal combo contributes its own outcome, with dead cards applied', () => {

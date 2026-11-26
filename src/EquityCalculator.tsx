@@ -3,7 +3,7 @@ import { ChevronDown, Plus, Trash2 } from 'lucide-react'
 import type { EquityResult } from './equity.ts'
 import type { WorkerResponse } from './equity.worker.ts'
 import { calculationLibrary, type SavedCalculation } from './library.ts'
-import { gridHands, normalizeExactField, parseRange } from './ranges.ts'
+import { gridHands, normalizeExactField, parseRange, rangeMatrixSelection, toggleRangeClass } from './ranges.ts'
 
 function rangeDetails(text: string) {
   try { return parseRange(normalizeExactField(text)) } catch { return null }
@@ -16,7 +16,7 @@ export function EquityCalculator({ userId, initialCalculation, deletedCalculatio
   userId?: string; initialCalculation: SavedCalculation | null; deletedCalculationId: string | null
 }) {
   const [players, setPlayers] = useState(initialCalculation?.input.players ?? ['AsKd', 'QQ'])
-  const [focused, setFocused] = useState(1)
+  const [matrixPlayer, setMatrixPlayer] = useState<number | null>(null)
   const [board, setBoard] = useState(initialCalculation?.input.board ?? '')
   const [dead, setDead] = useState(initialCalculation?.input.dead ?? '')
   const [progress, setProgress] = useState<number | null>(null)
@@ -31,7 +31,9 @@ export function EquityCalculator({ userId, initialCalculation, deletedCalculatio
   const worker = useRef<Worker | null>(null)
   useEffect(() => () => worker.current?.terminate(), [])
   const ranges = players.map(rangeDetails)
-  const selected = ranges[focused]
+  const matrixRange = matrixPlayer === null ? null : ranges[matrixPlayer]
+  const matrixSelection = rangeMatrixSelection(matrixRange)
+  const invalidMatrixRange = matrixPlayer !== null && matrixRange === null && !!players[matrixPlayer].trim()
   const running = progress !== null
   const savedTitle = saved?.result === result && saved?.id !== deletedCalculationId ? saved?.title : undefined
 
@@ -71,13 +73,6 @@ export function EquityCalculator({ userId, initialCalculation, deletedCalculatio
     setPlayers(values => values.map((previous, position) => index === position ? value : previous))
   }
 
-  function toggleHand(hand: string) {
-    const classes = new Set(selected?.classes)
-    if (classes.has(hand)) classes.delete(hand)
-    else classes.add(hand)
-    setRange(focused, [...gridHands.flat().filter(name => classes.has(name)), ...(selected?.specific ?? [])].join(', '))
-  }
-
   function calculate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     clear()
@@ -108,22 +103,45 @@ export function EquityCalculator({ userId, initialCalculation, deletedCalculatio
       <h1>Equity Calculator</h1>
       <button type="button" className="button small add-player" disabled={running || players.length >= 10} onClick={() => {
         clear()
-        setFocused(players.length)
         setPlayers([...players, 'random'])
       }}><Plus size={16} /> Add player</button>
     </div>
     <form className="panel equity-inputs" onSubmit={calculate}>
       <div className={'range-list' + (players.length > 2 ? ' multiple-players' : '')}>
         {players.map((range, index) => <div className="range-row" key={index}>
-          <label><span className="range-heading"><span>Player {index + 1}</span><span aria-hidden="true">{ranges[index] && countText.format(ranges[index].combos.length) + (ranges[index].combos.length === 1 ? ' combo' : ' combos')}</span></span>
-            <input aria-label={'Player ' + (index + 1)} id={'range-player-' + index} value={range} placeholder="AsKd or 77+" onFocus={() => setFocused(index)} onChange={event => setRange(index, event.target.value)} autoComplete="off" spellCheck={false} disabled={running} />
-          </label>
-          {players.length > 2 && <button type="button" className="icon-button" aria-label={'Remove player ' + (index + 1)} disabled={running} onClick={() => {
-            clear()
-            setPlayers(players.filter((_, i) => i !== index))
-            setFocused(index < focused ? focused - 1 : Math.min(focused, players.length - 2))
-          }}><Trash2 size={16} /></button>}
+          <label className="range-heading" htmlFor={'range-player-' + index}><span>Player {index + 1}</span><span aria-hidden="true">{ranges[index] && countText.format(ranges[index].combos.length) + (ranges[index].combos.length === 1 ? ' combo' : ' combos')}</span></label>
+          <div className="range-entry">
+            <input aria-label={'Player ' + (index + 1)} id={'range-player-' + index} value={range} placeholder="AsKd or 77+" onChange={event => setRange(index, event.target.value)} autoComplete="off" spellCheck={false} disabled={running} />
+            <button type="button" className="button equity-matrix-toggle" aria-label={'Player ' + (index + 1) + ' range matrix'}
+              aria-expanded={matrixPlayer === index} aria-controls="equity-range-matrix"
+              onClick={() => setMatrixPlayer(current => current === index ? null : index)}>Matrix</button>
+            {players.length > 2 && <button type="button" className="icon-button" aria-label={'Remove player ' + (index + 1)} disabled={running} onClick={() => {
+              clear()
+              setPlayers(players.filter((_, i) => i !== index))
+              setMatrixPlayer(current => current === null || current === index ? null : current - Number(index < current))
+            }}><Trash2 size={16} /></button>}
+          </div>
         </div>)}
+        <section className="equity-range-matrix" id="equity-range-matrix" aria-labelledby="equity-matrix-title" hidden={matrixPlayer === null}>
+          {matrixPlayer !== null && <>
+            <div className="section-head grid-heading">
+              <h2 id="equity-matrix-title">Player {matrixPlayer + 1} range matrix</h2>
+              <button type="button" className="button text-button" disabled={running || !players[matrixPlayer]} onClick={() => setRange(matrixPlayer, '')}>Clear range</button>
+            </div>
+            {invalidMatrixRange && <p className="field-hint">Fix the range text or clear it to select hands.</p>}
+            <p className="field-hint grid-scroll-hint">Swipe the matrix to see all ranks.</p>
+            <div className="range-grid-scroll" key={matrixPlayer}><div className="range-grid" role="group" aria-label={'Starting hands for player ' + (matrixPlayer + 1)}>
+              {gridHands.map((row, i) => row.map((hand, j) => {
+                const pressed = matrixSelection.get(hand) ?? false
+                return <button type="button" key={hand}
+                  className={i === j ? 'pair' : i < j ? 'suited' : 'offsuit'}
+                  disabled={running || invalidMatrixRange} aria-pressed={pressed}
+                  onClick={() => setRange(matrixPlayer, toggleRangeClass(matrixRange, hand, pressed === true))}>{hand}</button>
+              }))}
+            </div></div>
+            <div className="grid-legend"><span className="pair">Pair</span><span className="suited">Suited</span><span className="offsuit">Offsuit</span><span className="partial">Partial</span></div>
+          </>}
+        </section>
       </div>
       <div className="equity-board">
         <div className="board-heading"><label htmlFor="board-cards">Board cards</label><span id="board-hint">Blank for preflop</span></div>
@@ -166,16 +184,5 @@ export function EquityCalculator({ userId, initialCalculation, deletedCalculatio
         }}>Save calculation</button>}
       {saveError && <p className="error" role="alert">{saveError}</p>}
     </div>}
-
-    <details className="panel equity-grid-panel">
-      <summary><ChevronDown size={16} /> Range grid</summary>
-      <div className="section-head grid-heading"><p>Choose hands for</p><label><span className="sr-only">Edit range for</span><select value={focused} onChange={event => setFocused(Number(event.target.value))} disabled={running}>{players.map((_, index) => <option key={index} value={index}>Player {index + 1}</option>)}</select></label></div>
-      <p className="field-hint grid-scroll-hint">Swipe the grid to see all ranks.</p>
-      <div className="range-grid-scroll"><div className="range-grid" role="group" aria-label={'Starting hands for player ' + (focused + 1)}>
-        {gridHands.map((row, i) => row.map((hand, j) => <button type="button" key={hand}
-          className={i === j ? 'pair' : i < j ? 'suited' : 'offsuit'} disabled={running} aria-pressed={selected?.classes.has(hand) ?? false} onClick={() => toggleHand(hand)}>{hand}</button>))}
-      </div></div>
-      <div className="grid-footer"><div className="grid-legend"><span className="pair">Pair</span><span className="suited">Suited</span><span className="offsuit">Offsuit</span></div><button className="button text-button" disabled={running || !players[focused]} onClick={() => setRange(focused, '')}>Clear range</button></div>
-    </details>
   </div>
 }
