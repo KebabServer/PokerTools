@@ -24,6 +24,7 @@ export type FlopBoard = {
 
 export type FlopTextureGroup = { id: Texture; label: string; boards: FlopBoard[] }
 export type FlopAction = { label: string; color: string }
+export type FlopReport = { groups: FlopTextureGroup[]; actions: FlopAction[]; boardCount: number }
 
 const actionColors: Record<string, string> = {
   Fold: '#5488cf',
@@ -84,7 +85,7 @@ function byRankThenBoard(a: FlopBoard, b: FlopBoard) {
 }
 
 // The flop exports use unquoted comma-separated fields with one board per line.
-export function parseFlopReport(text: string) {
+export function parseFlopReport(text: string): FlopReport {
   const [header, ...lines] = text.trim().split(/\r?\n/)
   const fields = header.split(',').map(field => field.trim())
   const flopIndex = fields.indexOf('flop')

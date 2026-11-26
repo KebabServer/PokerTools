@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { readCards } from '../src/cards.ts'
 import { flopTexture, parseFlopReport } from '../src/flopReport.ts'
 import { flopReportGroups } from '../src/flopReportCatalog.ts'
+import { flopSizingQuestions } from '../src/flopSizingTrainer.ts'
 import { convertFourBetReport } from '../scripts/convert-4bet-reports.mjs'
 import { readStudySnapshot, reportSnapshotNames } from './studySnapshot.js'
 
@@ -52,6 +53,35 @@ test('3-bet IP facing B66 loads the selected matchup and preserves missing EVs',
   assert.equal(missing.ipEv, null)
   assert.equal(missing.oopEv, null)
   assert.equal(missing.frequencies[0], .50551)
+})
+
+test('the trainer grades the most-used bet size and skips flops with no bets', () => {
+  const report = parseFlopReport([
+    'flop,ip_ev,oop_ev,Check,B33,B66,AI',
+    'Ah8d3c,,,0.75,0.1,0.15,0',
+    'Kh8d3c,,,1,0,0,0',
+  ].join('\n'))
+  const { choices, questions } = flopSizingQuestions(report)
+  assert.deepEqual(choices.map(index => report.actions[index].label), ['B33', 'B66', 'AI'])
+  assert.deepEqual(questions.map(({ board, best }) => [board.code, best]), [['Ah8d3c', [2]]])
+})
+
+test('the trainer accepts tied raise sizes and can prefer all-in', () => {
+  const report = parseFlopReport([
+    'flop,ip_ev,oop_ev,Fold,Call,R50,R100,AI',
+    'Ah8d3c,,,0.45,0.35,0.1,0.1,0',
+    'Kh8d3c,,,0.3,0.2,0.1,0.1,0.3',
+  ].join('\n'))
+  const { choices, questions } = flopSizingQuestions(report)
+  assert.deepEqual(choices.map(index => report.actions[index].label), ['R50', 'R100', 'AI'])
+  assert.deepEqual(questions.map(({ board, best }) => [board.code, best]), [
+    ['Ah8d3c', [2, 3]], ['Kh8d3c', [4]],
+  ])
+})
+
+test('the trainer requires a choice between multiple sizes', () => {
+  const report = parseFlopReport('flop,ip_ev,oop_ev,Check,B33\nAh8d3c,,,0.5,0.5')
+  assert.deepEqual(flopSizingQuestions(report).questions, [])
 })
 
 function fourBetExport({ actor, ip, oop, bets }) {

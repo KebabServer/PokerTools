@@ -1,3 +1,24 @@
+.flop-reports .tool-heading { flex-wrap: wrap; gap: 8px 14px; margin-bottom: 12px; }
+.flop-report-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #191919;
+}
+.flop-report-tabs button {
+  min-height: 44px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: .85rem;
+  font-weight: 650;
+}
+.flop-report-tabs button:hover { color: #fff; }
+.flop-report-tabs button[aria-selected="true"] { background: #383838; color: #fff; }
 .flop-report-controls {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(0, 1fr));
@@ -143,10 +164,53 @@
   pointer-events: none;
 }
 
+.flop-trainer {
+  max-width: 640px;
+  margin: 12px auto 0;
+  padding: clamp(12px, 2.8vw, 22px);
+}
+.flop-trainer-top, .flop-trainer-outcome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.flop-trainer-board { display: flex; gap: 5px; }
+.flop-trainer-board .card-face {
+  width: clamp(39px, 10vw, 53px);
+  height: clamp(48px, 12vw, 65px);
+  --rank-size: clamp(1.65rem, 5vw, 2.25rem);
+  --watermark-size: clamp(3.2rem, 8vw, 4.3rem);
+  border-radius: 6px;
+}
+.flop-trainer-score { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; text-align: right; }
+.flop-trainer h2 { margin: 12px 0 9px; font-size: 1rem; line-height: 1.3; }
+.flop-trainer-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.flop-trainer-choice {
+  flex: 1 0 47px;
+  min-width: 0;
+  padding-inline: 4px;
+  border-radius: 8px;
+}
+.flop-trainer-choice[aria-disabled="true"] { cursor: default; }
+.flop-trainer-choices .flop-trainer-choice[data-result="correct"] { border-color: #5cab88; background: #263f35; color: #c4f1db; }
+.flop-trainer-choices .flop-trainer-choice[data-result="incorrect"] { border-color: #b66770; background: #492e33; color: #ffd8db; }
+.flop-trainer-outcome { margin-top: 8px; }
+.flop-trainer-result { font-size: .84rem; }
+.flop-trainer-result[data-result="correct"] strong { color: #a1e5c6; }
+.flop-trainer-result[data-result="incorrect"] strong { color: #ffc5cc; }
+.flop-trainer-next { flex: none; padding-inline: 12px; white-space: nowrap; }
+.flop-trainer-feedback { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.flop-trainer-feedback h3 { margin-bottom: 6px; font-size: .82rem; }
+
 @media (max-width: 680px) {
   .flop-report-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; }
   .flop-pot-types { grid-column: 1 / -1; }
   .flop-charts { grid-template-columns: minmax(0, 1fr); gap: 9px; }
   .flop-chart { padding: 10px; }
   .flop-plot canvas { height: 116px; }
+}
+@media (max-width: 440px) {
+  .flop-reports .tool-heading h1 { font-size: 1.25rem; }
+  .flop-trainer-feedback .flop-board-actions { gap: 5px 8px; }
 }

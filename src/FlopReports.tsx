@@ -1,13 +1,18 @@
 import { useEffect, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 import { FlopActionLabel, FlopReportChart } from './FlopReportChart.tsx'
-import { parseFlopReport } from './flopReport.ts'
+import { FlopSizingTrainer } from './FlopSizingTrainer.tsx'
+import { parseFlopReport, type FlopReport } from './flopReport.ts'
 import { readStudyFile } from './studyFiles.ts'
 import { flopReportGroups, flopReportLines, type FlopReportLine } from './flopReportCatalog.ts'
 import './flop-reports.css'
 
-type LoadedReport = { file: string; data: ReturnType<typeof parseFlopReport> | null }
+const views = ['Reports', 'Trainer'] as const
+type ReportView = typeof views[number]
+type LoadedReport = { file: string; data: FlopReport | null }
 
 export default function FlopReports() {
+  const [view, setView] = useState<ReportView>('Reports')
   const [groupIndex, setGroup] = useState(0)
   const [matchupId, setMatchup] = useState(flopReportGroups[0].matchups[0].id)
   const [lineId, setLine] = useState<FlopReportLine>('cbet')
@@ -34,8 +39,29 @@ export default function FlopReports() {
     return () => controller.abort()
   }, [file, attempt])
 
+  function moveView(event: KeyboardEvent<HTMLDivElement>) {
+    let next: ReportView
+    switch (event.key) {
+      case 'Home': next = 'Reports'; break
+      case 'End': next = 'Trainer'; break
+      case 'ArrowLeft':
+      case 'ArrowRight': next = view === 'Reports' ? 'Trainer' : 'Reports'; break
+      default: return
+    }
+    event.preventDefault()
+    setView(next)
+    event.currentTarget.querySelector<HTMLButtonElement>('#flop-tab-' + next)?.focus()
+  }
+
   return <div className="flop-reports">
-    <div className="tool-heading"><h1>Flop Reports</h1></div>
+    <div className="tool-heading">
+      <h1>Flop Reports</h1>
+      <div className="flop-report-tabs" role="tablist" aria-label="Flop Reports views" onKeyDown={moveView}>
+        {views.map(item => <button type="button" role="tab" key={item} id={'flop-tab-' + item}
+          aria-controls={'flop-view-' + item} aria-selected={view === item} tabIndex={view === item ? 0 : -1}
+          onClick={() => setView(item)}>{item}</button>)}
+      </div>
+    </div>
     <div className="panel flop-report-controls">
       <div className="flop-pot-types" role="group" aria-label="Pot type">
         {flopReportGroups.map((item, index) => <button type="button" key={item.id}
@@ -58,20 +84,25 @@ export default function FlopReports() {
       <p className="error" role="alert">Couldn’t load this report.</p>
       <button className="button" type="button" onClick={() => { setLoaded(null); retry(count => count + 1) }}>Retry</button>
     </div>}
-    {report && <>
-      <div className="flop-report-summary">
-        <ul className="flop-legend" aria-label="Action frequencies">
-          {report.actions.map(action => <li key={action.label}><FlopActionLabel action={action} /></li>)}
-        </ul>
-        <span>{report.boardCount.toLocaleString('en')} flops</span>
-      </div>
-      <p className="flop-report-hint">Hover or tap a bar to inspect the flop.</p>
-      <span className="sr-only" id="flop-chart-keys">Press Enter to open details. Use the left and right arrow keys to step through flops.</span>
-      <div className="flop-charts" key={file}>
-        {report.groups.filter(texture => texture.boards.length).map(texture =>
-          <FlopReportChart key={texture.id} group={texture} actions={report.actions} />
-        )}
-      </div>
-    </>}
+    <div role="tabpanel" id="flop-view-Reports" aria-labelledby="flop-tab-Reports" hidden={view !== 'Reports'}>
+      {report && <>
+        <div className="flop-report-summary">
+          <ul className="flop-legend" aria-label="Action frequencies">
+            {report.actions.map(action => <li key={action.label}><FlopActionLabel action={action} /></li>)}
+          </ul>
+          <span>{report.boardCount.toLocaleString('en')} flops</span>
+        </div>
+        <p className="flop-report-hint">Hover or tap a bar to inspect the flop.</p>
+        <span className="sr-only" id="flop-chart-keys">Press Enter to open details. Use the left and right arrow keys to step through flops.</span>
+        <div className="flop-charts" key={file}>
+          {report.groups.filter(texture => texture.boards.length).map(texture =>
+            <FlopReportChart key={texture.id} group={texture} actions={report.actions} />
+          )}
+        </div>
+      </>}
+    </div>
+    <div role="tabpanel" id="flop-view-Trainer" aria-labelledby="flop-tab-Trainer" hidden={view !== 'Trainer'}>
+      {report && <FlopSizingTrainer key={file} report={report} />}
+    </div>
   </div>
 }
