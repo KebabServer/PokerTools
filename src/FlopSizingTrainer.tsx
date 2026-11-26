@@ -100,8 +100,11 @@ export function FlopSizingTrainer({ report, mode, setMode }: {
         <span className="flop-trainer-score">{quiz.correct} / {quiz.index + Number(answered)} correct</span>
       </div>
     </div>
-    <h2 id="flop-sizing-question" tabIndex={-1} ref={heading}>
-      {roll === null ? `Which ${sizing} does the solver use most across the range?` : `Roll ${roll} · Which action fits?`}
+    <h2 id="flop-sizing-question" className={roll === null ? undefined : 'flop-trainer-roll-question'} tabIndex={-1} ref={heading}>
+      {roll === null ? `Which ${sizing} does the solver use most across the range?` : <>
+        <span>Which action fits?</span>
+        <span className="flop-trainer-roll-value"><span className="sr-only">Roll </span>{roll}</span>
+      </>}
     </h2>
     {roll !== null && <p className="flop-trainer-roll-hint">Use the action order shown, starting at 0.</p>}
     <div className="flop-trainer-choices" role="group" aria-labelledby="flop-sizing-question">
