@@ -382,12 +382,21 @@ details[open] > summary svg { transform: none; }
   .equity-bar { display: none; }
 }
 
-.grid-scroll-hint { display: none; }
 @media (max-width: 580px) {
-  .grid-scroll-hint { display: block; margin: -6px 0 7px; }
-  .range-grid-scroll { overflow-x: auto; padding: 3px 2px 6px; scrollbar-color: #727272 #2f2f2f; scrollbar-width: thin; }
-  .range-grid { min-width: 481px; gap: 2px; }
-  .range-grid button { font-size: .74rem; min-height: 44px; }
+  .range-grid { gap: 1px; }
+  .range-grid button {
+    min-height: clamp(16px, 3.5dvh, 27px);
+    border-width: 0;
+    border-radius: 3px;
+    font-size: clamp(.5625rem, 3vw, .75rem);
+    letter-spacing: -.025em;
+    line-height: 1.05;
+    white-space: nowrap;
+  }
+  .range-grid button[aria-pressed="true"] { box-shadow: inset 0 0 0 1px #72bda9; }
+  .range-grid button[aria-pressed="mixed"] { border-width: 0; outline: 1px dashed #72bda9; outline-offset: -1px; }
+  .range-grid button:focus-visible { outline-offset: -2px; }
+  .range-grid button[aria-pressed="mixed"]:focus-visible { outline: 2px solid var(--accent); }
 }
 @media (max-width: 360px) {
   .equity-workspace h1 { font-size: 1.5rem; }

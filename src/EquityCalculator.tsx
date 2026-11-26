@@ -129,8 +129,7 @@ export function EquityCalculator({ userId, initialCalculation, deletedCalculatio
               <button type="button" className="button text-button" disabled={running || !players[matrixPlayer]} onClick={() => setRange(matrixPlayer, '')}>Clear range</button>
             </div>
             {invalidMatrixRange && <p className="field-hint">Fix the range text or clear it to select hands.</p>}
-            <p className="field-hint grid-scroll-hint">Swipe the matrix to see all ranks.</p>
-            <div className="range-grid-scroll" key={matrixPlayer}><div className="range-grid" role="group" aria-label={'Starting hands for player ' + (matrixPlayer + 1)}>
+            <div className="range-grid" role="group" aria-label={'Starting hands for player ' + (matrixPlayer + 1)}>
               {gridHands.map((row, i) => row.map((hand, j) => {
                 const pressed = matrixSelection.get(hand) ?? false
                 return <button type="button" key={hand}
@@ -138,7 +137,7 @@ export function EquityCalculator({ userId, initialCalculation, deletedCalculatio
                   disabled={running || invalidMatrixRange} aria-pressed={pressed}
                   onClick={() => setRange(matrixPlayer, toggleRangeClass(matrixRange, hand, pressed === true))}>{hand}</button>
               }))}
-            </div></div>
+            </div>
             <div className="grid-legend"><span className="pair">Pair</span><span className="suited">Suited</span><span className="offsuit">Offsuit</span><span className="partial">Partial</span></div>
           </>}
         </section>
