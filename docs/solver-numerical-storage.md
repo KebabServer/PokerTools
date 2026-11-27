@@ -2,7 +2,7 @@
 
 ## Layout selection
 
-Solver Setup → Advanced → Runouts & optimizations has Auto, Dense, and Compact. All three use Float64. Dense retains the previous arena and full-tree WASM backend. Auto favors Dense for speed and uses Compact when the row estimate saves at least 8 MiB and 25% of the dense strategy arena, or when Dense exceeds the configured memory limit. The thresholds are a heuristic from the memory and timing comparison below. Compact is an explicit override. The completion log reports the layout actually used.
+Solver Setup → Advanced → Runouts & optimizations has Auto, Dense, and Compact. All three use Float64. Dense retains the previous arena and full-tree WASM backend. Auto uses Dense when its strategy state and payoff data fit the configured memory limit, and Compact when they exceed it. Select Compact directly to prioritize lower memory use. The completion log reports the layout actually used.
 
 The dense-size estimate is for the tree available to the planner. Full payoff and fixed WASM arena costs are evaluated separately. A worker may use JavaScript when the optional WASM arena does not fit. The accounting measures selected long-lived arrays and the reserved WASM linear memory. JavaScript object overhead, exported reports, and runtime RSS are separate.
 

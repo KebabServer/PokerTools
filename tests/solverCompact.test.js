@@ -185,6 +185,18 @@ test('auto chooses dense for a small game and can use compact to fit the memory 
   assert.throws(()=>core.makeGame({...config,memoryLimitBytes,storageLayout:'dense'}),/memory budget/)
 })
 
+test('auto prefers dense within budget even when compact would save over 8 MiB',()=>{
+  const weights=new Float64Array(1326).fill(1)
+  const config={...turn,board:['As','8h','3d'],weights0:weights,weights1:weights,
+    sizes0:[],sizes1:[],turnSizes0:[],turnSizes1:[],flopSizes0:[],flopSizes1:[],
+    flopTurnSamples:13,flopRiverSamples:13,memoryLimitBytes:128*1048576}
+  const auto=core.makeGame(config,{preview:true})
+  const compact=core.makeGame({...config,storageLayout:'compact'},{preview:true})
+  assert.equal(auto.numericStorage.mode,'dense')
+  assert.ok(auto.memory<config.memoryLimitBytes)
+  assert.ok(auto.memory-compact.memory>8*1048576)
+})
+
 test('legacy dense checkpoints retain their original fingerprint and reopen through the decoder',()=>{
   const config={...river,board:['As','Ah','7d','2c','8d'],storageLayout:'dense',
     weights0:range([['Ks','Qs']]),weights1:range([['Js','Ts']])}

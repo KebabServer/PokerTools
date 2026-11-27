@@ -556,7 +556,9 @@ function createSolverCore() {
     const decisions=tree.nodes.filter(node=>!node.terminal&&!node.chance&&!node.isoAlias);
     const dense=(node,n=players[node.p].ids.length)=>n*node.actions.length*(3+Number(predictive)+(qre?1:0))+(qre?n:0);
     const denseSlots=decisions.reduce((sum,node)=>sum+dense(node),0);
-    if(requested==='dense')return {mode:'dense',denseBytes:denseSlots*8};
+    // Auto starts with the fast dense layout. Only build compact row maps
+    // after the memory check selects Compact or the caller requests it.
+    if(requested!=='compact')return {mode:'dense',denseBytes:denseSlots*8};
     const supports=new Map(),orbits=new Map(),sharedRows=new Map();
     function boardSupport(turn,river){
       const key=(turn??52)*53+(river??52);
@@ -607,13 +609,6 @@ function createSolverCore() {
       slots+=dense(node,layout.reps.length);
       layouts.push(layout);
     }
-    const saving=denseSlots*8-slots*8-metadata;
-    // Favor the full native dense traversal on small games; use compact rows
-    // when they save substantial space or the dense arena will not fit.
-    if(requested==='auto'&&!(saving>=8*1024*1024&&saving>=denseSlots*8*.25)&&
-        !(config.memoryLimitBytes>0&&denseSlots*8>config.memoryLimitBytes&&saving>0))
-      return {mode:'dense',denseBytes:denseSlots*8};
-    if(requested==='auto')return {mode:'compact'};
     const implicitShapes=new Set();
     for(let i=0;i<decisions.length;i++){
       const node=decisions[i],a=node.actions.length,key=a+':'+(node.frequencyUnits??0);
@@ -864,14 +859,13 @@ function createSolverCore() {
     const explicitCompact=config.storageLayout==='compact';
     const allowPublic=config.useSuitIsomorphism!==false&&(isTurn||isFlop);
     const allowPrivate=isTurn||isFlop?allowPublic:config.useRiverHandSymmetry!==false;
-    const group=allowPrivate&&(explicitCompact||!isTurn&&!isFlop&&config.storageLayout!=='dense')?
+    const group=allowPrivate&&explicitCompact?
       lockPreservingTransforms(tree,exactSuitAutomorphisms(board,players,true)):[];
     // Compact uses the same chance-tree automorphisms for public and private rows.
     const suitIsomorphism=installSuitIsomorphism(tree,board,players,
       allowPublic&&(explicitCompact||!nodeLocks.length),turnSamples??49,riverSamples??48,flopSamplingSeed,
       explicitCompact?group:null);
     const numericStorage=storagePlan(tree,players,config,equilibrium,gtoAlgorithm,suitIsomorphism.transforms??group);
-    if(numericStorage.mode==='compact'&&!explicitCompact)return makeGame({...config,storageLayout:'compact'},options);
     const riverPrivateSymmetry=installRiverPrivateSymmetry(board,players,
       numericStorage.mode==='dense'&&!!config.useRiverHandSymmetry&&!isTurn&&!isFlop);
     if(riverPrivateSymmetry.enabled&&nodeLocks.length){
@@ -888,6 +882,10 @@ function createSolverCore() {
       });
       if(!invariant){riverPrivateSymmetry.enabled=false;riverPrivateSymmetry.reason='locks-break-suit-symmetry';}
     }
+    const autoLayout=(config.storageLayout??'auto')==='auto';
+    const memoryLimit=Number(config.memoryLimitBytes);
+    if(autoLayout&&memoryLimit>0&&!riverPrivateSymmetry.enabled&&numericStorage.denseBytes>memoryLimit)
+      return makeGame({...config,storageLayout:'compact'},options);
     if(preview){
       // Accurate strategy-buffer estimate, plus a conservative allowance for
       // the board-specific numerical tables allocated by the solving worker.
@@ -998,8 +996,8 @@ function createSolverCore() {
     if(numericStorage.mode==='compact'){slots=numericStorage.slots;memory+=numericStorage.metadata;}
     else memory+=tree.nodes.reduce((sum,node)=>sum+(node.lockedRows?.byteLength??0)+(node.lockedMask?.byteLength??0),0);
     const projectedMemory=memory+slots*8;
-    if(Number(config.memoryLimitBytes)>0&&projectedMemory>Number(config.memoryLimitBytes)){
-      if((config.storageLayout??'auto')==='auto')return makeGame({...config,storageLayout:'compact'},options);
+    if(memoryLimit>0&&projectedMemory>memoryLimit){
+      if(autoLayout)return makeGame({...config,storageLayout:'compact'},options);
       throw Error('Estimated strategy state exceeds the memory budget. Reduce runouts, ranges, bet sizes or raises.');
     }
     const stateStorage=new Float64Array(slots);
