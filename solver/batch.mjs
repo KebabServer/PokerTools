@@ -15,6 +15,20 @@ function resolveLocks(session, entries) {
   })
 }
 
+function sessionBudgetCount(job) {
+  const donors = job.candidates?.some(candidate => candidate.warmStart) ? 1 : 0
+  const checkpoints = job.candidates?.length && (job.candidateRounds?.length > 1 || job.checkpointDirectory) ? 1 : 0
+  return 1 + donors + checkpoints
+}
+
+function estimateWork(job) {
+  const config = job.config
+  const [turns, rivers] = config?.board?.length === 3 ? flopFidelities[config.flopFidelity ?? 'fast'] ?? [1, 1] :
+    [1, config?.board?.length === 4 ? 48 : 1]
+  return (job.solve?.maxIterations ?? 2000) * (config?.flopTurnSamples ?? turns) *
+    (config?.flopRiverSamples ?? rivers) * (1 + (job.candidates?.length ?? 0))
+}
+
 function runJob(job, limits) {
   const began = performance.now()
   const requested = job.config.memoryLimitBytes || Infinity
@@ -25,10 +39,8 @@ function runJob(job, limits) {
   if (job.candidates?.length && job.config.nodeLocks?.length)
     throw Error('Candidate batches require an unrestricted baseline configuration.')
   const needsDonor = job.candidates?.some(candidate => candidate.warmStart)
-  const sessions = 1 + Number(!!needsDonor) + Number(!!job.candidates?.length &&
-    (rounds?.length > 1 || !!job.checkpointDirectory))
   const perSessionBudget = limits.perJobMemoryBytes === undefined ? Infinity :
-    Math.max(1, Math.floor(limits.perJobMemoryBytes / sessions))
+    Math.max(1, Math.floor(limits.perJobMemoryBytes / sessionBudgetCount(job)))
   const memoryLimitBytes = Math.min(requested, perSessionBudget)
   if (Atomics.load(limits.cancelFlag, 0)) return { id: job.id, terminationReason: 'canceled', result: null }
   if (limits.maxMemoryBytes !== undefined && process.memoryUsage.rss() > limits.maxMemoryBytes)
@@ -81,6 +93,7 @@ function runCandidates(job, limits, prepared, runner, baseline, solve, rounds, f
   const temporary = needsFiles && !job.checkpointDirectory
   const directory = temporary ? mkdtempSync(join(tmpdir(), 'poker-candidates-')) : job.checkpointDirectory
   if (directory && !temporary) mkdirSync(directory, { recursive: true })
+  const configKey = directory ? preparationKey(job) : null
   const states = job.candidates.map(candidate => ({ id: candidate.id, rounds: [], pending: true }))
   try {
     for (const allowance of schedules) {
@@ -92,7 +105,7 @@ function runCandidates(job, limits, prepared, runner, baseline, solve, rounds, f
           continue
         }
         try {
-          const key = directory ? createHash('sha256').update(JSON.stringify([job.id, preparationKey(job), index,
+          const key = directory ? createHash('sha256').update(JSON.stringify([job.id, configKey, index,
             candidate.id, candidate.nodeLocks])).digest('hex') : null
           const saved = directory ? join(directory, key.slice(0, 32) + '.trlc') : null
           const options = { ...job.solve, ...candidate.solve }
@@ -182,10 +195,15 @@ export async function runBatch(jobs, { workers = availableParallelism(), maxMemo
       throw Error('Invalid estimated job memory.')
     if (job.estimatedWork !== undefined && (!Number.isFinite(job.estimatedWork) || job.estimatedWork < 0))
       throw Error('Invalid estimated job work.')
-    return { index, key: preparationKey(job), work: job.estimatedWork ?? (job.solve?.maxIterations ?? 2000) *
-      (job.config?.flopTurnSamples ?? 1) * (job.config?.flopRiverSamples ?? 1) * (1 + (job.candidates?.length ?? 0)),
-    reserve: maxMemoryBytes === undefined ? 0 : Math.min(maxMemoryBytes, job.estimatedMemoryBytes ??
-      Math.max(1, Math.floor(maxMemoryBytes / workerCount))) }
+    let reserve = 0
+    if (maxMemoryBytes !== undefined) {
+      const configBudget = job.config?.memoryLimitBytes
+      const defaultReserve = configBudget > 0 ? configBudget * sessionBudgetCount(job) :
+        Math.max(1, Math.floor(maxMemoryBytes / workerCount))
+      reserve = Math.min(maxMemoryBytes, job.estimatedMemoryBytes ?? defaultReserve)
+    }
+    return { index, key: preparationKey(job), work: job.estimatedWork ?? estimateWork(job),
+      reserve }
   }).sort((a, b) => b.work - a.work || a.index - b.index)
   if (signal?.aborted) cancel()
   signal?.addEventListener('abort', cancel, { once: true })

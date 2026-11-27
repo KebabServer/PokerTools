@@ -20,6 +20,7 @@ const { values: options } = parseArgs({ options: {
   'current-policy': { type: 'string' },
   algorithm: { type: 'string' },
   'max-nodes': { type: 'string' }, independent: { type: 'boolean' }, 'fixed-iterations': { type: 'boolean' },
+  'prepare-only': { type: 'boolean' },
   'lock-mix': { type: 'string', default: '25' }, 'native-addon': { type: 'string' },
 } })
 const source = resolve(options.source)
@@ -169,6 +170,18 @@ function run(c, algorithm, repeat, config = null, reused = null) {
     cfg.nodeLocks = [rootLock(preview, c.lock, Number(options['lock-mix']), nodeId)]
   }
   const began = performance.now()
+  if (options['prepare-only']) {
+    const prepared = core.prepareGame(cfg)
+    const prepareMs = performance.now() - began
+    const game = prepared.createGame(undefined, { deferState: true })
+    return { id: c.id, repeat, algorithm, phase: 'prepare-only', storage: cfg.strategyStorage ?? 'dense',
+      precision: cfg.strategyPrecision ?? 'f64', currentPolicy: cfg.currentPolicyStorage ?? 'stored',
+      prepareMs, wallMs: performance.now() - began, structuralNodes: game.nodes.length,
+      canonicalInformationSets: game.strategyRows, stateBytes: game.stateBytes ?? game.stateLength * 8,
+      stateScalars: game.stateLength, memoryBytes: game.memory, immutableBytes: game.immutableBytes,
+      rulesFingerprint: game.rulesFingerprint, peakProcessRssBytes: process.resourceUsage().maxRSS * 1024,
+      maxNodes: cfg.maxNodes, memoryLimitBytes }
+  }
   let setup
   if (reused) {
     let wasmMs = 0
@@ -207,18 +220,33 @@ function run(c, algorithm, repeat, config = null, reused = null) {
   }
   const summary = solver.summary()
   const wallMs = performance.now() - began
+  const solvePeakRssBytes = process.resourceUsage().maxRSS * 1024
+  const solveMemory = process.memoryUsage()
   const validationStart = performance.now()
-  const validation = options.independent ? solver.summary({ independent: true }) : null
+  let validation = null
+  if (options.independent) {
+    // The v17 summary has no independent option. Disabling the bridge only
+    // for evaluation lets both revisions use their Float64 JS policy reader.
+    const compiled = game.compiled
+    try {
+      game.compiled = null
+      validation = solver.summary()
+    } finally {
+      game.compiled = compiled
+    }
+  }
+  const validationMs = options.independent ? performance.now() - validationStart : null
   return {
     id: c.id, repeat, algorithm, mode: reused?.mode ?? 'cold-fresh', backend: game.compiled?.mode ?? 'javascript',
     locked: c.lock ?? null, targetExploitability: target, targetIntervalWidth: target * 2,
-    reached: targetMs !== null, iterations: solver.iteration, targetMs,
+    reached: targetMs !== null && (validation?.constrainedExploitability ?? gap.exploitability) <= target,
+    iterations: solver.iteration, targetMs,
     prepareAndStateMs, prepareMs, wasmMs, warmStartMs, stepMs, checkMs, checks,
     wallMs, ips: 1000 * solver.iteration / stepMs,
     exploitability: gap.exploitability, evIntervalWidth: gap.nashConv, profileEV: [summary.value0, summary.value1],
     equilibriumBounds: summary.equilibriumBounds?.foldZero ?? null, zeroSumError: summary.zeroSumError,
     unrestrictedBestResponseEV: summary.unrestrictedBestResponseEV?.foldZero,
-    independent: validation ? { backend: validation.evaluationBackend, ms: performance.now() - validationStart,
+    independent: validation ? { backend: validation.evaluationBackend, ms: validationMs,
       profileEV: [validation.value0, validation.value1], evIntervalWidth: validation.equilibriumBounds.width,
       equilibriumBounds: validation.equilibriumBounds.foldZero,
       unrestrictedBestResponseEV: validation.unrestrictedBestResponseEV?.foldZero } : null,
@@ -244,6 +272,7 @@ function run(c, algorithm, repeat, config = null, reused = null) {
     structuralNodes: game.nodes.length, canonicalDecisions: game.nodes.filter(n => !n.terminal && !n.chance && !n.isoAlias).length,
     canonicalNodes: game.suitIsomorphism.canonicalNodes ?? null,
     aliases: game.suitIsomorphism.aliasedDecisions, memoryBytes: game.memory,
+    solvePeakRssBytes, solveMemory,
     peakObservedRssBytes: Math.max(peakObservedRssBytes, process.memoryUsage.rss()),
     peakProcessRssBytes: process.resourceUsage().maxRSS * 1024,
     fingerprint: core.gameSignature(game), rulesFingerprint: game.rulesFingerprint ?? null,

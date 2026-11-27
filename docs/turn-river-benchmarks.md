@@ -1,5 +1,7 @@
 # TurnRiverLab benchmark results
 
+The [v18 report](turn-river-v18.md) measures exact-flop scalability, compact state, native execution, and weighted preflop games against the later `4f68dcc` branch baseline. This page preserves the earlier `55e6384` comparison.
+
 Baseline `55e6384` and the `turnriver-f64-v2` engine were measured on the same Linux x64 environment with Node.js 24.22.3, an Intel Xeon Platinum 8573C, and a two-CPU quota. The suite uses Float64, deterministic weighted ranges, fixed board cards and bet sizes, and the same measured exploitability targets. Sampled comparisons use the legacy seed mapping at seed 29 in both revisions.
 
 The raw data include separate preparation, WASM initialization, CFR, and best-response timings, iteration throughput, scope of the memory measurements, and numerical results. The suites ran sequentially. Modules can warm across cases within one process. Process high-water RSS is cumulative within a suite, and sampled RSS is also recorded by row. Separate capacity invocations provide isolated peak RSS for the largest full solves. [Baseline data](benchmarks/turn-river-before.json) · [Current data](benchmarks/turn-river-after.json)

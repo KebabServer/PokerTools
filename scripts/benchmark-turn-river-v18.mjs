@@ -15,6 +15,7 @@ const { values: options } = parseArgs({ options: {
   'native-scalar-addon': { type: 'string' },
   'native-avx2-addon': { type: 'string' },
   'native-avx512-addon': { type: 'string' },
+  mode: { type: 'string' }, case: { type: 'string' },
 } })
 const repetitions = Number(options.repetitions)
 if (!Number.isSafeInteger(repetitions) || repetitions < 1) throw Error('Repetitions must be positive.')
@@ -66,14 +67,16 @@ const plans = {
   accuracy: [
     ...['1.0', '0.5', '0.1', '0.05', '0.01'].map(target =>
       realistic('btn-bb-sampled-one', 350, ['native'], ['--target-pot-percent', target])),
-    realistic('btn-bb-exact-river-only', 160, ['native-derived'], ['--target-pot-percent', '.01']),
-    realistic('btn-bb-exact-one', 160, ['native-derived'], ['--target-pot-percent', '.1']),
-    realistic('btn-bb-exact-one-locked', 160, ['native-derived'], ['--target-pot-percent', '.1']),
+    realistic('btn-bb-exact-river-only', 160, ['baseline', 'native-derived'], ['--target-pot-percent', '.01']),
+    realistic('btn-bb-exact-one', 160, ['baseline', 'native-derived'], ['--target-pot-percent', '.1']),
+    realistic('btn-bb-exact-one-locked', 160, ['baseline', 'native-derived'], ['--target-pot-percent', '.1']),
   ],
   capacity: [
     realistic('btn-bb-exact-multi-flop', 2, ['baseline', 'native-derived']),
+    realistic('btn-bb-exact-flop-raise', 2, ['native-derived'], ['--memory-mib', '1024', '--max-nodes', '500000']),
     realistic('btn-bb-exact-multi', 2, ['baseline', 'native-derived']),
     realistic('btn-bb-exact-multi', 2, ['native-derived', 'C'], ['--memory-mib', '1024', '--max-nodes', '500000']),
+    realistic('btn-bb-exact-multi', 2, ['C'], ['--memory-mib', '1280', '--max-nodes', '500000']),
     realistic('btn-bb-exact-stretch', 2, ['baseline']),
     realistic('btn-bb-exact-stretch', 2, ['native-derived', 'C'], ['--memory-mib', '1536', '--max-nodes', '1000000']),
   ],
@@ -91,8 +94,10 @@ const plans = {
     realistic('btn-bb-exact-river-only', 10, ['compact', 'simd', 'native', 'native-scalar', 'native-avx2', 'native-avx512']),
   ],
 }
-const matrix = plans[options.group]
-if (!matrix) throw Error('Unknown benchmark group.')
+const matrix = plans[options.group]?.map(plan => ({ ...plan,
+  modes: options.mode ? plan.modes.filter(mode => mode === options.mode) : plan.modes }))
+  .filter(plan => plan.modes.length && (!options.case || plan.id === options.case))
+if (!matrix?.length) throw Error('Unknown benchmark group or filter.')
 if (matrix.some(p => p.modes.includes('baseline')) && !modes.baseline) throw Error('Provide --baseline-source for the before revision.')
 for (const mode of new Set(matrix.flatMap(plan => plan.modes))) {
   if (!mode.startsWith('native')) continue
@@ -122,7 +127,7 @@ function compilerVersion(command) {
   try { return execFileSync(command, ['--version'], { encoding: 'utf8' }).split('\n')[0] } catch { return null }
 }
 const measured = ['prepareMs', 'wasmMs', 'stepMsPerIteration', 'bestResponseMsPerCheck', 'targetMs', 'wallMs',
-  'stateBytes', 'memoryBytes', 'peakProcessRssBytes', 'evIntervalWidth']
+  'stateBytes', 'memoryBytes', 'solvePeakRssBytes', 'peakProcessRssBytes', 'evIntervalWidth']
 const summaries = matrix.flatMap((plan, caseIndex) => plan.modes.map(mode => {
   const group = rows.filter(row => row.caseIndex === caseIndex && row.mode === mode)
   const stats = Object.fromEntries(measured.flatMap(key => {

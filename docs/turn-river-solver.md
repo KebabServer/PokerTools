@@ -179,4 +179,4 @@ node scripts/solve-turn-river.mjs native-jobs.json --workers 2
 
 The default addon uses the compiler's baseline ISA. Set `CPU_CFLAGS` to compare a host-tuned build, and use `NATIVE_OUTPUT` with `nativeAddon` to choose its output and load path. Keep floating-point contraction and fast-math disabled when checking parity.
 
-See [the benchmark report](turn-river-benchmarks.md) for the measured performance, exact-flop capacity, and remaining optimization opportunities.
+See [the v18 benchmark report](turn-river-v18.md) for measured performance, exact-flop capacity, and the remaining bottlenecks.
