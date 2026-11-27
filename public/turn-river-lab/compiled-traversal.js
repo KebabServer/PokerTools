@@ -1,7 +1,9 @@
-/* v8 compiled Float64 game-tree traversal and exact best responses. */
-function createCompiledTraversal(game, base64, limitBytes) {
+/* Compiled game-tree traversal and exact best responses. */
+function createCompiledTraversal(game, base64, limitBytes, options) {
   'use strict';
+  options??={};
   limitBytes=Number(limitBytes)||0;
+  if(game.banks)return sourceTraversal();
   // River-only private-hand orbit compression remains a reference-JS layout.
   // Whole-action culling uses native action masks and can stay compiled.
   if(game.riverPrivateSymmetry?.enabled||game.stack>0x7fffffff)return null;
@@ -274,12 +276,12 @@ function createCompiledTraversal(game, base64, limitBytes) {
       const nativeModule=compiledModule(WASM_LOCK_KERNEL_BYTES);
       if(nativeModule){
         const addon=new WebAssembly.Instance(nativeModule,{env:{memory}}).exports;
-        const decisionPtr=allocate(game.nodes.length*16,4);
+        const decisionPtr=allocate(game.nodes.length*32,4);
         const masks=allocate(lockCapacity*maxN,1);
         if(decisionPtr===null||masks===null)throw Error('No WASM memory for lock metadata');
-        const metadata=new Int32Array(memory.buffer,decisionPtr,game.nodes.length*4);
+        const metadata=new Int32Array(memory.buffer,decisionPtr,game.nodes.length*8);
         for(const node of game.nodes)if(node.current){
-          const off=node.id*4;
+          const off=node.id*8;
           metadata[off+1]=mapPtr(node.suitRows);
           metadata[off+2]=-1;
           metadata[off+3]=node.frequencyUnits??0;
@@ -290,13 +292,13 @@ function createCompiledTraversal(game, base64, limitBytes) {
         let lockedIds=[];
         native={
           refreshLocks(){
-            for(const id of lockedIds){metadata[4*id]=0;metadata[4*id+2]=-1;}
+            for(const id of lockedIds){metadata[8*id]=0;metadata[8*id+2]=-1;}
             lockedIds=[];
             let slot=0;
             for(const entry of game.nodeLocks){
               const node=game.nodes[entry.nodeId];
               if(node.isoAlias||node.actions.length===1)continue;
-              const offset=masks+slot++*maxN,index=node.id*4,mask=node.lockedMask;
+              const offset=masks+slot++*maxN,index=node.id*8,mask=node.lockedMask;
               new Uint8Array(memory.buffer,offset,mask.length).set(mask);
               metadata[index]=offset;
               metadata[index+2]=node.allLocked?node.lockedActions.reduce((bits,on,k)=>bits|(on<<k),0):-1;
@@ -310,7 +312,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
                 weight?ownPtrs[target]:0,workspaceStart,workspaceEnd,weight,variantFor(game),
                 game._positiveDiscount??1,game._negativeDiscount??1,
                 fusedPolicy&&game.compiled?.fusesPolicy!==false?1:0,
-                16*Number.EPSILON*Math.max(1,game.pot+game.stack)))
+                16*Number.EPSILON*Math.max(1,game.pot+game.stack),0))
               throw Error('WASM locked traversal scratch overflow');
             if(returnVector)return Float64Array.from(new Float64Array(memory.buffer,outPtrs[target],game.players[target].ids.length));
           },
@@ -320,7 +322,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
             new Float64Array(memory.buffer,reachPtrs[target],reach.length).set(reach);
             const trackUnrestricted=includeUnrestricted&&game.nodeLocks.some(lock=>lock.player===target);
             if(!addon.evaluate_gto(nodePtr,decisionPtr,playerPtr,game.root,target,game.pot,
-                reachPtrs[target],outPtrs[target],workspaceStart,workspaceEnd,+includeProfile,+trackUnrestricted))
+                reachPtrs[target],outPtrs[target],workspaceStart,workspaceEnd,+includeProfile,+trackUnrestricted,0,0))
               throw Error('WASM best-response scratch overflow');
             const size=1+Number(includeProfile)+Number(trackUnrestricted);
             const values=evaluated[target]??=new Float64Array(memory.buffer,outPtrs[target],n*3);
@@ -512,4 +514,214 @@ function createCompiledTraversal(game, base64, limitBytes) {
       return true;
     }
   };
+
+  function sourceTraversal(){
+    const native=options.native;
+    if(!native&&(typeof WebAssembly==='undefined'||typeof WASM_LOCK_KERNEL_BYTES!=='string'))return null;
+    if(game.stack>0x7fffffff)return null;
+    const source=options.simd&&typeof WASM_SOURCE_SIMD_BYTES==='string'?WASM_SOURCE_SIMD_BYTES:WASM_LOCK_KERNEL_BYTES;
+    let module;
+    if(!native){
+      const modules=createCompiledTraversal._sourceModules??=new Map();
+      if(!modules.has(source)){
+        const bytes=Uint8Array.from(atob(source),c=>c.charCodeAt(0));
+        modules.set(source,WebAssembly.validate(bytes)?new WebAssembly.Module(bytes):null);
+      }
+      module=modules.get(source);
+      if(!module)return options.simd?createCompiledTraversal(game,base64,limitBytes):null;
+    }
+    const physical=game.nodes,physicalToPacked=new Int32Array(physical.length).fill(-1),nodes=[],virtual=new WeakMap();
+    let maxDepth=0,maxActions=2;
+    function packProgram(program){
+      if(virtual.has(program))return virtual.get(program);
+      const id=nodes.length;
+      nodes.push(program);virtual.set(program,id);
+      if(!program.pairEquity)for(const edge of program.runouts??[])packProgram(edge.child);
+      return id;
+    }
+    function visit(id,depth){
+      let node=physical[id];
+      while(node.actions?.length===1)node=physical[node.actions[0].child];
+      if(node.type==='all-in'){
+        maxDepth=Math.max(maxDepth,depth+2);
+        physicalToPacked[id]=physicalToPacked[node.id]=packProgram(node.allInProgram);
+        return;
+      }
+      if(physicalToPacked[node.id]===-1){
+        physicalToPacked[node.id]=nodes.length;
+        nodes.push(node);
+        maxDepth=Math.max(maxDepth,depth);
+        maxActions=Math.max(maxActions,node.actions?.length??0);
+        for(const edge of node.actions??[])visit(edge.child,depth+1);
+        if(node.chance){
+          if(node.isoGroups)for(const group of node.isoGroups)visit(group.representative.child,depth+1);
+          else for(const edge of node.runouts)visit(edge.child,depth+1);
+        }
+      }
+      physicalToPacked[id]=physicalToPacked[node.id];
+    }
+    visit(game.root,1);
+    const maxN=Math.max(...game.players.map(p=>p.ids.length));
+    // Training holds all action CFVs, the decoded policy and the next own
+    // reach at an own node. Evaluation can track three output vectors.
+    const scratch=Math.ceil(maxDepth*(2*maxActions+5)*maxN*8/64)*64;
+    const stack=native?0:Math.max(65536,Math.ceil(maxDepth*4096/65536)*65536);
+    const stateOffset=64;
+    const stateAligned=Math.ceil((stateOffset+game.stateBytes)/8)*8;
+    const lockPointers=new Map();
+    function pack(buffer){
+      let used=stateAligned;
+      const copied=new WeakMap(),payoffs=new WeakMap(),weights=new Map();
+      const bytes=buffer?new Uint8Array(buffer):null;
+      const view=buffer?new DataView(buffer):null;
+      function reserve(size,align=4){
+        const at=Math.ceil(used/align)*align;
+        used=at+size;
+        return at;
+      }
+      function integers(values){
+        const at=reserve(values.length*4);
+        if(view)for(let i=0;i<values.length;i++)view.setInt32(at+i*4,values[i],true);
+        return at;
+      }
+      function copy(array){
+        if(!array)return 0;
+        if(!copied.has(array)){
+          const at=reserve(array.byteLength,array.BYTES_PER_ELEMENT);
+          if(bytes)bytes.set(new Uint8Array(array.buffer,array.byteOffset,array.byteLength),at);
+          copied.set(array,at);
+        }
+        return copied.get(array);
+      }
+      function payoff(layout){
+        if(!layout)return 0;
+        if(!payoffs.has(layout))payoffs.set(layout,integers([copy(layout.mineOrder),copy(layout.oppOrder),
+          copy(layout.groupStart),copy(layout.weakEnd),copy(layout.tieEnd),layout.weakEnd.length]));
+        return payoffs.get(layout);
+      }
+      function weight(value){
+        if(!weights.has(value)){
+          const at=reserve(8,8);
+          view?.setFloat64(at,value,true);
+          weights.set(value,at);
+        }
+        return weights.get(value);
+      }
+      const playerPtr=integers(game.players.flatMap(p=>[p.ids.length,copy(p.card0),copy(p.card1),copy(p.opponentIndex)]));
+      const nodePtr=reserve(nodes.length*22*4);
+      const decisionPtr=reserve(nodes.length*8*4);
+      const nodeRows=buffer?new Int32Array(buffer,nodePtr,nodes.length*22):null;
+      const decisions=buffer?new Int32Array(buffer,decisionPtr,nodes.length*8):null;
+      for(const [id,node] of nodes.entries()){
+        const kind=node.pairEquity?3:node.terminal?0:node.chance?2:1;
+        let childPtr=0,groupCount=0,groupPtr=0;
+        if(kind===1)childPtr=integers(node.actions.map(a=>physicalToPacked[a.child]));
+        if(kind===2){
+          const data=[];
+          if(node.isoGroups)for(const group of node.isoGroups){
+            const edge=group.representative;
+            data.push(physicalToPacked[edge.child],edge.card,integers(group.members.flatMap((member,i)=>
+              i===0&&member.outcome===edge?[0,0]:member.maps.map(copy))),group.members.length,weight(edge.weight??1/44));
+          }else{
+            const identity=integers([0,0]);
+            for(const edge of node.runouts)data.push(
+              typeof edge.child==='number'?physicalToPacked[edge.child]:virtual.get(edge.child),
+              edge.card,identity,1,weight(edge.weight??1/44));
+          }
+          groupCount=data.length/5;groupPtr=integers(data);
+        }
+        const valid0=copy(node.valid?.[0]),valid1=copy(node.valid?.[1]);
+        const payoff0=node.pairEquity?copy(node.pairEquity):payoff(node.riverPayoff?.[0]);
+        const payoff1=payoff(node.riverPayoff?.[1]);
+        if(kind===3)groupCount=node.pairDenominator;
+        if(nodeRows){
+          const offsets=game.banks.map(({Type,offset,length},bank)=>kind===1&&length?
+            stateOffset+offset+(bank<4?node.rowOffset:node.scaleOffset)*Type.BYTES_PER_ELEMENT:0);
+          nodeRows.set([kind,node.p??-1,node.actions?.length??0,childPtr,groupCount,groupPtr,
+            offsets[2],offsets[0],offsets[1],offsets[4]??0,offsets[5]??0,valid0,valid1,payoff0,payoff1,
+            node.type==='fold'?node.winner:-1,node.c[0],node.c[1],node.turn??-1,node.river??-1,offsets[3],0],id*22);
+        }
+        if(kind===1){
+          const {map,reps}=node.rowShape;
+          const mask=copy(node.lockedMask),rows=copy(map),representatives=copy(reps),fixed=copy(node.lockedRows);
+          if(decisions){
+            decisions.set([mask,0,-1,node.frequencyUnits??0,rows,representatives,reps.length,fixed],id*8);
+            if(mask)lockPointers.set(node.id,{fixed,id});
+          }
+        }
+      }
+      const reach=[],own=[],out=[];
+      for(let p=0;p<2;p++){
+        reach.push(reserve(game.players[1-p].ids.length*8,8));
+        own.push(reserve(game.players[p].ids.length*8,8));
+        out.push(reserve(game.players[p].ids.length*24,8));
+      }
+      const workspaceStart=reserve(scratch,8);
+      return {nodePtr,decisionPtr,playerPtr,decisions,reach,own,out,workspaceStart,workspaceEnd:used};
+    }
+    const required=pack().workspaceEnd+stack;
+    const pages=Math.ceil(required/65536),capacity=native?required:pages*65536;
+    if(capacity>0x7fffffff||limitBytes&&game.memory+capacity-game.stateBytes>limitBytes)return null;
+    const memory=native?{buffer:new ArrayBuffer(capacity)}:new WebAssembly.Memory({initial:pages,maximum:pages});
+    const buffer=memory.buffer;
+    const kernel=native?{
+      train_locked:(...args)=>native.train(buffer,...args),
+      evaluate_gto:(...args)=>native.evaluate(buffer,...args),
+    }:new WebAssembly.Instance(module,{env:{memory}}).exports;
+    if(!native)kernel.__stack_pointer.value=capacity;
+    if(game.stateStorage)throw Error('Compact compiled state must be allocated by the backend.');
+    game.allocateState(new Uint8Array(buffer,stateOffset,game.stateBytes));
+    const {nodePtr,decisionPtr,playerPtr,decisions,reach,own,out,workspaceStart,workspaceEnd}=pack(buffer);
+    const reachVectors=reach.map((at,p)=>new Float64Array(buffer,at,game.players[1-p].ids.length));
+    const outVectors=out.map((at,p)=>new Float64Array(buffer,at,game.players[p].ids.length*3));
+    const fused=game.gtoAlgorithm==='dcfr'&&!game.hasFrequencyIncrements;
+    const variant=['cfrplus','optimistic'].includes(game.gtoAlgorithm)?0:1;
+    const precision=game.deriveCurrent?16:{f64:0,'f32-regret':1,'f32-average':3,f32:7,scaled:12}[game.strategyPrecision];
+    const tieFloor=16*Number.EPSILON*Math.max(1,game.pot+game.stack);
+    const root=physicalToPacked[game.root];
+    const simd=options.simd&&source!==WASM_LOCK_KERNEL_BYTES;
+    game.memory+=capacity-game.stateBytes;
+    game.packedNodes=nodes.length;
+    const bridge={
+      memory,fullTraversal:true,handlesLocks:true,sourceOnly:true,fusesPolicy:fused,simd:!!simd,
+      mode:(native?'native':simd?'wasm-source-simd':'wasm-source')+'-compact-'+game.strategyPrecision+
+        (game.deriveCurrent?'-derived':''),
+      scratchBytes:scratch+stack,arenaBytes:capacity,packedBytes:workspaceStart-stateAligned,
+      refreshLocks(){
+        for(const [physicalId,{fixed,id}] of lockPointers){
+          const node=physical[physicalId];
+          new Float64Array(buffer,fixed,node.lockedRows.length).set(node.lockedRows);
+          decisions[id*8+2]=node.allLocked?node.lockedActions.reduce((bits,on,k)=>bits|(on<<k),0):-1;
+        }
+      },
+      updatePolicy(){}, // The core updates non-fused compact policies.
+      traverse(id,target,prior,weight,returnVector){
+        const packedId=physicalToPacked[id];
+        if(packedId<0)throw Error('CFR requires a canonical traversal root.');
+        reachVectors[target].set(prior);
+        if(!kernel.train_locked(nodePtr,decisionPtr,playerPtr,packedId,target,game.pot,reach[target],out[target],
+          weight?own[target]:0,workspaceStart,workspaceEnd,weight,variant,game._positiveDiscount??1,
+          game._negativeDiscount??1,+(fused&&!game.deriveCurrent),tieFloor,precision))throw Error('Compact traversal scratch overflow.');
+        if(returnVector)return Float64Array.from(outVectors[target].subarray(0,game.players[target].ids.length));
+      },
+      evaluateValues(target,includeProfile,includeUnrestricted){
+        reachVectors[target].set(game.players[1-target].priors);
+        const trackUnrestricted=includeUnrestricted&&game.nodeLocks.some(lock=>lock.player===target);
+        if(!kernel.evaluate_gto(nodePtr,decisionPtr,playerPtr,root,target,game.pot,reach[target],out[target],
+          workspaceStart,workspaceEnd,+includeProfile,+trackUnrestricted,precision,tieFloor))
+          throw Error('Compact best-response scratch overflow.');
+        const priors=game.players[target].priors,n=priors.length,values=outVectors[target];
+        function total(vector){
+          let sum=0;
+          for(let i=0;i<n;i++)sum+=priors[i]*values[vector*n+i];
+          return sum/game.jointZ;
+        }
+        const constrained=total(0);
+        return {constrained,profile:includeProfile?total(1):null,
+          unrestricted:includeUnrestricted?(trackUnrestricted?total(1+Number(includeProfile)):constrained):null};
+      },
+    };
+    bridge.refreshLocks();
+    return bridge;
+  }
 }

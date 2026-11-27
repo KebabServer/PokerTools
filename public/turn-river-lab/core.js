@@ -297,19 +297,47 @@ function createSolverCore() {
     return plans;
   }
 
-  function buildMultiStreetTree(pot,stack,flopSizes,turnSizes,riverSizes,maxRaises,allIn,maxNodes,startBoard,turnSamples=49,riverSamples=48,raiseSizes={},turnDonkSizes0=null,turnEntryMode="normal",flopDonkSizes0=null,flopEntryMode="normal",riverDonkSizes0=null,flopSamplingSeed=0,runoutPlan=null) {
+  function buildMultiStreetTree(pot,stack,flopSizes,turnSizes,riverSizes,maxRaises,allIn,maxNodes,startBoard,turnSamples=49,riverSamples=48,raiseSizes={},turnDonkSizes0=null,turnEntryMode="normal",flopDonkSizes0=null,flopEntryMode="normal",riverDonkSizes0=null,flopSamplingSeed=0,runoutPlan=null,options={}) {
     const isFlop=startBoard.length===3;
     const streetStart=isFlop?'flop':'turn';
     const nodes=[];
-    function reserve(node) {
+    let paths;
+    const entry=isFlop?'Flop':'Turn';
+    const logical={
+      get history(){
+        const labels=[];
+        for(let id=this.id;paths.parents[id]>=0;){
+          const parent=nodes[paths.parents[id]];
+          labels.push((parent.chance?parent.runouts:parent.actions)[paths.edges[id]].label);
+          id=parent.id;
+        }
+        labels.push(entry);
+        return labels.reverse();
+      }
+    };
+    const commitments=new Map(),labels=new Map();
+    function committed(c){
+      if(!options.lazyHistory)return [...c];
+      const key=c[0]+':'+c[1];
+      if(!commitments.has(key))commitments.set(key,c.slice());
+      return commitments.get(key);
+    }
+    function labelFor(label){
+      if(!options.lazyHistory)return label;
+      if(!labels.has(label))labels.set(label,label);
+      return labels.get(label);
+    }
+    function reserve(node,history) {
       if(nodes.length>=maxNodes) throw Error('Multi-street game tree exceeds the node budget. Reduce runouts, sizes or raises, or increase max nodes.');
+      if(options.lazyHistory)Object.setPrototypeOf(node,logical);
+      else node.history=history;
       node.id=nodes.length;nodes.push(node);return node.id;
     }
     function terminal(type,c,winner,history,turn,river) {
-      return reserve({terminal:true,type,winner,c:[...c],pot:pot+c[0]+c[1],history,turn,river});
+      return reserve({terminal:true,type,winner,c:committed(c),pot:pot+c[0]+c[1],turn,river},history);
     }
     function chance(street,c,history,turn=null,previousAggressor=null) {
-      const id=reserve({terminal:false,chance:true,street:'deal-'+street,c:[...c],pot:pot+c[0]+c[1],history,turn,river:null,runouts:[]});
+      const id=reserve({terminal:false,chance:true,street:'deal-'+street,c:committed(c),pot:pot+c[0]+c[1],turn,river:null,runouts:[]},history);
       const node=nodes[id],publicBoard=turn===null?startBoard:[...startBoard,turn];
       const sample=runoutPlan?.get(turn);
       const selected=sample?.cards??selectRunouts(publicBoard,street==='turn'?turnSamples:riverSamples,isFlop?flopSamplingSeed:0);
@@ -321,7 +349,7 @@ function createSolverCore() {
       for(const card of selected) {
         const nextTurn=street==='turn'?card:turn;
         const nextRiver=street==='river'?card:null;
-        const label=(street==='turn'?'Turn ':'River ')+cardText(card),nextHistory=history.concat(label);
+        const label=labelFor((street==='turn'?'Turn ':'River ')+cardText(card)),nextHistory=history?.concat(label);
         const child=c[0]===stack && c[1]===stack
           ? street==='turn'?chance('river',c,nextHistory,nextTurn):terminal('showdown',c,null,nextHistory,nextTurn,nextRiver)
           : decision(street,0,c,0,1,0,nextHistory,nextTurn,nextRiver,previousAggressor);
@@ -330,6 +358,8 @@ function createSolverCore() {
       return id;
     }
     function closeStreet(street,c,history,turn,river,currentAggressor) {
+      if(options.allInRunouts&&options.allInRunouts!=='explicit'&&street!=='river'&&c[0]===stack&&c[1]===stack)
+        return terminal('all-in',c,null,history,turn,null);
       if(street==='flop')return chance('turn',c,history,null,currentAggressor);
       if(street==='turn')return chance('river',c,history,turn,currentAggressor);
       return terminal('showdown',c,null,history,turn,river);
@@ -337,8 +367,8 @@ function createSolverCore() {
     function decision(street,p,c,checks,lastRaise,raises,history,turn,river,previousAggressor=null,currentAggressor=null) {
       const toCall=c[1-p]-c[p],potNow=pot+c[0]+c[1];
       if(toCall===0 && c[p]===stack)return closeStreet(street,c,history,turn,river,currentAggressor);
-      const id=reserve({terminal:false,chance:false,street,turn,river,p,c:[...c],pot:potNow,
-        toCall,lastRaise,raises,history,actions:[]});
+      const id=reserve({terminal:false,chance:false,street,turn,river,p,c:committed(c),pot:potNow,
+        toCall,lastRaise,raises,actions:[]},history);
       const node=nodes[id];
       // A donk is the first OOP lead after IP was the prior street's last aggressor.
       // For a flop start, the prior preflop aggressor is supplied by the user.
@@ -348,13 +378,14 @@ function createSolverCore() {
       function add(type,label,total,child){node.actions.push({type,label,total,increment:total-c[p],child});}
       if(toCall===0) {
         const label='Check';
-        const child=checks===1?closeStreet(street,c,history.concat(label),turn,river,currentAggressor)
-          :decision(street,1-p,c,1,lastRaise,raises,history.concat(label),turn,river,previousAggressor,currentAggressor);
+        const child=checks===1?closeStreet(street,c,history?.concat(label),turn,river,currentAggressor)
+          :decision(street,1-p,c,1,lastRaise,raises,history?.concat(label),turn,river,previousAggressor,currentAggressor);
         add('check',label,c[p],child);
       }else {
-        add('fold','Fold',c[p],terminal('fold',c,1-p,history.concat('Fold'),turn,river));
+        add('fold','Fold',c[p],terminal('fold',c,1-p,history?.concat('Fold'),turn,river));
         const nextC=[...c];nextC[p]+=toCall;
-        add('call','Call '+toCall,nextC[p],closeStreet(street,nextC,history.concat('Call '+toCall),turn,river,currentAggressor));
+        const label=labelFor('Call '+toCall);
+        add('call',label,nextC[p],closeStreet(street,nextC,history?.concat(label),turn,river,currentAggressor));
       }
       const canBet=toCall===0||(raises<maxRaises&&c[p]+toCall<stack&&c[1-p]<stack);
       if(canBet) {
@@ -377,25 +408,27 @@ function createSolverCore() {
           const total=option.total;
           if(total<=c[1-p]||used.has(total))continue;
           used.add(total);
-          const label=total===stack?'All-in '+(total-c[p]):(toCall?'Raise ':useDonkSizes?'Donk ':'Bet ')+option.fraction+'%';
+          const label=labelFor(total===stack?'All-in '+(total-c[p]):(toCall?'Raise ':useDonkSizes?'Donk ':'Bet ')+option.fraction+'%');
           const next=[...c];next[p]=total;
           const increase=total-c[1-p],newLast=increase>=lastRaise?increase:lastRaise;
-          const child=decision(street,1-p,next,0,newLast,raises+(toCall>0?1:0),history.concat(label),turn,river,
+          const child=decision(street,1-p,next,0,newLast,raises+(toCall>0?1:0),history?.concat(label),turn,river,
             previousAggressor,p);
           add(toCall?'raise':'bet',label,total,child);
         }
       }
       return id;
     }
-    const root=decision(streetStart,0,[0,0],0,1,0,[streetStart==='flop'?'Flop':'Turn'],null,null,
+    const root=decision(streetStart,0,[0,0],0,1,0,options.lazyHistory?null:[entry],null,null,
       !isFlop&&turnEntryMode==='ip-aggressor'?1:null);
-    return {nodes,root,rivers:!isFlop?selectRunouts(startBoard,48):null};
+    const tree={nodes,root,rivers:!isFlop?selectRunouts(startBoard,48):null};
+    if(options.lazyHistory)tree.paths=paths=parentPaths(tree);
+    return tree;
   }
-  function buildTurnRiverTree(pot,stack,turnSizes,riverSizes,maxRaises,allIn,maxNodes,turnBoard,raiseSizes={},turnDonkSizes0=null,turnEntryMode='normal',riverDonkSizes0=null) {
-    return buildMultiStreetTree(pot,stack,null,turnSizes,riverSizes,maxRaises,allIn,maxNodes,turnMask(turnBoard),49,48,raiseSizes,turnDonkSizes0,turnEntryMode,null,'normal',riverDonkSizes0);
+  function buildTurnRiverTree(pot,stack,turnSizes,riverSizes,maxRaises,allIn,maxNodes,turnBoard,raiseSizes={},turnDonkSizes0=null,turnEntryMode='normal',riverDonkSizes0=null,options) {
+    return buildMultiStreetTree(pot,stack,null,turnSizes,riverSizes,maxRaises,allIn,maxNodes,turnMask(turnBoard),49,48,raiseSizes,turnDonkSizes0,turnEntryMode,null,'normal',riverDonkSizes0,0,null,options);
   }
-  function buildFlopTurnRiverTree(pot,stack,flopSizes,turnSizes,riverSizes,maxRaises,allIn,maxNodes,flopBoard,turnSamples=8,riverSamples=6,raiseSizes={},turnDonkSizes0=null,flopDonkSizes0=null,flopEntryMode='normal',riverDonkSizes0=null,flopSamplingSeed=0,runoutPlan=null) {
-    return buildMultiStreetTree(pot,stack,flopSizes,turnSizes,riverSizes,maxRaises,allIn,maxNodes,flopMask(flopBoard),turnSamples,riverSamples,raiseSizes,turnDonkSizes0,'normal',flopDonkSizes0,flopEntryMode,riverDonkSizes0,flopSamplingSeed,runoutPlan);
+  function buildFlopTurnRiverTree(pot,stack,flopSizes,turnSizes,riverSizes,maxRaises,allIn,maxNodes,flopBoard,turnSamples=8,riverSamples=6,raiseSizes={},turnDonkSizes0=null,flopDonkSizes0=null,flopEntryMode='normal',riverDonkSizes0=null,flopSamplingSeed=0,runoutPlan=null,options) {
+    return buildMultiStreetTree(pot,stack,flopSizes,turnSizes,riverSizes,maxRaises,allIn,maxNodes,flopMask(flopBoard),turnSamples,riverSamples,raiseSizes,turnDonkSizes0,'normal',flopDonkSizes0,flopEntryMode,riverDonkSizes0,flopSamplingSeed,runoutPlan,options);
   }
   // Exact public chance orbit reduction. In addition to invariant weighted
   // private ranges, sampled flop trees require the *entire* sampled chance
@@ -506,7 +539,7 @@ function createSolverCore() {
           const j=map[i];
           if(source.lockedMask[i]!==dest.lockedMask[j])return false;
           if(source.lockedMask[i])for(let k=0;k<a;k++)
-            if(source.lockedRows[i*a+k]!==dest.lockedRows[j*a+k])return false;
+            if(lockedProbability(source,i,k,a)!==lockedProbability(dest,j,k,a))return false;
         }
       }
       return true;
@@ -716,19 +749,19 @@ function createSolverCore() {
         return node.frequencyUnits?values.map(v=>Math.round(v*node.frequencyUnits/100)/node.frequencyUnits):
           values.map(v=>v/total);
       };
-      const mask=new Uint8Array(n),rows=new Float64Array(n*a),combos={};
+      const mask=new Uint8Array(n),combos={};
+      let rows;
+      const lockOrdinals=whole?null:new Int16Array(n).fill(-1);
       if(whole){
-        const mix=probabilityRow(entry.percentages);
-        for(let i=0;i<n;i++)if(legal(i)){
-          mask[i]=1;
-          rows.set(mix,i*a);
-        }
+        rows=Float64Array.from(probabilityRow(entry.percentages));
+        for(let i=0;i<n;i++)if(legal(i))mask[i]=1;
       }else{
         if(!entry.comboPercentages||typeof entry.comboPercentages!=='object'||Array.isArray(entry.comboPercentages))
           throw Error('Combo locks must be an object keyed by exact combination ID.');
         const ids=Object.keys(entry.comboPercentages);
         if(!ids.length||ids.length>n)throw Error('A combo lock must specify 1 to '+n+' available combinations.');
-        for(const idText of ids){
+        rows=new Float64Array(ids.length*a);
+        for(const [row,idText] of ids.entries()){
           if(!/^(0|[1-9][0-9]*)$/.test(idText))throw Error('Combo lock ID must be a canonical integer combination ID.');
           const id=Number(idText),index=players[node.p].index[id];
           if(!Number.isSafeInteger(id)||id<0||id>=1326||index<0)
@@ -739,14 +772,14 @@ function createSolverCore() {
             throw Error('Combo lock references a hand blocked by this decision’s public cards.');
           const values=entry.comboPercentages[idText],mix=probabilityRow(values);
           mask[index]=1;combos[idText]=values.slice();
-          rows.set(mix,index*a);
+          lockOrdinals[index]=row;
+          rows.set(mix,row*a);
         }
       }
       const allLocked=whole||player.ids.every((_,i)=>!legal(i)||mask[i]);
       const lockedActions=allLocked?new Uint8Array(a):null;
-      if(lockedActions)for(let i=0;i<n;i++)if(mask[i])
-        for(let k=0;k<a;k++)if(rows[i*a+k]>0)lockedActions[k]=1;
-      locks.set(node.id,{locked:true,lockedMask:mask,lockedRows:rows,allLocked,lockedActions});
+      if(lockedActions)for(let i=0;i<rows.length;i++)if(rows[i]>0)lockedActions[i%a]=1;
+      locks.set(node.id,{locked:true,lockedMask:mask,lockedRows:rows,lockOrdinals,allLocked,lockedActions});
       nodeLocks.push({nodeId:entry.nodeId,history:node.history.slice(),player:node.p,board:board.slice(),pot,stack,
         actions:node.actions.map(a=>a.label),actionTotals:node.actions.map(a=>a.total),
         ...(whole?{percentages:entry.percentages.slice()}:{comboPercentages:Object.fromEntries(Object.entries(combos).sort((x,y)=>Number(x[0])-Number(y[0])))} )});
@@ -754,11 +787,15 @@ function createSolverCore() {
     return {nodeLocks,locks};
   }
 
+  function lockedProbability(node,hand,action,actions){
+    return node.lockedRows[(node.lockOrdinals?.[hand]??0)*actions+action];
+  }
+
   function applyNodeLocks(game,{nodeLocks,locks}){
     for(const entry of game.nodeLocks??[]){
       const node=game.nodes[entry.nodeId];
       node.locked=false;
-      node.lockedMask=node.lockedRows=node.lockedActions=null;
+      node.lockedMask=node.lockedRows=node.lockOrdinals=node.lockedActions=null;
       node.allLocked=false;
     }
     for(const [id,lock] of locks)Object.assign(game.nodes[id],lock);
@@ -781,6 +818,23 @@ function createSolverCore() {
     const requestedAlgorithm=config.gtoAlgorithm||'dcfr';
     if(!['cfrplus','dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','dcfr-predictive','optimistic','lcfr','dcfr-cubic','dcfr-2-0.5-2'].includes(requestedAlgorithm))throw Error('Unknown GTO convergence algorithm.');
     const gtoAlgorithm=equilibrium==='gto'?requestedAlgorithm:'cfrplus';
+    const strategyStorage=config.strategyStorage??'dense';
+    const strategyPrecision=config.strategyPrecision??'f64';
+    const deriveCurrent=config.currentPolicyStorage==='derived';
+    const allInRunouts=config.allInRunouts??(strategyStorage==='compact'?'implicit':'explicit');
+    const pairEquityMaxWork=config.pairEquityMaxWork??20_000_000;
+    if(!['dense','compact'].includes(strategyStorage))throw Error('Strategy storage must be dense or compact.');
+    if(!['f64','f32-regret','f32-average','f32','scaled'].includes(strategyPrecision)||
+       (strategyStorage==='dense'&&strategyPrecision!=='f64')||
+       (strategyPrecision==='scaled'&&gtoAlgorithm!=='dcfr'))throw Error('Unsupported strategy precision for this layout or algorithm.');
+    if(strategyStorage==='compact'&&(equilibrium!=='gto'||config.useActionFrequencyPruning||config.useRegretPruning))
+      throw Error('Compact strategy storage supports GTO without experimental action or regret pruning.');
+    if(!['stored','derived'].includes(config.currentPolicyStorage??'stored')||
+      deriveCurrent&&(strategyStorage!=='compact'||strategyPrecision!=='f64'||gtoAlgorithm!=='dcfr'||hasFrequencyIncrements))
+      throw Error('Derived current policy requires compact Float64 DCFR without frequency increments.');
+    if(!['explicit','implicit','pair-equity'].includes(allInRunouts)||allInRunouts!=='explicit'&&strategyStorage!=='compact')
+      throw Error('Implicit all-in runouts require compact strategy storage.');
+    if(!Number.isSafeInteger(pairEquityMaxWork)||pairEquityMaxWork<0)throw Error('Invalid pair-equity work budget.');
     // Hybrid-only tuning; existing DCFR schedules keep their original meaning.
     const hybridSchedule={
       alphaStart:Number(config.scheduledAlphaStart??1),
@@ -870,8 +924,9 @@ function createSolverCore() {
     const maxNodes=config.maxNodes==null?(isFlop?18000:isTurn?25000:1800):Number(config.maxNodes);
     const memoryLimitBytes=Number(config.memoryLimitBytes??0);
     if(!Number.isSafeInteger(memoryLimitBytes)||memoryLimitBytes<0)throw Error('Invalid memory limit.');
-    if(!Number.isSafeInteger(maxNodes)||maxNodes<20||maxNodes>250000)
-      throw Error('Maximum tree nodes must be a whole number between 20 and 250,000.');
+    const maxTreeNodes=strategyStorage==='compact'?1_000_000:250_000;
+    if(!Number.isSafeInteger(maxNodes)||maxNodes<20||maxNodes>maxTreeNodes)
+      throw Error('Maximum tree nodes must be a whole number between 20 and '+maxTreeNodes+'.');
     const fidelity=config.flopFidelity??'fast';
     if(isFlop&&!Object.hasOwn(flopFidelities,fidelity))throw Error('Unknown flop fidelity.');
     const turnSamples=isFlop?Number(config.flopTurnSamples??flopFidelities[fidelity][0]):null;
@@ -888,8 +943,9 @@ function createSolverCore() {
     const suitGroup=usePublicSymmetry||usePrivateSymmetry||(isFlop&&samplingMethod==='suit-orbits')
       ?exactSuitAutomorphisms(board,players):null;
     const runoutPlan=isFlop?makeFlopRunoutPlan(board,turnSamples,riverSamples,flopSamplingSeed,samplingMethod,suitGroup):null;
-    const tree=isFlop?buildFlopTurnRiverTree(pot,stack,flopSizes,turnSizes,sizes,maxRaises,allIn,maxNodes,board,turnSamples,riverSamples,raisesByStreet,turnDonkSizes0,flopDonkSizes0,flopEntryMode,riverDonkSizes0,flopSamplingSeed,runoutPlan)
-      :isTurn?buildTurnRiverTree(pot,stack,turnSizes,sizes,maxRaises,allIn,maxNodes,board,raisesByStreet,turnDonkSizes0,turnEntryMode,riverDonkSizes0)
+    const treeOptions={lazyHistory:strategyStorage==='compact',allInRunouts};
+    const tree=isFlop?buildFlopTurnRiverTree(pot,stack,flopSizes,turnSizes,sizes,maxRaises,allIn,maxNodes,board,turnSamples,riverSamples,raisesByStreet,turnDonkSizes0,flopDonkSizes0,flopEntryMode,riverDonkSizes0,flopSamplingSeed,runoutPlan,treeOptions)
+      :isTurn?buildTurnRiverTree(pot,stack,turnSizes,sizes,maxRaises,allIn,maxNodes,board,raisesByStreet,turnDonkSizes0,turnEntryMode,riverDonkSizes0,treeOptions)
       :buildTree(pot,stack,sizes,maxRaises,allIn,maxNodes,raisesByStreet.river,riverDonkSizes0,riverEntryMode);
     if(hasFrequencyIncrements)for(const node of tree.nodes)if(!node.terminal&&!node.chance){
       const step=frequencyIncrements[node.street??'river'][node.p];
@@ -919,7 +975,7 @@ function createSolverCore() {
       ? ((!isTurn&&!isFlop)||Math.max(players[0].ids.length,players[1].ids.length)<=64)
       : !!config.useSparseTraversal;
     const chanceGroup=usePublicSymmetry?chanceAutomorphisms(suitGroup,runoutPlan):null;
-    const paths=parentPaths(tree);
+    const paths=tree.paths??parentPaths(tree);
     const sampledChance=isFlop&&(turnSamples<49||riverSamples<48);
     const base={board,isFlop,isTurn,pot,stack,equilibrium,qreTemperaturePercent,gtoAlgorithm,hybridSchedule,
       zeroReachPruning:!!config.useZeroReachPruning,regretPruning:!!config.useRegretPruning,sparseTraversal,
@@ -927,7 +983,7 @@ function createSolverCore() {
       sizes,turnSizes,turnDonkSizes0,turnEntryMode,flopSizes,flopDonkSizes0,flopEntryMode,riverDonkSizes0,riverEntryMode,
       raisesByStreet,turnSamples,riverSamples,sampledChance,samplingMethod,flopSamplingSeed,maxRaises,allIn,
       players,...tree,jointZ,paths,actionPruning,frequencyIncrements,hasFrequencyIncrements,memoryLimitBytes,maxNodeLocks,
-      compactState:config.compactState!==false&&equilibrium==='gto'};
+      strategyStorage,strategyPrecision,deriveCurrent,allInRunouts,compactState:config.compactState!==false&&equilibrium==='gto'};
     const defaultLocks=structuredClone(config.nodeLocks??[]);
     parseNodeLocks(base,defaultLocks);
     const layouts=new Map();
@@ -935,13 +991,13 @@ function createSolverCore() {
       const group=lockAutomorphisms(tree,chanceGroup??(usePrivateSymmetry?suitGroup:[]),parsed.locks,paths,players);
       const key=suitGroupKey(group);
       if(layouts.has(key))return layouts.get(key);
-      const nodes=tree.nodes.map(node=>!usePublicSymmetry||group.length<=1||node.terminal?node:{...node});
+      const nodes=tree.nodes.map(node=>!usePublicSymmetry||group.length<=1||node.terminal?node:cloneNode(node));
       const reason=!usePublicSymmetry?'disabled':group.length<chanceGroup.length?'locks-break-suit-symmetry':
         chanceGroup.length<suitGroup.length?'sampled-runouts-break-symmetry':'no-exact-symmetry';
       const suitIsomorphism=installSuitIsomorphism({nodes,root:tree.root},board,
         usePublicSymmetry?group:[],usePublicSymmetry,runoutPlan?.get(null).cards.length??49,riverSamples,reason);
       const riverPrivateSymmetry=installRiverPrivateSymmetry(board,players,usePrivateSymmetry,group);
-      const layout={key,nodes,suitIsomorphism,riverPrivateSymmetry};
+      const layout={key,nodes,suitIsomorphism,riverPrivateSymmetry,rowLayouts:new Map()};
       // Retain recently used symmetry layouts without retaining one copy of
       // the structural overlays for every lock assignment during a batch.
       if(layouts.size===3)layouts.delete(layouts.keys().next().value);
@@ -956,7 +1012,7 @@ function createSolverCore() {
       const {parsed,layout}=prepareLockLayout(defaultLocks);
       const game={...base,...layout,nodes:sessionNodes(layout),suitIsomorphism:{...layout.suitIsomorphism},preview:true};
       applyNodeLocks(game,parsed);
-      const stateBytes=stateSlots(game)*8;
+      const stateBytes=planState(game,layout);
       const boards=isFlop?new Set(tree.nodes.filter(n=>n.terminal&&n.type==='showdown')
         .map(n=>unorderedRunoutKey(n.turn,n.river))).size:isTurn?tree.rivers.length:1;
       game.memory=stateBytes+boards*(1326*4+(players[0].ids.length+players[1].ids.length)*12+3000);
@@ -964,7 +1020,7 @@ function createSolverCore() {
     }
     // Account for the structural objects, edges and betting history references
     // as well as typed numerical metadata. The JS-engine cost is an estimate.
-    const structuralBytes=tree.nodes.reduce((bytes,node)=>bytes+160+node.history.length*8+
+    const structuralBytes=tree.nodes.reduce((bytes,node)=>bytes+160+(tree.paths?0:node.history.length*8)+
       (node.actions?.length??node.runouts?.length??0)*64,paths.parents.byteLength+paths.edges.byteLength);
     if(memoryLimitBytes&&structuralBytes>memoryLimitBytes)throw Error('Tree exceeds the preparation memory budget.');
     const scoresByRiver=isTurn?new Array(52).fill(null):null;
@@ -1001,7 +1057,7 @@ function createSolverCore() {
     }
     // Swapping the last two cards preserves showdown strength and blockers.
     // Share the immutable layout even though the betting histories differ.
-    for(const node of tree.nodes)if(node.terminal&&node.type==='showdown'){
+    function attachShowdown(node){
       const key=(node.turn??52)*53+(node.river??52);
       let data=fixedRiver;
       if(isFlop){
@@ -1019,12 +1075,14 @@ function createSolverCore() {
         node.riverScores=data.scores;
       }
     }
+    for(const node of tree.nodes)if(node.terminal&&node.type==='showdown')attachShowdown(node);
     // Cache exact hand/runout legality once per public board instead of
     // repeatedly checking the same two card blockers at each terminal visit.
     // All 48 legal rivers are still enumerated for turn solves.
     const legalRunouts=new Map(),legalRunoutIndices=new Map();
     const fullHandIndices=players.map(player=>Uint16Array.from(player.ids,(_,i)=>i));
-    for(const node of tree.nodes)if(!node.chance && (node.turn!==null&&node.turn!==undefined || node.river!==null&&node.river!==undefined)){
+    function attachLegality(node){
+      if(node.chance||node.turn==null&&node.river==null)return;
       const key=unorderedRunoutKey(node.turn??52,node.river??52);
       let valid=legalRunouts.get(key);
       if(!valid){
@@ -1047,11 +1105,66 @@ function createSolverCore() {
       node.valid=valid;
       node.validIndices=legalRunoutIndices.get(key);
     }
+    for(const node of tree.nodes)attachLegality(node);
+    const allInPrograms=new Map(),allInLeaves=new Map();
+    const allInCommitted=[stack,stack];
+    let allInBytes=0;
+    function allInProgram(turn){
+      if(allInPrograms.has(turn))return allInPrograms.get(turn);
+      const dealTurn=isFlop&&turn===null;
+      const sample=runoutPlan?.get(turn),cards=sample?.cards??tree.rivers;
+      const weight=sample?.weight??1/44;
+      const runouts=cards.map(card=>{
+        if(dealTurn)return {card,weight,child:allInProgram(card)};
+        const key=(turn??52)*53+card;
+        if(!allInLeaves.has(key)){
+          const leaf={terminal:true,type:'showdown',turn,river:card,c:allInCommitted};
+          attachShowdown(leaf);
+          attachLegality(leaf);
+          allInLeaves.set(key,leaf);
+          allInBytes+=128;
+        }
+        return {card,weight,child:allInLeaves.get(key)};
+      });
+      const program={chance:true,runouts,c:allInCommitted,turn};
+      allInPrograms.set(turn,program);
+      allInBytes+=128+48*runouts.length;
+      return program;
+    }
+    for(const node of tree.nodes)if(node.type==='all-in')node.allInProgram=allInProgram(node.turn??null);
+    let pairEquityBytes=0,pairEquityCount=0;
+    if(allInRunouts==='pair-equity'&&!sampledChance){
+      let remaining=pairEquityMaxWork;
+      const [oop,ip]=players,n=oop.ids.length,m=ip.ids.length;
+      for(const [turn,program] of Array.from(allInPrograms).reverse()){
+        const leaves=program.runouts.flatMap(({child})=>child.terminal?[child]:child.runouts.map(r=>r.child));
+        const work=n*m*leaves.length;
+        if(work>remaining)continue;
+        const counts=new Int16Array(n*m);
+        for(const leaf of leaves){
+          const sc=leaf.riverScores,index=leaf.validIndices??fullHandIndices;
+          for(const i of index[0]){
+            const a=oop.card0[i],b=oop.card1[i],value=sc[oop.ids[i]],row=i*m;
+            for(const j of index[1]){
+              const c=ip.card0[j],d=ip.card1[j];
+              if(a===c||a===d||b===c||b===d)continue;
+              const other=sc[ip.ids[j]];
+              counts[row+j]+=value>other?1:value<other?-1:0;
+            }
+          }
+        }
+        program.pairEquity=counts;
+        program.pairDenominator=isFlop&&turn===null?45*44:44;
+        remaining-=work;
+        pairEquityBytes+=counts.byteLength;
+        pairEquityCount++;
+      }
+    }
     // A fully specified river has no extra runout blockers. Every combo in
     // its already board-filtered range is legal, in its original index order.
     if(!isFlop&&!isTurn)for(const node of tree.nodes)if(node.terminal)
       node.validIndices=fullHandIndices;
-    let immutableBytes=structuralBytes+52*16+players.reduce((sum,p)=>sum+52*p.ids.length+22*p.ids.length+2*1326,0);
+    let immutableBytes=structuralBytes+allInBytes+pairEquityBytes+52*16+players.reduce((sum,p)=>sum+52*p.ids.length+22*p.ids.length+2*1326,0);
     for(const data of unordered.values()){
       immutableBytes+=data.scores.byteLength+data.sorted.reduce((sum,ids)=>sum+ids.byteLength,0);
       for(const layout of data.payoff)immutableBytes+=riverLayoutBytes(layout);
@@ -1060,7 +1173,8 @@ function createSolverCore() {
     for(const indices of legalRunoutIndices.values())immutableBytes+=indices[0].byteLength+indices[1].byteLength;
     immutableBytes+=fullHandIndices[0].byteLength+fullHandIndices[1].byteLength;
     const rulesFingerprint=gameSignature(base,{rulesOnly:true});
-    Object.assign(base,{scores,scoresByRiver,scoresByRunout,riverPayoffLayouts,rulesFingerprint,immutableBytes});
+    Object.assign(base,{scores,scoresByRiver,scoresByRunout,riverPayoffLayouts,rulesFingerprint,immutableBytes,
+      structuralBytes,allInProgramCount:allInPrograms.size,pairEquityCount,pairEquityBytes});
     function legacyLayoutMatches(game){
       if(!game.suitIsomorphism.enabled&&!game.riverPrivateSymmetry.enabled)return true;
       const legacyGroup=exactSuitAutomorphisms(board,players,true);
@@ -1077,11 +1191,10 @@ function createSolverCore() {
         const game={...base,nodes:sessionNodes(layout),suitIsomorphism:{...layout.suitIsomorphism},
           riverPrivateSymmetry:layout.riverPrivateSymmetry,actionPruning:{...actionPruning}};
         applyNodeLocks(game,parsed);
-        const slots=stateSlots(game);
-        game.memory=immutableBytes+slots*8;
+        const stateBytes=planState(game,layout);
+        game.memory=immutableBytes+stateBytes+(game.rowMetadataBytes??0);
         if(memoryLimitBytes&&game.memory>memoryLimitBytes)
           throw Error('Estimated numerical state exceeds the memory budget. Reduce runouts, ranges, bet sizes or raises.');
-        game.stateLength=slots;
         game.allocateState=allocateGameState;
         if(!deferState)game.allocateState();
         contexts.set(game,{prepared,key:layout.key,deferState});
@@ -1091,7 +1204,13 @@ function createSolverCore() {
         const context=contexts.get(game);
         if(context?.prepared!==prepared)throw Error('Session does not belong to this prepared game.');
         const {parsed,layout}=prepareLockLayout(requestedLocks);
-        if(layout.key!==context.key)return prepared.createGame(requestedLocks,{deferState:context.deferState});
+        if(layout.key!==context.key||game.strategyStorage==='compact'&&
+          (game.nodeLocks.length!==parsed.nodeLocks.length||game.nodeLocks.some(({nodeId})=>{
+            const current=game.nodes[nodeId],next=parsed.locks.get(nodeId);
+            return !next||!!current.lockOrdinals!==!!next.lockOrdinals||
+              current.lockedMask.some((bit,i)=>bit!==next.lockedMask[i])||
+              current.lockOrdinals?.some((row,i)=>row!==next.lockOrdinals[i]);
+          })))return prepared.createGame(requestedLocks,{deferState:context.deferState});
         applyNodeLocks(game,parsed);
         game.compiled?.refreshLocks?.();
         return game;
@@ -1109,7 +1228,79 @@ function createSolverCore() {
   function unorderedRunoutKey(a,b){return Math.min(a,b)*53+Math.max(a,b);}
 
   function sessionNodes(layout){
-    return layout.nodes.map(node=>node.terminal||node.chance?node:{...node});
+    return layout.nodes.map(node=>node.terminal||node.chance?node:cloneNode(node));
+  }
+
+  function cloneNode(node){return Object.assign(Object.create(Object.getPrototypeOf(node)),node);}
+
+  function planState(game,layout){
+    if(game.strategyStorage==='dense'){
+      game.stateLength=stateSlots(game);
+      return game.stateBytes=game.stateLength*8;
+    }
+    const predictive=['optimistic','dcfr-predictive'].includes(game.gtoAlgorithm);
+    const scaled=game.strategyPrecision==='scaled';
+    const BankTypes=scaled?[Int16Array,Int16Array,Float32Array,Float64Array,Float32Array,Float32Array]:[
+      game.strategyPrecision==='f64'?Float64Array:Float32Array,
+      ['f32-average','f32'].includes(game.strategyPrecision)?Float32Array:Float64Array,
+      game.strategyPrecision==='f32'?Float32Array:Float64Array,Float64Array];
+    let count=0,metadataBytes=0,rows=0,decisions=0;
+    const shared=new Set();
+    for(const node of game.nodes)if(!node.terminal&&!node.chance&&!node.isoAlias&&node.actions.length>1){
+      const p=node.p,n=game.players[p].ids.length;
+      const key=(node.turn??52)*106+(node.river??52)*2+p;
+      // The key identifies the ordered public board within the lock stabilizer.
+      // Rule out only hands for which no legal opponent combination exists.
+      let shape=layout.rowLayouts.get(key);
+      if(!shape||node.locked){
+        const valid=node.valid?.[p],otherValid=node.valid?.[1-p];
+        const player=game.players[p],other=game.players[1-p],cards=new Uint16Array(52);
+        const suit=node.suitRows??game.riverPrivateSymmetry.maps?.[p].master;
+        let opponents=0;
+        for(let j=0;j<other.ids.length;j++)if(otherValid?otherValid[j]:!blockedByRunout(other.card0[j],other.card1[j],node)){
+          opponents++;cards[other.card0[j]]++;cards[other.card1[j]]++;
+        }
+        const map=new Int16Array(n).fill(-1),representatives=[];
+        for(let i=0;i<n;i++){
+          if(valid?!valid[i]:blockedByRunout(player.card0[i],player.card1[i],node))continue;
+          if(node.lockedMask?.[i]){
+            map[i]=-2-(node.lockOrdinals?.[i]??0);
+            continue;
+          }
+          const same=player.opponentIndex[i];
+          if(opponents-cards[player.card0[i]]-cards[player.card1[i]]+(same>=0?1:0)===0)continue;
+          const rep=suit?.[i]??i;
+          if(rep===i){map[i]=representatives.length;representatives.push(i);}
+          else map[i]=map[rep];
+        }
+        const reps=Uint16Array.from(representatives);
+        shape={map,reps};
+        if(!node.locked)layout.rowLayouts.set(key,shape);
+      }
+      if(!shared.has(shape)){
+        shared.add(shape);
+        metadataBytes+=shape.map.byteLength+shape.reps.byteLength;
+      }
+      if(node.locked)metadataBytes+=node.lockedMask.byteLength+node.lockedRows.byteLength+(node.lockOrdinals?.byteLength??0);
+      node.rowShape=shape;
+      node.rowOffset=count;
+      if(scaled)node.scaleOffset=rows;
+      rows+=shape.reps.length;
+      count+=shape.reps.length*node.actions.length;
+      decisions++;
+    }
+    const sizes=[count,count,game.deriveCurrent?0:count,predictive?count:0,...(scaled?[rows,rows]:[])];
+    let bytes=0;
+    game.banks=BankTypes.map((Type,i)=>{
+      const offset=Math.ceil(bytes/Type.BYTES_PER_ELEMENT)*Type.BYTES_PER_ELEMENT;
+      bytes=offset+sizes[i]*Type.BYTES_PER_ELEMENT;
+      return {Type,offset,length:sizes[i]};
+    });
+    game.stateLength=sizes.reduce((a,b)=>a+b,0);
+    game.rowMetadataBytes=metadataBytes;
+    game.strategyRows=rows;
+    game.strategyDecisions=decisions;
+    return game.stateBytes=bytes;
   }
 
   function stateSlots(game){
@@ -1131,8 +1322,27 @@ function createSolverCore() {
 
   function allocateGameState(storage){
     if(this.stateStorage)return;
-    this.stateStorage=storage??new Float64Array(this.stateLength);
-    bindState(this);
+    if(this.banks){
+      this.stateStorage=storage??new Uint8Array(this.stateBytes);
+      const banks=this.banks.map(({Type,offset,length})=>
+        new Type(this.stateStorage.buffer,this.stateStorage.byteOffset+offset,length));
+      this.stateBanks=banks;
+      this.decisions=this.nodes.filter(n=>n.rowShape);
+      for(const node of this.decisions){
+        const from=node.rowOffset,to=from+node.rowShape.reps.length*node.actions.length;
+        [node.regret,node.averageSum,node.current]=banks.slice(0,3).map(bank=>bank.subarray(from,to));
+        if(banks[3].length)node.previousDelta=banks[3].subarray(from,to);
+        if(banks[4]){
+          const from=node.scaleOffset,to=from+node.rowShape.reps.length;
+          node.regretScale=banks[4].subarray(from,to);
+          node.averageScale=banks[5].subarray(from,to);
+        }
+      }
+      this.forcedPolicies=[];
+    }else{
+      this.stateStorage=storage??new Float64Array(this.stateLength);
+      bindState(this);
+    }
     initializeState(this);
   }
 
@@ -1167,6 +1377,7 @@ function createSolverCore() {
     for(const node of game.decisions??game.nodes)if(node.current&&!node.forced){
       const a=node.actions.length;
       node.current.fill(1/a);
+      if(node.rowShape){projectFrequencyRows(node,node.current,true);continue;}
       if(node.locked)copyLockedRows(node,node.current);
       projectFrequencyRows(node,node.current);
       enforceSuitRows(node,node.current);
@@ -1178,7 +1389,7 @@ function createSolverCore() {
     if(!node.lockedMask)return;
     const a=node.actions.length;
     for(let h=0;h<node.lockedMask.length;h++)if(node.lockedMask[h])
-      for(let k=0;k<a;k++)policy[h*a+k]=node.lockedRows[h*a+k];
+      for(let k=0;k<a;k++)policy[h*a+k]=lockedProbability(node,h,k,a);
   }
 
   function enforceSuitRows(node,policy){
@@ -1194,12 +1405,12 @@ function createSolverCore() {
   // are assigned first, then the largest remainders get the remaining units.
   // Equal remainders use action order, so equivalent suit rows stay identical.
   let frequencyRemainders=new Float64Array(0);
-  function projectFrequencyRows(node,policy){
+  function projectFrequencyRows(node,policy,compact=false){
     const units=node.frequencyUnits,a=node.actions.length;
     if(!units||a===1||node.allLocked)return;
     if(frequencyRemainders.length<a)frequencyRemainders=new Float64Array(a);
     for(let h=0,off=0;off<policy.length;h++,off+=a){
-      if(node.lockedMask?.[h])continue;
+      if(!compact&&node.lockedMask?.[h])continue;
       let remaining=units;
       for(let k=0;k<a;k++){
         const target=policy[off+k]*units,whole=Math.floor(target);
@@ -1354,10 +1565,47 @@ function createSolverCore() {
     projectFrequencyRows(node,node.current);
   }
   function enforceSuitPolicies(game,p){
-    if(game.suitIsomorphism.groupSize<=1)return;
+    if(game.banks||game.suitIsomorphism.groupSize<=1)return;
     for(const node of game.decisions)if(node.p===p)enforceSuitRows(node,node.current);
   }
+
+  const maxFloat32=3.4028234663852886e38;
+  function accumulator(values,scales,index,actions){
+    return scales?values[index]*scales[Math.floor(index/actions)]/32767:values[index];
+  }
+  function setScaledRow(values,scales,row,actions,updates){
+    let peak=0;
+    for(let k=0;k<actions;k++)peak=Math.max(peak,Math.abs(updates[k]));
+    const scale=Math.fround(Math.min(peak,maxFloat32));
+    scales[row]=scale;
+    for(let k=0;k<actions;k++){
+      const ratio=scale?updates[k]*32767/scale:0;
+      values[row*actions+k]=Math.max(-32767,Math.min(32767,Math.trunc(ratio+(ratio<0?-.5:.5))));
+    }
+  }
+  function addScaledAverage(node,current,reach,weight,updates){
+    const a=node.actions.length,avg=node.averageSum,scale=node.averageScale;
+    for(const [row,i] of node.rowShape.reps.entries()){
+      for(let k=0;k<a;k++)updates[k]=accumulator(avg,scale,row*a+k,a)+weight*reach[i]*current[i*a+k];
+      setScaledRow(avg,scale,row,a,updates);
+    }
+  }
   function currentPolicy(game,p) {
+    if(game.banks){
+      if(game.deriveCurrent)return;
+      const tieFloor=16*Number.EPSILON*Math.max(1,game.pot+game.stack);
+      for(const node of game.decisions)if(node.p===p){
+        const a=node.actions.length,r=node.regret,s=node.current,delta=node.previousDelta,scale=node.regretScale;
+        for(let off=0;off<r.length;off+=a){
+          let sum=0;
+          for(let k=0;k<a;k++)sum+=Math.max(0,accumulator(r,scale,off+k,a)+(delta?.[off+k]??0));
+          for(let k=0;k<a;k++)s[off+k]=sum>tieFloor?
+            Math.max(0,accumulator(r,scale,off+k,a)+(delta?.[off+k]??0))/sum:1/a;
+        }
+        projectFrequencyRows(node,s,true);
+      }
+      return;
+    }
     if(game.compiled&&!game.nodeLocks.length){
       const nativeRefreshed=game.compiled.updatePolicy(p,game.equilibrium==='qre');
       if(game.hasFrequencyIncrements)for(const node of game.decisions)
@@ -1621,6 +1869,46 @@ function createSolverCore() {
   // O(n) terminal aggregation per call using showdown order and card exclusion.
   // Both opponents and own hand are private; no approximation of blockers.
   function terminalCfv(game,node,target,oppReach,outputBuffer=null,kernel=null) {
+    if(node.type==='all-in'){
+      const n=game.players[target].ids.length,opp=game.players[1-target];
+      const out=outputBuffer??new Float64Array(n);
+      const createWork=()=>[0,1].map(()=>[new Float64Array(oppReach.length),new Float64Array(n)]);
+      const work=kernel?(kernel.allInWork??=createWork()):createWork();
+      function evaluate(program,reach,result,depth){
+        result.fill(0);
+        if(program.pairEquity){
+          const counts=program.pairEquity,scale=(game.pot/2+game.stack)/program.pairDenominator;
+          const m=game.players[1].ids.length;
+          if(target===0){
+            for(let i=0;i<n;i++){
+              let sum=0;
+              for(let j=0;j<m;j++)sum+=counts[i*m+j]*reach[j];
+              result[i]=sum*scale;
+            }
+          }else{
+            for(let j=0;j<reach.length;j++)for(let i=0;i<n;i++)result[i]-=counts[j*m+i]*reach[j];
+            for(let i=0;i<n;i++)result[i]*=scale;
+          }
+          return;
+        }
+        const [next,value]=work[depth];
+        for(const {card,weight,child} of program.runouts){
+          const allowed=opp.cardAllowed[card];
+          let any=false;
+          for(let i=0;i<next.length;i++){next[i]=allowed[i]?reach[i]*weight:0;any||=next[i]!==0;}
+          if(!any)continue;
+          if(child.chance)evaluate(child,next,value,depth+1);
+          else{
+            value.fill(0);
+            kernel?.cache.delete(next);
+            terminalCfv(game,child,target,next,value,kernel);
+          }
+          for(let i=0;i<n;i++)result[i]+=value[i];
+        }
+      }
+      evaluate(node.allInProgram,oppReach,out,0);
+      return out;
+    }
     if(kernel)return terminalCfvCached(game,node,target,oppReach,
       outputBuffer||new Float64Array(game.players[target].ids.length),kernel);
     const mine=game.players[target],opp=game.players[1-target];
@@ -1710,10 +1998,12 @@ function createSolverCore() {
           return;
         }
         if(node.p!==p) { for(const act of node.actions) visit(act.child,reach);return; }
-        const n=own.ids.length,a=node.actions.length,s=node.current,avg=node.averageSum;
-        for(let i=0;i<n;i++){
-          if(node.forced||node.lockedMask?.[i]||(node.symmetry&&node.symmetry.master[i]!==i))continue;
-          for(let j=0;j<a;j++)avg[(node.symmetry?node.symmetry.ordinals[i]:i)*a+j]+=weight*reach[i]*s[i*a+j];
+        const n=own.ids.length,a=node.actions.length,s=currentNodePolicy(game,node),avg=node.averageSum;
+        if(node.averageScale)addScaledAverage(node,s,reach,weight,new Float64Array(a));
+        else for(let i=0;i<n;i++){
+          const row=learnableRow(node,i);
+          if(node.forced||a===1&&game.banks||row<0)continue;
+          for(let j=0;j<a;j++)avg[row*a+j]+=weight*reach[i]*s[i*a+j];
         }
         for(let j=0;j<a;j++) {
           const next=new Float64Array(n);
@@ -1723,6 +2013,42 @@ function createSolverCore() {
       }
       visit(game.root,initial);
     }
+  }
+
+  function learnableRow(node,i){
+    if(node.rowShape){
+      const row=node.rowShape.map[i];
+      return row>=0&&node.rowShape.reps[row]===i?row:-1;
+    }
+    if(node.lockedMask?.[i]||(node.symmetry&&node.symmetry.master[i]!==i))return -1;
+    return node.symmetry?.ordinals[i]??i;
+  }
+
+  function currentNodePolicy(game,node,output){
+    if(!game.banks)return node.current;
+    const a=node.actions.length,n=game.players[node.p].ids.length;
+    const values=output??new Float64Array(n*a);
+    if(a===1)return values.fill(1);
+    const {map}=node.rowShape,s=node.current,normalize=s instanceof Float32Array;
+    const tieFloor=16*Number.EPSILON*Math.max(1,game.pot+game.stack);
+    for(let i=0;i<n;i++){
+      const row=map[i],off=i*a;
+      if(row===-1){values.fill(1/a,off,off+a);continue;}
+      if(row<0){
+        for(let k=0;k<a;k++)values[off+k]=node.lockedRows[(-row-2)*a+k];
+        continue;
+      }
+      let sum=0;
+      if(game.deriveCurrent){
+        const r=node.regret;
+        for(let k=0;k<a;k++)sum+=Math.max(0,r[row*a+k]);
+        for(let k=0;k<a;k++)values[off+k]=sum>tieFloor?Math.max(0,r[row*a+k])/sum:1/a;
+        continue;
+      }
+      if(normalize)for(let k=0;k<a;k++)sum+=s[row*a+k];
+      for(let k=0;k<a;k++)values[off+k]=normalize?(sum>0?s[row*a+k]/sum:1/a):s[row*a+k];
+    }
+    return values;
   }
   // Recycle traversal work buffers instead of allocating fresh hand vectors at
   // every CFR branch. The exact chance tree, regrets, update order and terminal
@@ -1741,7 +2067,7 @@ function createSolverCore() {
     if(!kernel){
       kernel={free:new Map(),cache:new WeakMap(),cards:new Float64Array(52),
         massCards:new Float64Array(52),mass:game.compiled?game.compiled.allocateVector(myN):new Float64Array(myN),
-        entropyReach:new Float64Array(oppN),
+        entropyReach:new Float64Array(oppN),scaledUpdates:new Float64Array(12),
         weakerCards:new Float64Array(52),equalCards:new Float64Array(52)};
       pools[target]=kernel;
     }
@@ -1800,7 +2126,7 @@ function createSolverCore() {
       // Algebraic identity: a one-action information set has probability 1,
       // zero entropy, and zero regret. Its reach/CFV need no new branch arrays.
       if(nActions===1){
-        if(node.p===target && ownReach && !node.forced && !node.allLocked){
+        if(node.p===target && ownReach && !game.banks && !node.forced && !node.allLocked){
           const avg=node.averageSum,cur=node.current;
           for(let i=0;i<myN;i++)if(!node.symmetry||node.symmetry.master[i]===i)
             avg[node.symmetry?node.symmetry.ordinals[i]:i]+=averageWeight*ownReach[i]*cur[i];
@@ -1808,17 +2134,19 @@ function createSolverCore() {
         visit(node.actions[0].child,reach,output,ownReach);
         return;
       }
+      const current=game.banks?currentNodePolicy(game,node,acquire(game.players[node.p].ids.length*nActions)):node.current;
       if(node.p!==target){
         const value=acquire(myN);
         for(let a=0;a<nActions;a++){
           if(node.pruned?.[a]||(node.allLocked&&!node.lockedActions[a]))continue;
           const branch=acquire(oppN);
-          for(let i=0;i<oppN;i++)branch[i]=reach[i]*node.current[i*nActions+a];
+          for(let i=0;i<oppN;i++)branch[i]=reach[i]*current[i*nActions+a];
           visit(node.actions[a].child,branch,value,ownReach);
           for(let i=0;i<myN;i++){output[i]+=value[i];value[i]=0;}
           release(branch);
         }
         release(value);
+        if(game.banks)release(current);
         if(game.equilibrium==='qre'){
           const weighted=kernel.entropyReach,entropy=node.qreEntropy;
           for(let i=0;i<oppN;i++)weighted[i]=reach[i]*entropy[i];
@@ -1831,17 +2159,18 @@ function createSolverCore() {
         const values=acquire(myN);
         for(let a=0;a<nActions;a++)if(node.lockedActions[a]){
           const ownNext=ownReach?acquire(myN):null;
-          if(ownNext)for(let i=0;i<myN;i++)ownNext[i]=ownReach[i]*node.current[i*nActions+a];
+          if(ownNext)for(let i=0;i<myN;i++)ownNext[i]=ownReach[i]*current[i*nActions+a];
           visit(node.actions[a].child,reach,values,ownNext);
           if(ownNext)release(ownNext);
-          for(let i=0;i<myN;i++)output[i]+=node.current[i*nActions+a]*values[i];
+          for(let i=0;i<myN;i++)output[i]+=current[i*nActions+a]*values[i];
           values.fill(0);
         }
         release(values);
+        if(game.banks)release(current);
         return;
       }
       const actionVals=new Array(nActions);
-      const current=node.current;
+      if(ownReach&&node.averageScale)addScaledAverage(node,current,ownReach,averageWeight,kernel.scaledUpdates);
       for(let a=0;a<nActions;a++){
         const values=acquire(myN);
         if(node.pruned?.[a]){actionVals[a]=values;continue;}
@@ -1851,8 +2180,8 @@ function createSolverCore() {
           const avg=node.averageSum;
           for(let i=0;i<myN;i++){
             const off=i*nActions+a;
-            if(!node.lockedMask?.[i]&&(!node.symmetry||node.symmetry.master[i]===i))
-              avg[(node.symmetry?node.symmetry.ordinals[i]:i)*nActions+a]+=averageWeight*ownReach[i]*current[off];
+            const row=learnableRow(node,i);
+            if(row>=0&&!node.averageScale)avg[row*nActions+a]+=averageWeight*ownReach[i]*current[off];
             ownNext[i]=ownReach[i]*current[off];
           }
         }
@@ -1860,19 +2189,19 @@ function createSolverCore() {
         if(ownNext)release(ownNext);
         actionVals[a]=values;
       }
-      const r=node.regret,strat=node.current,isQre=game.equilibrium==='qre';
+      const r=node.regret,strat=current,isQre=game.equilibrium==='qre';
       const mass=isQre?cachedCompatibilityMass(game,target,reach,node,kernel):null;
       // Fused compiled Float64 regret/CFV update. All live vectors and node
       // state reside in WASM memory; fall back without changing the algorithm
       // whenever a scratch buffer is outside the fixed mobile-sized arena.
       const done=!!(game.compiled&&!node.locked&&game.compiled.regret(node,actionVals,output,mass,game.qreTemperature));
       if(!done)for(let i=0;i<myN;i++){
-        const off=i*nActions,ro=(node.symmetry?node.symmetry.ordinals[i]:i)*nActions;
+        const off=i*nActions;
         let v=0;
         for(let a=0;a<nActions;a++)v+=strat[off+a]*actionVals[a][i];
         output[i]=v;
-        if(node.lockedMask?.[i]||(node.suitRows&&node.suitRows[i]!==i))continue;
-        if(node.symmetry&&node.symmetry.master[i]!==i)continue;
+        const row=learnableRow(node,i),ro=row*nActions;
+        if(row<0||!game.banks&&node.suitRows&&node.suitRows[i]!==i)continue;
         if(isQre){
           const t=game.qreTemperature*mass[i],floor=QRE_PROBABILITY_FLOOR,scale=1-nActions*floor;
           output[i]+=t*node.qreEntropy[i];
@@ -1880,6 +2209,13 @@ function createSolverCore() {
           const logs=node.qreLog;
           for(let a=0;a<nActions;a++)mean+=(strat[off+a]-floor)/scale*(actionVals[a][i]-t*logs[off+a]);
           for(let a=0;a<nActions;a++)r[ro+a]=Math.max(0,r[ro+a]+scale*(actionVals[a][i]-t*logs[off+a]-mean));
+        }else if(node.regretScale){
+          const updates=kernel.scaledUpdates;
+          for(let a=0;a<nActions;a++){
+            const x=accumulator(r,node.regretScale,ro+a,nActions)+(actionVals[a][i]-v);
+            updates[a]=x*(x>0?game._positiveDiscount:game._negativeDiscount);
+          }
+          setScaledRow(r,node.regretScale,row,nActions,updates);
         }else for(let a=0;a<nActions;a++){
           if(node.pruned?.[a])continue;
           const delta=actionVals[a][i]-v,x=r[ro+a]+delta;
@@ -1894,6 +2230,7 @@ function createSolverCore() {
         }
       }
       for(const arr of actionVals)release(arr);
+      if(game.banks)release(current);
     }
     const result=game.compiled?acquire(myN):new Float64Array(myN);
     const ownReach=averageWeight?new Float64Array(myN).fill(1):null;
@@ -1906,6 +2243,20 @@ function createSolverCore() {
     return returnVector?result:undefined;
   }
   function averageNodePolicy(game,node){
+    if(game.banks){
+      const policy=currentNodePolicy(game,node);
+      if(!node.rowShape)return policy;
+      const {map}=node.rowShape,a=node.actions.length;
+      const {averageSum,averageScale}=node;
+      for(let i=0;i<map.length;i++)if(map[i]>=0){
+        const off=map[i]*a;
+        let sum=0;
+        for(let k=0;k<a;k++)sum+=accumulator(averageSum,averageScale,off+k,a);
+        if(sum>0)for(let k=0;k<a;k++)policy[i*a+k]=accumulator(averageSum,averageScale,off+k,a)/sum;
+      }
+      projectFrequencyRows(node,policy);
+      return policy;
+    }
     if(node.actions.length===1||node.allLocked)return node.current;
     const n=game.players[node.p].ids.length,a=node.actions.length,arr=new Float64Array(n*a);
     for(let i=0;i<n;i++){
@@ -1925,7 +2276,8 @@ function createSolverCore() {
     result.suitIsomorphic=!!game.suitIsomorphism?.enabled;
     // Canonical strategies are stored once logically; give report/UI consumers
     // a complete strategy array for every original river decision node.
-    for(const node of game.nodes)if(node.current)result[node.id]=averageNodePolicy(game,node);
+    for(const node of game.nodes)if(!node.terminal&&!node.chance&&!node.isoAlias)
+      result[node.id]=averageNodePolicy(game,node);
     if(includeAliases)for(const node of game.nodes)if(node.isoAlias){
       const src=result[node.isoAlias.source],map=node.isoAlias.map,a=node.actions.length;
       if(!src)throw Error('Missing canonical suit-isomorphic strategy');
@@ -1935,10 +2287,10 @@ function createSolverCore() {
     }
     return result;
   }
-  function lazyAveragePolicy(game){
-    const policies=new Map();
+  function lazyAveragePolicy(game,cache=true){
+    const policies=cache?new Map():null;
     function get(id){
-      if(policies.has(id))return policies.get(id);
+      if(policies?.has(id))return policies.get(id);
       const node=game.nodes[id];
       let policy;
       if(node.isoAlias){
@@ -1946,7 +2298,7 @@ function createSolverCore() {
         policy=new Float64Array(original.length);
         for(let i=0;i<map.length;i++)for(let k=0;k<a;k++)policy[map[i]*a+k]=original[i*a+k];
       }else policy=averageNodePolicy(game,node);
-      policies.set(id,policy);
+      policies?.set(id,policy);
       return policy;
     }
     get.suitIsomorphic=game.suitIsomorphism.enabled;
@@ -1989,13 +2341,19 @@ function createSolverCore() {
         }
         return out;
       }
-      const a=node.actions.length,strat=policyAt(id),regularized=mode==='regularizedBest';
+      const a=node.actions.length,regularized=mode==='regularizedBest';
       const capture=!!records&&(selectedNodeId===null||selectedNodeId===id);
+      const captureCounterfactual=!!start?.counterfactual&&selectedNodeId===id;
+      const needsPolicy=node.p!==target||propagateOwn||capture||captureCounterfactual||
+        regularized||mode==='profile'||mode==='constrainedBest'&&node.locked;
+      const strat=needsPolicy?policyAt(id):null;
       if(node.p!==target) {
         const out=new Float64Array(n), on=opp.ids.length;
         for(let k=0;k<a;k++) {
           const next=new Float64Array(on);
-          for(let j=0;j<on;j++) next[j]=oppReach[j]*strat[j*a+k];
+          let any=false;
+          for(let j=0;j<on;j++){next[j]=oppReach[j]*strat[j*a+k];any||=next[j]!==0;}
+          if(!any&&!propagateOwn)continue;
           const v=visit(node.actions[k].child,next,ownReach);
           for(let i=0;i<n;i++)out[i]+=v[i];
         }
@@ -2015,7 +2373,7 @@ function createSolverCore() {
         }
         acts.push(visit(node.actions[k].child,oppReach,nextOwn));
       }
-      const out=new Float64Array(n),mass=(capture||regularized)?
+      const out=new Float64Array(n),mass=(capture||captureCounterfactual||regularized)?
         compatibilityMassInto(game,target,oppReach,node,massScratch,massCards):null;
       let numerator=0,denom=0;
       const handEntries=capture?[]:null,agg=capture?new Float64Array(a):null;
@@ -2042,10 +2400,19 @@ function createSolverCore() {
             Array.from({length:a},(_,k)=>m>evCutoff?acts[k][i]/m:null)]);
         }
       }
-      if(capture&&start?.counterfactual){
-        start.counterfactual.hands=Array.from(mine.ids,(comboId,i)=>({
-          comboId,opponentReach:mass[i],values:acts.map(action=>action[i])
-        }));
+      if(captureCounterfactual){
+        const requested=start.comboIds;
+        const hands=[];
+        for(const [i,comboId] of mine.ids.entries()){
+          if(requested&&!requested.has(comboId))continue;
+          const values=acts.map(action=>action[i]),compatibleOpponentMass=mass[i];
+          const probabilities=Array.from(strat.subarray(i*a,(i+1)*a));
+          hands.push({comboId,opponentReach:compatibleOpponentMass,compatibleOpponentMass,values,
+            conditionalActionEVs:values.map(value=>compatibleOpponentMass>evCutoff?value/compatibleOpponentMass:null),
+            probabilities,lockedActionProbabilities:node.lockedMask?.[i]?probabilities.slice():null,
+            ownReach:ownReach[i],reachMass:mine.priors[i]*ownReach[i]*compatibleOpponentMass/game.jointZ});
+        }
+        start.counterfactual.hands=hands;
       }
       if(capture) records[id]={id,player:target,rangeEV:denom>evCutoff?numerator/denom:null,
         reachMass:denom/game.jointZ,actions:denom>evCutoff?Array.from(agg,v=>v/denom):Array(a).fill(0),
@@ -2298,14 +2665,42 @@ function createSolverCore() {
     return {id,oppReach,ownReach};
   }
 
-  function counterfactualActionValues(game,id,mode='profile'){
+  function counterfactualActionValues(game,id,mode='profile',{comboIds,groups}={}){
     const node=game.nodes[id];
     if(!node||node.terminal||node.chance)return null;
     if(!['profile','constrainedBest','best'].includes(mode))throw Error('Unknown action-value continuation.');
-    const policy=lazyAveragePolicy(game),start=selectedReaches(game,id,policy);
+    const policy=lazyAveragePolicy(game,false),start=selectedReaches(game,id,policy);
+    if(comboIds!==undefined&&!Array.isArray(comboIds))throw Error('comboIds must be an array.');
+    if(groups!==undefined&&(!groups||typeof groups!=='object'||Array.isArray(groups)||
+      Object.values(groups).some(ids=>!Array.isArray(ids))))throw Error('Groups must map names to combo ID arrays.');
+    const groupIds=groups?Object.values(groups).flat():[];
+    const requested=[...(comboIds??[]),...groupIds];
+    if(requested.some(id=>!Number.isInteger(id)||id<0||id>=1326||game.players[node.p].index[id]<0))
+      throw Error('Action values require combo IDs in the acting player’s range.');
+    if(comboIds)start.comboIds=new Set(requested);
     start.counterfactual={id,player:node.p,evBasis:'centered-counterfactual',continuation:mode,
+      evaluation:'fixed-continuation',localSensitivity:mode==='profile',
       actions:node.actions.map(action=>action.label)};
-    evaluatePolicy(game,policy,node.p,mode,[],id,start);
+    evaluatePolicy(game,policy,node.p,mode,null,id,start);
+    if(groups){
+      const hands=new Map(start.counterfactual.hands.map(hand=>[hand.comboId,hand]));
+      start.counterfactual.groups=Object.fromEntries(Object.entries(groups).map(([name,ids])=>{
+        const actionEVs=new Float64Array(node.actions.length);
+        let total=0;
+        for(const comboId of new Set(ids)){
+          const hand=hands.get(comboId);
+          if(!hand.reachMass||hand.conditionalActionEVs[0]===null)continue;
+          total+=hand.reachMass;
+          for(let k=0;k<actionEVs.length;k++)actionEVs[k]+=hand.reachMass*hand.conditionalActionEVs[k];
+        }
+        return [name,{reachMass:total,actionEVs:Array.from(actionEVs,v=>total>0?v/total:null),
+          deltasFromFirstAction:Array.from(actionEVs,v=>total>0?(v-actionEVs[0])/total:null)}];
+      }));
+    }
+    if(comboIds){
+      const visible=new Set(comboIds);
+      start.counterfactual.hands=start.counterfactual.hands.filter(hand=>visible.has(hand.comboId));
+    }
     return start.counterfactual;
   }
 
@@ -2324,8 +2719,8 @@ function createSolverCore() {
     }
     return record;
   }
-  function makeSummary(game,iteration,elapsedMs,history){
-    const check=makeConvergenceCheck(game,iteration,elapsedMs,history,null,{includeProfile:true});
+  function makeSummary(game,iteration,elapsedMs,history,options){
+    const check=makeConvergenceCheck(game,iteration,elapsedMs,history,null,{...options,includeProfile:true});
     return {...check,
       qreTemperaturePercent:game.equilibrium==='qre'?game.qreTemperaturePercent:null,
       qreActiveTemperaturePercent:game.equilibrium==='qre'?100*game.qreTemperature/game.pot:null,
@@ -2341,9 +2736,9 @@ function createSolverCore() {
   // EV-only evaluation never constructs hand-level reports. Native locked
   // evaluation shares terminal work between the requested response modes.
   function makeConvergenceCheck(game,iteration,elapsedMs,history,policy=null,
-      {includeProfile=false,includeUnrestricted=true}={}) {
-    const compiled=game.compiled,locked=game.nodeLocks.length>0;
-    const reference=(p,mode)=>rangeValue(game,p,evaluatePolicy(game,policy??=averagePolicy(game,false),p,mode));
+      {includeProfile=false,includeUnrestricted=true,independent=false}={}) {
+    const compiled=independent?null:game.compiled,locked=game.nodeLocks.length>0;
+    const reference=(p,mode)=>rangeValue(game,p,evaluatePolicy(game,policy??=lazyAveragePolicy(game,false),p,mode));
     const legacyBest=!locked&&!game.hasFrequencyIncrements?compiled?.exactBest:null;
     let backend='javascript';
     let qreResidual=null;
@@ -2351,7 +2746,7 @@ function createSolverCore() {
       if(compiled?.evaluateValues&&(locked||game.hasFrequencyIncrements||game.actionPruning.enabled||game.regretPruning||
         game.zeroReachPruning||!legacyBest||game.jointZ<1e-10))try{
         const result=compiled.evaluateValues(p,includeProfile,includeUnrestricted);
-        backend='wasm-lock-aware';
+        backend=compiled.sourceOnly?compiled.mode:'wasm-lock-aware';
         return result;
       }catch(_){compiled.evaluateValues=null;}
       if(legacyBest&&game.jointZ>=1e-10)try{
@@ -2388,7 +2783,7 @@ function createSolverCore() {
   // configured game, including exact priors, chance structure and algorithm.
   // A pair of independent 32-bit hashes is a corruption/mismatch guard, not a
   // security or authentication primitive. Never load checkpoints from strangers.
-  function gameSignature(game,{rulesOnly=false,legacy=false,stateLength=game.stateStorage?.length}={}){
+  function gameSignature(game,{rulesOnly=false,legacy=false,stateLength=game.stateLength??game.stateStorage?.length}={}){
     let h1=2166136261>>>0,h2=0x9e3779b9>>>0;
     function feed(x){x=x>>>0;h1=Math.imul(h1^x,16777619)>>>0;h2=(Math.imul((h2+x)>>>0,2246822519)^h2>>>13)>>>0;}
     const dv=new DataView(new ArrayBuffer(8));
@@ -2450,6 +2845,10 @@ function createSolverCore() {
       feed(stateLength);
       if(!legacy){
         str('strategy-layout-v2');feed(game.compactState?1:0);
+        if(game.banks){
+          str('compact-private-rows-v1');str(game.strategyPrecision);
+          if(game.deriveCurrent)str('derived-current-policy');
+        }
         str(game.rulesFingerprint??'');
         if(game.riverPrivateSymmetry.enabled)
           for(const map of game.riverPrivateSymmetry.maps)for(const i of map.master)feed(i);
@@ -2490,15 +2889,25 @@ function createSolverCore() {
 
   function restoreState(game,checkpoint){
     const values=checkpoint.storage;
-    if(!(values instanceof Float64Array))throw Error('Checkpoint state must be Float64.');
-    const sameLayout=checkpoint.fingerprint===gameSignature(game)&&values.length===game.stateStorage.length;
-    const legacy=!sameLayout&&checkpoint.fingerprint===gameSignature(game,{legacy:true,stateLength:values.length})&&
+    if(game.banks){
+      if(checkpoint.format!=='TurnRiverLab-checkpoint-v2'||!(values instanceof Uint8Array)||
+        values.byteLength!==game.stateBytes||checkpoint.fingerprint!==gameSignature(game))
+        throw Error('Checkpoint does not match this compact game, ranges, tree or algorithm');
+      for(const [i,{Type,offset,length}] of game.banks.entries()){
+        const view=new Type(values.buffer,values.byteOffset+offset,length);
+        for(const x of view)if(!Number.isFinite(x)||i>=4&&x<0||Type===Int16Array&&x===-32768)
+          throw Error('Invalid compact checkpoint numerical state');
+      }
+    }else if(!(values instanceof Float64Array))throw Error('Checkpoint state must be Float64.');
+    const sameLayout=checkpoint.fingerprint===gameSignature(game)&&values.length===game.stateLength;
+    const legacy=!game.banks&&!sameLayout&&checkpoint.fingerprint===gameSignature(game,{legacy:true,stateLength:values.length})&&
       contexts.get(game)?.prepared.legacyLayoutMatches(game);
-    if(!sameLayout&&!legacy)throw Error('Checkpoint does not match this game, ranges, tree or algorithm');
+    if(!game.banks&&!sameLayout&&!legacy)throw Error('Checkpoint does not match this game, ranges, tree or algorithm');
     if(!Number.isSafeInteger(checkpoint.iteration)||checkpoint.iteration<0||
       !Number.isFinite(checkpoint.elapsedMs)||checkpoint.elapsedMs<0)throw Error('Invalid checkpoint iteration or elapsed time');
     if(!Array.isArray(checkpoint.history)||checkpoint.history.some(p=>!Array.isArray(p)||p.length!==2||
       !Number.isFinite(p[0])||!Number.isFinite(p[1])))throw Error('Invalid checkpoint convergence history');
+    if(game.banks){game.stateStorage.set(values);return;}
     for(const x of values)if(!Number.isFinite(x))throw Error('Checkpoint has non-finite solver state');
     const masks=checkpoint.prunedMasks;
     if(game.actionPruning.enabled){
@@ -2553,7 +2962,8 @@ function createSolverCore() {
     for(const id of ids){
       const a=source.nodes[id],b=destination.nodes[id];
       const same=a.locked&&b.locked&&a.lockedMask.every((bit,i)=>bit===b.lockedMask[i])&&
-        a.lockedRows.every((v,i)=>v===b.lockedRows[i]);
+        a.lockedMask.every((bit,i)=>!bit||a.actions.every((_,k)=>
+          lockedProbability(a,i,k,a.actions.length)===lockedProbability(b,i,k,a.actions.length)));
       if(!same)changed[id]=1;
     }
     const {parents}=destination.paths;
@@ -2575,10 +2985,12 @@ function createSolverCore() {
     if(!['strategy','regret','combined'].includes(mode)||!Number.isFinite(regretDiscount)||
       regretDiscount<0||regretDiscount>1)throw Error('Invalid warm-start mode or regret discount.');
     const keepRegret=mode!=='strategy',keepStrategy=mode!=='regret';
+    if(keepStrategy&&destination.deriveCurrent)throw Error('Derived current policy supports regret-only warm starts.');
     if(keepRegret&&(source.gtoAlgorithm!==destination.gtoAlgorithm||
        JSON.stringify(source.hybridSchedule)!==JSON.stringify(destination.hybridSchedule)))
       throw Error('Regret transfer requires the same algorithm and schedule.');
     const affected=keepRegret?affectedRegrets(source,destination):null;
+    const updates=new Float64Array(12);
     resetGameState(destination);
     for(const node of destination.decisions){
       if(node.actions.length===1||node.allLocked)continue;
@@ -2592,17 +3004,22 @@ function createSolverCore() {
       const strategy=keepStrategy?averageNodePolicy(source,original):null;
       for(let i=0;i<n;i++){
         if(node.lockedMask?.[i])continue;
+        const row=node.rowShape?learnableRow(node,i):i;
+        if(row<0)continue;
         let j=i;
         for(const map of inverses)j=map[j];
-        if(strategy)for(let k=0;k<a;k++)node.current[i*a+k]=strategy[j*a+k];
+        if(strategy)for(let k=0;k<a;k++)node.current[row*a+k]=strategy[j*a+k];
         if(keepRegret&&!affected[node.id]&&!original.lockedMask?.[j]){
-          const from=(original.symmetry?.ordinals[j]??original.suitRows?.[j]??j)*a;
-          const to=(node.symmetry?.ordinals[i]??i)*a;
+          const sourceRow=original.rowShape?.map[j]??original.symmetry?.ordinals[j]??original.suitRows?.[j]??j;
+          if(sourceRow<0)continue;
+          const from=sourceRow*a,to=(node.symmetry?.ordinals[i]??row)*a;
           if(node.symmetry&&node.symmetry.master[i]!==i)continue;
-          for(let k=0;k<a;k++)node.regret[to+k]=original.regret[from+k]*regretDiscount;
+          for(let k=0;k<a;k++)updates[k]=accumulator(original.regret,original.regretScale,from+k,a)*regretDiscount;
+          if(node.regretScale)setScaledRow(node.regret,node.regretScale,row,a,updates);
+          else for(let k=0;k<a;k++)node.regret[to+k]=updates[k];
         }
       }
-      enforceSuitRows(node,node.current);
+      if(!node.rowShape)enforceSuitRows(node,node.current);
     }
     if(!keepStrategy){currentPolicy(destination,0);currentPolicy(destination,1);}
   }
@@ -2713,15 +3130,18 @@ function createSolverCore() {
       memoryBytes:this.game.memory,compiled:this.game.compiled?.mode||'javascript',
       fusedPolicy:!!this.game.compiled?.fusesPolicy,
       nodes:this.game.nodes.length,equilibrium:this.game.equilibrium,algorithm:this.game.gtoAlgorithm};}
-    saveCheckpoint(){
+    saveCheckpoint(copy=true){
       if(!this.game.stateStorage)throw Error('Checkpoint requires a complete numerical game');
-      return {format:'TurnRiverLab-checkpoint-v1',fingerprint:gameSignature(this.game),iteration:this.iteration,
+      const storage=copy?this.game.stateStorage.slice():this.game.stateStorage;
+      return {format:this.game.banks?'TurnRiverLab-checkpoint-v2':'TurnRiverLab-checkpoint-v1',
+        fingerprint:gameSignature(this.game),iteration:this.iteration,
         elapsedMs:Math.max(0,Date.now()-this.startTime),history:this.history.map(pair=>pair.slice()),
         prunedMasks:this.game.actionPruning?.enabled?this.game.nodes.map(n=>n.pruned?Array.from(n.pruned):null):null,
-        storage:Float64Array.from(this.game.stateStorage)};
+        storage};
     }
     static resume(game,checkpoint){
-      if(!checkpoint||checkpoint.format!=='TurnRiverLab-checkpoint-v1')throw Error('Unsupported checkpoint format');
+      if(!checkpoint||checkpoint.format!==(game.banks?'TurnRiverLab-checkpoint-v2':'TurnRiverLab-checkpoint-v1'))
+        throw Error('Unsupported checkpoint format for this strategy layout');
       game.allocateState?.();
       restoreState(game,checkpoint);
       const solver=new CFRSolver(game);solver.iteration=checkpoint.iteration;game.currentIteration=solver.iteration;
@@ -2735,16 +3155,16 @@ function createSolverCore() {
       if(this.game.actionPruning?.enabled)r.actionPruning={...this.game.actionPruning,culledNodes:this.game.nodes.filter(n=>n.pruned?.some(x=>x)).map(n=>[n.id,Array.from(n.pruned)])};
       r.history=this.history.map(pair=>pair.slice());return r;
     }
-    summary() {
+    summary(options) {
       const start=this.profileEnabled?(typeof performance!=='undefined'?performance.now():Date.now()):0;
-      const r=makeSummary(this.game,this.iteration,Date.now()-this.startTime,this.history);
+      const r=makeSummary(this.game,this.iteration,Date.now()-this.startTime,this.history,options);
       if(this.profileEnabled){this.timings.summaries++;this.timings.summaryMs+=(typeof performance!=='undefined'?performance.now():Date.now())-start;}
       appendConvergenceHistory(this.history,this.iteration,r.exploitability);
       if(this.game.actionPruning?.enabled)r.actionPruning={...this.game.actionPruning,culledNodes:this.game.nodes.filter(n=>n.pruned?.some(x=>x)).map(n=>[n.id,Array.from(n.pruned)])};
       r.history=this.history.map(pair=>pair.slice());return r;
     }
-    counterfactualActionValues(id,continuation){
-      return counterfactualActionValues(this.game,id,continuation);
+    counterfactualActionValues(id,continuation,options){
+      return counterfactualActionValues(this.game,id,continuation,options);
     }
     nodeReport(id) {
       if(!this.game.nodeLocks?.length&&this.game.compiled?.nodeDetail)try{return this.game.compiled.nodeDetail(id);}catch(_){}

@@ -10,10 +10,20 @@ if (positionals.length !== 1) {
   process.exit(1)
 }
 const input = JSON.parse(readFileSync(positionals[0], 'utf8'))
-const results = await runBatch(Array.isArray(input) ? input : [input], {
-  workers: values.workers === undefined ? undefined : Number(values.workers),
-  maxMemoryBytes: values['memory-mib'] === undefined ? undefined : Number(values['memory-mib']) * 1024 ** 2,
-  workerHeapMb: values['worker-heap-mib'] === undefined ? undefined : Number(values['worker-heap-mib']),
-})
+const controller = new AbortController()
+const interrupt = () => controller.abort()
+process.once('SIGINT', interrupt)
+let results
+try {
+  results = await runBatch(Array.isArray(input) ? input : [input], {
+    workers: values.workers === undefined ? undefined : Number(values.workers),
+    maxMemoryBytes: values['memory-mib'] === undefined ? undefined : Number(values['memory-mib']) * 1024 ** 2,
+    workerHeapMb: values['worker-heap-mib'] === undefined ? undefined : Number(values['worker-heap-mib']),
+    signal: controller.signal,
+  })
+} finally {
+  process.off('SIGINT', interrupt)
+}
 console.log(JSON.stringify(results, null, 2))
-if (results.some(result => result.error || result.candidates?.some(candidate => candidate.error))) process.exitCode = 1
+if (controller.signal.aborted) process.exitCode = 130
+else if (results.some(result => result.error || result.candidates?.some(candidate => candidate.error))) process.exitCode = 1

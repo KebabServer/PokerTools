@@ -1,8 +1,11 @@
 import { readFileSync, existsSync } from 'node:fs'
-import { cpus, availableParallelism } from 'node:os'
+import { cpus, availableParallelism, release, totalmem } from 'node:os'
 import { resolve, join } from 'node:path'
+import { createRequire } from 'node:module'
 import { parseArgs } from 'node:util'
 import { runInThisContext } from 'node:vm'
+import { createHash } from 'node:crypto'
+import { realisticCases, rangeRevision } from './turn-river-realistic-cases.mjs'
 
 const { values: options } = parseArgs({ options: {
   source: { type: 'string', default: 'public/turn-river-lab' },
@@ -12,19 +15,26 @@ const { values: options } = parseArgs({ options: {
   case: { type: 'string' },
   backend: { type: 'string', default: 'wasm' },
   'memory-mib': { type: 'string', default: '512' },
-  'max-iterations': { type: 'string' }, target: { type: 'string' },
+  'max-iterations': { type: 'string' }, target: { type: 'string' }, 'target-pot-percent': { type: 'string' },
+  storage: { type: 'string' }, precision: { type: 'string' }, 'all-in-runouts': { type: 'string' },
+  'current-policy': { type: 'string' },
+  algorithm: { type: 'string' },
+  'max-nodes': { type: 'string' }, independent: { type: 'boolean' }, 'fixed-iterations': { type: 'boolean' },
+  'lock-mix': { type: 'string', default: '25' }, 'native-addon': { type: 'string' },
 } })
 const source = resolve(options.source)
 const repetitions = Number(options.repetitions)
 if (!Number.isSafeInteger(repetitions) || repetitions < 1) throw Error('Repetitions must be a positive integer.')
-if (!['standard', 'algorithms', 'capacity', 'repeated'].includes(options.suite)) throw Error('Unknown benchmark suite.')
-if (!['wasm', 'javascript'].includes(options.backend)) throw Error('Unknown solver backend.')
+if (!['standard', 'algorithms', 'capacity', 'repeated', 'realistic'].includes(options.suite)) throw Error('Unknown benchmark suite.')
+if (!['wasm', 'wasm-simd', 'native', 'javascript'].includes(options.backend)) throw Error('Unknown solver backend.')
 
 const files = ['core.js', 'wasm-kernel-data.js', 'native-kernel-data.js', 'compiled-traversal.js']
 const sources = files.filter(file => existsSync(join(source, file))).map(file => readFileSync(join(source, file), 'utf8'))
+const native = options.backend === 'native'
+  ? createRequire(import.meta.url)(resolve(options['native-addon'] ?? 'solver/native/build/turn-river.node')) : null
 const { core, compile } = runInThisContext(`(() => {
   ${sources.join('\n')}
-  return { core: createSolverCore(), compile: (game, limit) => createCompiledTraversal(game, WASM_TRAVERSAL_BYTES, limit) }
+  return { core: createSolverCore(), compile: (game, limit, options) => createCompiledTraversal(game, WASM_TRAVERSAL_BYTES, limit, options) }
 })()`, { filename: join(source, 'benchmark-bundle.js') })
 
 function weightedRange(categories, phase) {
@@ -68,6 +78,10 @@ const capacity = [
     max: 2, maxNodes: 180_000, range: medium },
   { id: 'exact-medium-three-street-within-old-node-cap', board: ['As', '8s', '3s'], stack: 100, ...exact,
     max: 2, maxNodes: 100_000, range: medium },
+  { id: 'flop-all-in-equity', board: ['As', '8h', '3d'], stack: 85, range: narrow, ...exact,
+    ...oneStreet, sizes0: [], sizes1: [], allIn: true, max: 10 },
+  { id: 'turn-all-in-equity', board: ['As', '8h', '3d', '6s'], stack: 85, range: medium,
+    ...oneStreet, sizes0: [], sizes1: [], allIn: true, max: 50 },
 ]
 const algorithms = ['cfrplus', 'dcfr', 'dcfr-scheduled', 'dcfr-scheduled-cubic', 'dcfr-adaptive',
   'dcfr-predictive', 'lcfr', 'dcfr-cubic', 'dcfr-2-0.5-2', 'optimistic']
@@ -75,10 +89,20 @@ const checkEvery = 10
 const memoryLimitBytes = Number(options['memory-mib']) * 1024 ** 2
 if (!Number.isSafeInteger(memoryLimitBytes) || memoryLimitBytes < 2 * 1024 ** 2) throw Error('Invalid memory budget.')
 
+function configuredBackend(cfg) {
+  if (options.storage || native || options.backend === 'wasm-simd') cfg.strategyStorage = options.storage ?? 'compact'
+  if (options.precision) cfg.strategyPrecision = options.precision
+  if (options['all-in-runouts']) cfg.allInRunouts = options['all-in-runouts']
+  if (options['current-policy']) cfg.currentPolicyStorage = options['current-policy']
+  if (options['max-nodes']) cfg.maxNodes = Number(options['max-nodes'])
+  return cfg
+}
+
 function configuration(c, algorithm) {
+  if (c.config) return configuredBackend({ ...c.config, memoryLimitBytes, gtoAlgorithm: algorithm })
   const cfg = {
-    board: c.board, pot: 100, stack: c.stack, sizes0: [50], sizes1: c.sizes1 ?? [66],
-    maxRaises: 0, allIn: false, maxNodes: c.maxNodes ?? 100_000, memoryLimitBytes, gtoAlgorithm: algorithm,
+    board: c.board, pot: 100, stack: c.stack, sizes0: c.sizes0 ?? [50], sizes1: c.sizes1 ?? [66],
+    maxRaises: 0, allIn: c.allIn ?? false, maxNodes: c.maxNodes ?? 100_000, memoryLimitBytes, gtoAlgorithm: algorithm,
     weights0: weightedRange(c.range?.[0], 0), weights1: weightedRange(c.range?.[1], 3),
   }
   for (const key of ['flopTurnSamples', 'flopRiverSamples', 'flopSamplingSeed',
@@ -93,7 +117,7 @@ function configuration(c, algorithm) {
     cfg.weights0 = cfg.weights0.map((_, i) => weightedByCategory(i, c.range[0]))
     cfg.weights1 = cfg.weights1.map((_, i) => weightedByCategory(i, c.range[1]))
   }
-  return cfg
+  return configuredBackend(cfg)
 }
 
 function categoryWeight(id, phase) {
@@ -110,14 +134,17 @@ function weightedByCategory(id, categories) {
 function rootLock(game, type, bet = 25, id = game.root) {
   const node = game.nodes[id]
   const entry = { nodeId: node.id, player: node.p, history: node.history, actions: node.actions.map(a => a.label) }
-  const percentages = [100 - bet, bet]
-  if (type === 'whole') return { ...entry, percentages }
+  const percentages = [100 - bet, bet, ...Array(node.actions.length - 2).fill(0)]
+  if (type === 'whole' || type === 'cbet') return { ...entry, percentages }
   const combo = game.players[node.p].ids.find(i => core.ALL_COMBOS[i].some(card => (card & 3) === 2))
   return { ...entry, comboPercentages: { [combo]: percentages } }
 }
 
 function initialize(game) {
-  if (options.backend === 'wasm') game.compiled = compile(game, memoryLimitBytes)
+  if (options.backend === 'javascript') return
+  game.compiled = compile(game, memoryLimitBytes, { native, simd: options.backend === 'wasm-simd' })
+  if (['native', 'wasm-simd'].includes(options.backend) && !game.compiled?.sourceOnly)
+    throw Error('Source-backed backend unavailable for this configuration or memory budget.')
 }
 
 function fresh(cfg) {
@@ -125,7 +152,7 @@ function fresh(cfg) {
   const prepared = core.prepareGame?.(cfg)
   const prepareMs = performance.now() - began
   const created = performance.now()
-  const game = prepared ? prepared.createGame(undefined, { deferState: options.backend === 'wasm' }) : core.makeGame(cfg)
+  const game = prepared ? prepared.createGame(undefined, { deferState: options.backend !== 'javascript' }) : core.makeGame(cfg)
   const stateMs = performance.now() - created
   const compileStarted = performance.now()
   initialize(game)
@@ -136,7 +163,11 @@ function fresh(cfg) {
 
 function run(c, algorithm, repeat, config = null, reused = null) {
   const cfg = config ?? configuration(c, algorithm)
-  if (!config && c.lock) cfg.nodeLocks = [rootLock(core.makeGame(cfg, { preview: true }), c.lock)]
+  if (!config && c.lock) {
+    const preview = core.makeGame(cfg, { preview: true })
+    const nodeId = c.lock === 'cbet' ? preview.nodes[preview.root].actions[0].child : preview.root
+    cfg.nodeLocks = [rootLock(preview, c.lock, Number(options['lock-mix']), nodeId)]
+  }
   const began = performance.now()
   let setup
   if (reused) {
@@ -154,7 +185,7 @@ function run(c, algorithm, repeat, config = null, reused = null) {
   } else setup = fresh(cfg)
   const { solver, prepareMs, prepareAndStateMs, wasmMs, warmStartMs = 0 } = setup
   const game = solver.game
-  const target = Number(options.target ?? c.target ?? .25)
+  const target = options['target-pot-percent'] !== undefined ? cfg.pot * Number(options['target-pot-percent']) / 200 : Number(options.target ?? c.target ?? .25)
   const max = Number(options['max-iterations'] ?? c.max ?? 240)
   if (!Number.isFinite(target) || target < 0 || !Number.isSafeInteger(max) || max < 1)
     throw Error('Invalid target or iteration limit.')
@@ -170,19 +201,46 @@ function run(c, algorithm, repeat, config = null, reused = null) {
     checks++
     peakObservedRssBytes = Math.max(peakObservedRssBytes, process.memoryUsage.rss())
     if (gap.exploitability <= target) {
-      targetMs = performance.now() - began
-      break
+      targetMs ??= performance.now() - began
+      if (!options['fixed-iterations']) break
     }
   }
   const summary = solver.summary()
+  const wallMs = performance.now() - began
+  const validationStart = performance.now()
+  const validation = options.independent ? solver.summary({ independent: true }) : null
   return {
     id: c.id, repeat, algorithm, mode: reused?.mode ?? 'cold-fresh', backend: game.compiled?.mode ?? 'javascript',
     locked: c.lock ?? null, targetExploitability: target, targetIntervalWidth: target * 2,
     reached: targetMs !== null, iterations: solver.iteration, targetMs,
     prepareAndStateMs, prepareMs, wasmMs, warmStartMs, stepMs, checkMs, checks,
-    wallMs: performance.now() - began, ips: 1000 * solver.iteration / stepMs,
+    wallMs, ips: 1000 * solver.iteration / stepMs,
     exploitability: gap.exploitability, evIntervalWidth: gap.nashConv, profileEV: [summary.value0, summary.value1],
     equilibriumBounds: summary.equilibriumBounds?.foldZero ?? null, zeroSumError: summary.zeroSumError,
+    unrestrictedBestResponseEV: summary.unrestrictedBestResponseEV?.foldZero,
+    independent: validation ? { backend: validation.evaluationBackend, ms: performance.now() - validationStart,
+      profileEV: [validation.value0, validation.value1], evIntervalWidth: validation.equilibriumBounds.width,
+      equilibriumBounds: validation.equilibriumBounds.foldZero,
+      unrestrictedBestResponseEV: validation.unrestrictedBestResponseEV?.foldZero } : null,
+    combos: game.players.map(p => p.ids.length), stateScalars: game.stateLength ?? game.stateStorage.length,
+    canonicalInformationSets: game.strategyRows ?? game.nodes.reduce((rows, node) => rows +
+      (!node.terminal && !node.chance && !node.isoAlias && node.actions.length > 1 ?
+        game.players[node.p].ids.filter((_, i) => (!node.valid || node.valid[node.p][i]) &&
+          (!node.suitRows || node.suitRows[i] === i) && !node.lockedMask?.[i]).length : 0), 0),
+    rangeFingerprint: createHash('sha256').update(JSON.stringify([Array.from(cfg.weights0), Array.from(cfg.weights1)])).digest('hex'),
+    stateBytes: game.stateBytes ?? game.stateLength * 8, immutableBytes: game.immutableBytes,
+    arenaBytes: game.compiled?.arenaBytes ?? game.compiled?.memory?.buffer?.byteLength,
+    packedBytes: game.compiled?.packedBytes, packedNodes: game.packedNodes,
+    scratchBytes: game.compiled?.scratchBytes, rowMetadataBytes: game.rowMetadataBytes,
+    allInProgramCount: game.allInProgramCount, pairEquityCount: game.pairEquityCount, pairEquityBytes: game.pairEquityBytes,
+    precision: cfg.strategyPrecision ?? 'f64', storage: cfg.strategyStorage ?? 'dense',
+    currentPolicy: cfg.currentPolicyStorage ?? 'stored',
+    allInRunouts: game.allInRunouts ?? 'explicit',
+    betSizes: [cfg.flopSizes0, cfg.flopSizes1, cfg.turnSizes0, cfg.turnSizes1, cfg.sizes0, cfg.sizes1],
+    maxRaises: cfg.maxRaises, allIn: cfg.allIn, sampledTurns: game.turnSamples, riversPerTurn: game.riverSamples,
+    board: cfg.board, seed: cfg.flopSamplingSeed ?? null, pot: cfg.pot, stack: cfg.stack,
+    memoryLimitBytes, maxNodes: cfg.maxNodes,
+    stepMsPerIteration: stepMs / solver.iteration, bestResponseMsPerCheck: checkMs / checks,
     structuralNodes: game.nodes.length, canonicalDecisions: game.nodes.filter(n => !n.terminal && !n.chance && !n.isoAlias).length,
     canonicalNodes: game.suitIsomorphism.canonicalNodes ?? null,
     aliases: game.suitIsomorphism.aliasedDecisions, memoryBytes: game.memory,
@@ -205,7 +263,7 @@ function repeatedCases(repeat) {
     let donor, reusable
     if (prepared) {
       const init = () => {
-        const game = prepared.createGame(undefined, { deferState: options.backend === 'wasm' })
+        const game = prepared.createGame(undefined, { deferState: options.backend !== 'javascript' })
         initialize(game)
         return new core.CFRSolver(game)
       }
@@ -216,7 +274,8 @@ function repeatedCases(repeat) {
     }
     const game = donor?.game ?? core.makeGame(cfg, { preview: true })
     const firstCheck = game.nodes[game.root].actions[0].child
-    const modes = prepared ? ['cold-fresh', 'cold-reused', 'strategy', 'regret', 'combined'] : ['cold-fresh']
+    const modes = prepared ? (cfg.currentPolicyStorage === 'derived'
+      ? ['cold-fresh', 'cold-reused', 'regret'] : ['cold-fresh', 'cold-reused', 'strategy', 'regret', 'combined']) : ['cold-fresh']
     for (const bet of [5, 25, 65]) {
       const next = { ...cfg, nodeLocks: [rootLock(game, 'whole', bet, firstCheck)] }
       // Rotate the modes across repetitions so each path sees different runtime warmup.
@@ -231,6 +290,7 @@ function repeatedCases(repeat) {
 }
 
 const selected = (options.suite === 'capacity' ? capacity :
+  options.suite === 'realistic' ? realisticCases(core) :
   options.suite === 'algorithms' ? cases.filter((_, i) => [0, 1, 2, 4, 5].includes(i)) : cases)
   .filter(c => !options.case || c.id === options.case)
 const rows = []
@@ -238,12 +298,14 @@ if (options.suite === 'repeated') {
   for (let repeat = 1; repeat <= repetitions; repeat++) rows.push(...repeatedCases(repeat))
 } else {
   for (const c of selected) {
-    for (const algorithm of options.suite === 'algorithms' ? algorithms : ['dcfr']) {
+      for (const algorithm of options.algorithm ? [options.algorithm] : options.suite === 'algorithms' ? algorithms : ['dcfr']) {
       for (let repeat = 1; repeat <= repetitions; repeat++) {
         global.gc?.()
         try { rows.push(run(c, algorithm, repeat)) }
         catch (error) {
           rows.push({ id: c.id, algorithm, repeat, error: error.message,
+            storage: options.storage ?? 'dense', precision: options.precision ?? 'f64',
+            memoryLimitBytes, maxNodes: Number(options['max-nodes'] ?? c.config?.maxNodes ?? c.maxNodes ?? 100_000),
             peakProcessRssBytes: process.resourceUsage().maxRSS * 1024 })
         }
       }
@@ -252,8 +314,12 @@ if (options.suite === 'repeated') {
 }
 if (!rows.length) throw Error('No benchmark cases match.')
 console.log(JSON.stringify({
-  revision: options.revision, suite: options.suite, repetitions, checkEvery, memoryLimitBytes,
-  node: process.version, platform: process.platform, architecture: process.arch,
+  revision: options.revision, rangeRevision: options.suite === 'realistic' ? rangeRevision : null, suite: options.suite, repetitions, checkEvery, memoryLimitBytes,
+  sourceFingerprint: createHash('sha256').update(sources.join('\n')).digest('hex'),
+  node: process.version, osRelease: release(), hostMemoryBytes: totalmem(),
+  cgroupMemoryLimit: existsSync('/sys/fs/cgroup/memory.max') ? readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim() : null,
+  cgroupCpuLimit: existsSync('/sys/fs/cgroup/cpu.max') ? readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim() : null,
+  platform: process.platform, architecture: process.arch,
   cpu: cpus()[0].model, availableParallelism: availableParallelism(),
   peakRssScope: 'process high-water mark, cumulative across rows', rows,
 }, null, 2))
