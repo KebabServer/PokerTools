@@ -411,3 +411,17 @@ input[type=range]{width:100%;accent-color:var(--accent)}
   .strategy-ev strong{font-size:14px}
   #configuration .board-slot{font-size:29px}
 }
+.heuristic-controls textarea{display:block;width:100%;margin-top:6px;padding:8px;color:var(--text);background:var(--panel2);border:1px solid #565656;border-radius:6px;resize:vertical;font:12px/1.5 ui-monospace,monospace}
+.heuristic-controls textarea:focus-visible,.heuristic-buttons .file-button:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+.heuristic-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.heuristic-buttons>button,.heuristic-buttons>.file-button{min-height:36px}
+.heuristic-buttons>.file-button{display:inline-flex;align-items:center}
+#heuristic-combos,#heuristic-results{margin-top:12px;border-top:1px solid var(--border);padding-top:10px}
+#heuristic-combos>summary{cursor:pointer;margin-bottom:8px}
+.heuristic-scroll{max-height:265px;overflow:auto}
+.heuristic-table{width:100%;table-layout:fixed;border-collapse:collapse;margin-top:8px;font-size:12px;line-height:1.4}
+.heuristic-table th,.heuristic-table td{padding:6px 4px;text-align:left;vertical-align:top;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+.heuristic-table small{display:block;color:var(--muted);margin-top:3px}
+.heuristic-combo-table th:nth-child(2){width:55%}
+#heuristic-status[data-error]{color:#ffb1b1}
+@media(max-width:420px){.heuristic-buttons>button,.heuristic-buttons>.file-button{min-height:44px}}

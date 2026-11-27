@@ -3,6 +3,7 @@
 'use strict';
 const C=createSolverCore(), S=createStrategyView(C), $=id=>document.getElementById(id);
 const checkpointCodec=createCheckpointFormat();
+let heuristicPanel;
 const R='AKQJT98765432', suitNames={s:'spades',h:'hearts',d:'diamonds',c:'clubs'};
 // Action palette: passive actions remain green/blue; bet and raise sizes share a size bucket palette.
 const colors={check:'#58bb6e',call:'#30935b',fold:'#3d79ae'};
@@ -214,6 +215,7 @@ function sampleStudyFinished(kind,report){
  s.index++;renderSampleStudy();setTimeout(sampleStudyNext,0);
 }
 function startSampleStudy(){
+ if(heuristicPanel?.running()){notify('Finish or cancel the heuristic comparison first.','warn');return;}
  if(view.active||view.benchmark?.running||view.sampleStudy?.running){notify('Stop the current solve or benchmark before starting a study.','warn');return;}
  if(view.mode!=='flop'){notify('Runout sampling studies require a flop starting board.','warn');return;}
  if(dynamicFlop())return;
@@ -410,6 +412,7 @@ function benchmarkNext(){
   benchmarkRunFailed('Could not start this algorithm with the configured game.');
 }
 function startBenchmark(){
+ if(heuristicPanel?.running()){notify('Finish or cancel the heuristic comparison first.','warn');return;}
  if(dynamicFlop())return;
  if(view.active||view.benchmark?.running){notify('Finish or stop the current solver run before benchmarking.','warn');return;}
  let cfg;try{cfg=config();}catch(e){notify(e.message,'error');return;}
@@ -484,6 +487,7 @@ function profile(name,p){
 function dynamicFlop(){return view.mode==='flop'&&$('flop-chance-mode').value==='dynamic';}
 function renderBoard(){
  const flop=view.mode==='flop',dynamic=dynamicFlop();
+ heuristicPanel?.setVisible(flop);
  $('turn-entry-row').hidden=view.mode!=='turn';
  $('flop-entry-row').hidden=view.mode!=='flop';
  $('river-entry-row').hidden=view.mode!=='river';
@@ -663,6 +667,7 @@ function makeLocalGame(solveConfig=null){
   renderPreSolveQuality();
   return true;
  }catch(e){view.game=null;view.parents=[];renderPreSolveQuality();notify(e.message,'warn');return false;}
+ finally{heuristicPanel?.refresh();}
 }
 function cancel(){
  if($('save-checkpoint'))$('save-checkpoint').disabled=true;
@@ -775,7 +780,7 @@ function setSolverTab(name,focus=false){
  const strategy=name==='tree',library=name==='library',panel=strategy?'tree':library?'library-view':'solve-view';
  const changed=$(panel).hidden;
  $('solve-view').hidden=strategy||library;$('tree').hidden=!strategy;$('library-view').hidden=!library;
- if(changed){$('solver-scroll').scrollTop=0;closeCardPicker();}
+ if(changed){$('solver-scroll').scrollTop=0;closeCardPicker();if(name==='solve')heuristicPanel?.refresh();}
  $('solver-files').open=false;
  for(const [id,on] of [['tab-solve',!strategy],['tab-tree',strategy]]){
   const tab=$(id);tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;
@@ -1354,12 +1359,27 @@ function solutionConverged(solver,report,tolerance){
 }
 function workerMain(){
  'use strict';
- const core=createSolverCore();let job=null,completed=null,runId=0;
+ const core=createSolverCore();let job=null,completed=null,runId=0,heuristicJob=null;
  const hostPostMessage=postMessage;
+ function compileGame(game,limit){
+  try{return createCompiledTraversal(game,WASM_TRAVERSAL_BYTES,limit);}catch(_){return null;}
+ }
  // Every reply carries its originating solve's ID. Ignore queued replies
  // from an older benchmark run after reusing the same Worker.
  function send(message,transfer){message.runId=runId;hostPostMessage(message,transfer);}
  self.onmessage=function(e){const m=e.data;
+  if(m.type==='heuristic-cancel'){if(heuristicJob)heuristicJob.cancelled=true;return;}
+  if(m.type==='heuristic-start'){
+   if(heuristicJob)return;
+   const run=heuristicJob={cancelled:false};
+   createHeuristicTester(core).evaluateStudy(m.request,{compile:compileGame,
+    yieldControl:()=>new Promise(resolve=>setTimeout(resolve,0)),shouldCancel:()=>run.cancelled,
+    onProgress:progress=>hostPostMessage({type:'heuristic-progress',progress})})
+    .then(result=>hostPostMessage({type:'heuristic-finished',result}),
+     error=>hostPostMessage({type:'heuristic-error',message:error.message||String(error)}))
+    .finally(()=>{heuristicJob=null;});
+   return;
+  }
   if(m.type==='reset'){job=null;completed=null;return;}
   if(m.type==='stop'){if(job)job.stop=true;return;}
   if(m.type==='checkpoint'){const source=job?.solver||completed;if(source)try{const cp=source.saveCheckpoint();send({type:'checkpoint',checkpoint:cp},[cp.storage.buffer]);}catch(e){send({type:'checkpoint-error',message:e.message});}return;}
@@ -1376,7 +1396,7 @@ function workerMain(){
   try {
    const game=core.makeGame(m.config);game.profileEnabled=!!m.config.profileEnabled;
    // Keep the numerical state exclusively in the worker; compilation optional.
-   try{game.compiled=createCompiledTraversal(game,WASM_TRAVERSAL_BYTES,m.config.memoryLimitBytes);}catch(_){game.compiled=null;}
+   game.compiled=compileGame(game,m.config.memoryLimitBytes);
    const solver=m.checkpoint?core.CFRSolver.resume(game,m.checkpoint):new core.CFRSolver(game);
    job={solver,max:m.max,tolerance:m.tolerance,controller:createAdaptiveBatchController(m.batch),stop:false,
     schedule:createReportScheduler(Date.now(),m.config.useAdaptiveConvergence?m.tolerance:undefined,
@@ -1473,8 +1493,14 @@ function exploitabilityTargetChips(pot,percent){
  if(!Number.isFinite(chips))throw Error('Target exploitability is too large.');
  return chips;
 }
+function createSolverWorker(){
+ const script=`const createSolverCore=${createSolverCore.toString()};\nconst createHeuristicTester=${createHeuristicTester.toString()};\nconst createCompiledTraversal=${createCompiledTraversal.toString()};\nconst WASM_SOURCE_SIMD=${JSON.stringify(WASM_SOURCE_SIMD)};\nconst WASM_SOURCE_SCALAR=${JSON.stringify(WASM_SOURCE_SCALAR)};\nconst WASM_TRAVERSAL_BYTES=${JSON.stringify(WASM_TRAVERSAL_BYTES)};\nconst WASM_TRAVERSAL_BYTES_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_SCALAR)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR)};\nconst createAdaptiveBatchController=${createAdaptiveBatchController.toString()};\nconst createReportScheduler=${createReportScheduler.toString()};\nconst solverProgress=${solverProgress.toString()};\nconst solutionConverged=${solutionConverged.toString()};\n(${workerMain.toString()})();`;
+ const blobUrl=URL.createObjectURL(new Blob([script],{type:'text/javascript'}));
+ try{return new Worker(blobUrl);}finally{setTimeout(()=>URL.revokeObjectURL(blobUrl),2000);}
+}
 function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
  if(view.active)return false;
+ if(heuristicPanel?.running()){notify('Finish or cancel the heuristic comparison first.','warn');return false;}
  dismissNotice();
  if(!benchmarkConfig&&view.benchmark&&!view.benchmark.running)clearBenchmark();
  if(!makeLocalGame(benchmarkConfig))return false;
@@ -1493,11 +1519,7 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
  const launchFallback=(message)=>{if(view.generation!==generation||!view.active)return;view.origin='fallback'; if(view.worker){view.worker.terminate();view.worker=null;}notify(message,'warn');runFallback(cfg,max,tol,batch,generation,checkpoint);};
  if(typeof Worker!=='undefined'&&typeof Blob!=='undefined'&&typeof URL.createObjectURL==='function'){
   try{
-   if(!view.worker){
-   const script=`const createSolverCore=${createSolverCore.toString()};\nconst createCompiledTraversal=${createCompiledTraversal.toString()};\nconst WASM_SOURCE_SIMD=${JSON.stringify(WASM_SOURCE_SIMD)};\nconst WASM_SOURCE_SCALAR=${JSON.stringify(WASM_SOURCE_SCALAR)};\nconst WASM_TRAVERSAL_BYTES=${JSON.stringify(WASM_TRAVERSAL_BYTES)};\nconst WASM_TRAVERSAL_BYTES_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_SCALAR)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR)};\nconst createAdaptiveBatchController=${createAdaptiveBatchController.toString()};\nconst createReportScheduler=${createReportScheduler.toString()};\nconst solverProgress=${solverProgress.toString()};\nconst solutionConverged=${solutionConverged.toString()};\n(${workerMain.toString()})();`;
-   const blobUrl=URL.createObjectURL(new Blob([script],{type:'text/javascript'}));
-   const worker=new Worker(blobUrl);setTimeout(()=>URL.revokeObjectURL(blobUrl),2000);view.worker=worker;
-   }
+   if(!view.worker)view.worker=createSolverWorker();
    const worker=view.worker;
    worker.onmessage=e=>{
     if(view.generation!==generation)return;
@@ -1977,6 +1999,11 @@ function wire(){
 }
 function init(){
  view.weights[0]=profile('example',0);view.weights[1]=profile('example',1);
+ heuristicPanel=createHeuristicPanel(createHeuristicTester(C),{
+  config,game:()=>view.game,maxIterations:()=>Number($('iterations').value),
+  busy:()=>view.active||view.benchmark?.running||view.sampleStudy?.running,createWorker:createSolverWorker,
+  format:fmt,escapeHtml,cardText:C.cardText,download:downloadJson,
+ });
  wire();libWire();storageWire();updateSolverMethod();setSolverTab('solve');renderBoard();renderRangeTab();makeLocalGame();renderExplorer();renderTree();
 }
 init();

@@ -1,0 +1,34 @@
+[
+  {
+    "name": "Unrestricted control",
+    "unrestricted": true
+  },
+  {
+    "name": "Check range",
+    "rules": [],
+    "default": "Check"
+  },
+  {
+    "name": "Bet range",
+    "rules": [{ "match": { "type": "all" }, "mix": "Bet 50%" }],
+    "default": "Check"
+  },
+  {
+    "name": "Value and draws",
+    "rules": [
+      {
+        "match": { "type": "made", "values": ["two-pair", "trips", "straight", "flush", "full-house", "quads", "straight-flush"] },
+        "mix": "Bet 50%"
+      },
+      {
+        "match": { "type": "pair", "values": ["top-pair", "overpair"] },
+        "mix": { "Check": 25, "Bet 50%": 75 }
+      },
+      {
+        "match": { "type": "draw", "values": ["flush-draw", "open-ended", "gutshot"] },
+        "mix": { "Check": 50, "Bet 50%": 50 }
+      }
+    ],
+    "default": "Check"
+  }
+]

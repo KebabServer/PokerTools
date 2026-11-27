@@ -77,8 +77,7 @@ function createSolverCore() {
     }
     return 0;
   }
-  function evaluate7(cards) {
-    if(cards.length !== 7) throw Error('Hand evaluator requires seven distinct cards.');
+  function evaluateCards(cards) {
     const count = new Uint8Array(15), suitCount = new Uint8Array(4);
     const suitMasks = new Int32Array(4);
     let mask=0;
@@ -123,6 +122,14 @@ function createSolverCore() {
     const ks=[];
     for(let r=14;r>=2 && ks.length<5;r--) if(count[r]) ks.push(r);
     return encodeScore(0,ks);
+  }
+  function evaluate7(cards) {
+    if(cards.length !== 7) throw Error('Hand evaluator requires seven distinct cards.');
+    return evaluateCards(cards);
+  }
+  function fiveCardCategory(cards) {
+    if(cards.length!==5)throw Error('A flop hand requires five distinct cards.');
+    return Math.floor(evaluateCards(cards)/15**5);
   }
   function showdownScores(board) {
     const b = boardMask(board), score = new Int32Array(1326).fill(-1), usable=boardCombos(b);
@@ -3113,7 +3120,7 @@ function createSolverCore() {
     }
   }
   return {RANKS,SUITS,CATEGORY_RANKS,ALL_COMBOS,CATEGORY_IDS,cardId,cardText,rank,comboId,comboCategory,
-    boardMask,turnMask,flopMask,boardCombos,compatible,straightHigh,evaluate7,showdownScores,drawPublicChance,buildTree,buildTurnRiverTree,buildFlopTurnRiverTree,makeGame,frequencyStreets,parseFrequencyIncrements,
+    boardMask,turnMask,flopMask,boardCombos,compatible,straightHigh,evaluate7,fiveCardCategory,showdownScores,drawPublicChance,buildTree,buildTurnRiverTree,buildFlopTurnRiverTree,makeGame,frequencyStreets,parseFrequencyIncrements,
     terminalCfv,compatibilityMass,rangeValue,averagePolicy,evaluatePolicy,makeReport,makeNodeReport,makeSummary,makeConvergenceCheck,gameSignature,CFRSolver,
     currentPolicy,currentProbability,rangeWideActionFrequencies,accumulate,traverseCfr,logitResponse,QRE_PROBABILITY_FLOOR,storagePrecisions};
 }

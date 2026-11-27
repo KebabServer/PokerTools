@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#212121">
   <meta name="description" content="A local heads-up Texas Hold'em flop, turn and river solver.">
   <title>TurnRiverLab — Poker Solver</title>
-  <link rel="stylesheet" href="style.css?v=simd128">
+  <link rel="stylesheet" href="style.css?v=heuristic-tester">
 </head>
 <body>
   <div class="solver-shell">
@@ -214,6 +214,44 @@
                 <section id="pre-solve-quality" class="study-results" aria-label="Game estimate"></section>
               </div>
             </details>
+            <details class="advanced section-disclosure" id="heuristic-tester" hidden>
+              <summary>Heuristic Tester</summary>
+              <div class="disclosure-body heuristic-controls">
+                <label>Hero decision<select id="heuristic-decision"></select></label>
+                <p id="heuristic-action-labels" class="subtle-note"></p>
+                <div class="field-row">
+                  <label>Evaluation game<select id="heuristic-scope"><option value="full">Full game (49 × 48)</option><option value="fixed">Setup’s fixed runouts</option></select></label>
+                  <label>Target loss interval <span class="field-unit">% of pot</span><input id="heuristic-target" type="number" min="0" step="any" value="0.1"></label>
+                </div>
+                <label>Heuristic candidates (JSON)<textarea id="heuristic-input" rows="7" spellcheck="false"></textarea></label>
+                <div class="heuristic-buttons">
+                  <button type="button" class="secondary small" id="heuristic-example">Load example</button>
+                  <label class="secondary small file-button">Import JSON<input id="heuristic-import" type="file" accept=".json,application/json"></label>
+                  <button type="button" class="secondary small" id="heuristic-preview">Preview combos</button>
+                </div>
+                <p class="subtle-note">Rules use the first match, then the default. The tester uses Float64 DCFR and the iteration limit in Advanced. Only the selected Hero decision is locked.</p>
+                <details id="heuristic-combos" hidden>
+                  <summary>Compiled combo strategies</summary>
+                  <label>Candidate<select id="heuristic-preview-candidate"></select></label>
+                  <p class="subtle-note" id="heuristic-coverage"></p>
+                  <div id="heuristic-preview-table" class="heuristic-scroll"></div>
+                </details>
+                <div class="heuristic-buttons">
+                  <button type="button" id="heuristic-run">Run comparison</button>
+                  <button type="button" class="secondary" id="heuristic-cancel" hidden>Cancel</button>
+                  <button type="button" class="secondary" id="heuristic-export" disabled>Export JSON</button>
+                </div>
+                <p id="heuristic-status" class="subtle-note" role="status"></p>
+                <section id="heuristic-results" aria-label="Heuristic Tester results" hidden>
+                  <p id="heuristic-baseline" class="subtle-note"></p>
+                  <p id="heuristic-summary" class="subtle-note"></p>
+                  <table class="heuristic-table" aria-label="Candidate EV loss">
+                    <thead><tr><th scope="col">Candidate</th><th scope="col">Loss (chips)</th><th scope="col">Loss (% pot)</th></tr></thead>
+                    <tbody id="heuristic-result-rows"></tbody>
+                  </table>
+                </section>
+              </div>
+            </details>
           </div>
         </section>
         <section class="solver-tree" id="tree" role="tabpanel" aria-labelledby="tab-tree" tabindex="0" hidden>
@@ -325,6 +363,6 @@
   </div>
   <script src="pokertools-host.js?v=solver-layout"></script>
   <script src="flop-combo-order.js"></script>
-  <script src="core.js?v=public-chance"></script><script src="checkpoint-format.js?v=public-chance"></script><script src="wasm-kernel-data.js"></script><script src="source-kernel-data.js?v=public-chance"></script><script src="compiled-traversal.js?v=public-chance"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js?v=public-chance"></script>
+  <script src="core.js?v=heuristic-tester"></script><script src="checkpoint-format.js?v=public-chance"></script><script src="wasm-kernel-data.js"></script><script src="source-kernel-data.js?v=public-chance"></script><script src="compiled-traversal.js?v=public-chance"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="heuristic-tester.js?v=1"></script><script src="heuristic-panel.js?v=1"></script><script src="ui.js?v=heuristic-tester"></script>
 </body>
 </html>
