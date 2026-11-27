@@ -165,6 +165,14 @@
                 <div class="field-row"><label><span class="inline-field-label">Max tree records </span><input id="max-nodes" type="number" min="20" max="100000" step="100" value="18000"></label></div>
                 <details class="advanced" id="optimization-settings"><summary>Runouts &amp; optimizations</summary>
                   <div class="field-row"><label>Numerical storage<select id="storage-layout"><option value="auto">Auto</option><option value="dense">Dense</option><option value="compact">Compact</option></select></label></div>
+                  <label>Storage precision<select id="storage-precision">
+                    <option value="float64">Float64 reference</option>
+                    <option value="f32-regrets">Float32 regrets</option>
+                    <option value="f32-regrets-averages">Float32 regrets + averages</option>
+                    <option value="f32-all">Float32 regrets + averages + strategy</option>
+                    <option value="f32-scaled-averages">Float32 regrets + scaled averages</option>
+                  </select></label>
+                  <p class="subtle-note">Float32 modes use JavaScript and keep payoff and best-response calculations in Float64.</p>
                   <div class="field-row" id="flop-runout-row" hidden><label><span class="inline-field-label">Turn cards sampled <span class="field-unit">of 49</span></span><input id="flop-turn-samples" type="number" min="1" max="49" step="1" value="8"></label><label><span class="inline-field-label">River cards sampled <span class="field-unit">of 48 per turn</span></span><input id="flop-river-samples" type="number" min="1" max="48" step="1" value="6"></label></div>
                   <div class="field-row" id="flop-seed-row" hidden><label>Sampling seed <span class="field-unit">0–2147483647</span><input id="flop-sampling-seed" type="number" min="0" max="2147483647" step="1" value="0"></label><button type="button" id="sample-study-start" class="secondary small">Compare 3 seeds</button></div><div class="study-results" id="sample-study-results" hidden aria-live="polite"></div>
                   <label class="toggle-row"><input id="suit-isomorphism" type="checkbox" checked> Exact flop and turn suit isomorphism</label>

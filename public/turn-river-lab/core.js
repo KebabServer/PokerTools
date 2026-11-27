@@ -721,16 +721,123 @@ function createSolverCore() {
     return node.lockedRows[(node.sharedLock?0:node.lockOffsets?node.lockOffsets[hand]:hand)*a+action];
   }
 
-  function storagePlan(tree,players,config,equilibrium,gtoAlgorithm,transforms){
+  const storagePrecisions=Object.freeze({
+    float64:'Float64 reference',
+    'f32-regrets':'Float32 regrets',
+    'f32-regrets-averages':'Float32 regrets and averages',
+    'f32-all':'Float32 regrets, averages and current strategy',
+    'f32-scaled-averages':'Float32 regrets and scaled averages'
+  });
+  const predictiveAlgorithms=['optimistic','dcfr-predictive'];
+
+  function statePlanes(precision,qre,algorithm){
+    const regret=precision==='float64'?Float64Array:Float32Array;
+    const averageSum=precision==='float64'||precision==='f32-regrets'?Float64Array:Float32Array;
+    const current=precision==='f32-all'?Float32Array:Float64Array;
+    const planes={regret,averageSum,current};
+    if(predictiveAlgorithms.includes(algorithm))planes.previousDelta=Float64Array;
+    if(qre){planes.qreLog=Float64Array;planes.qreEntropy=Float64Array;}
+    if(precision==='f32-scaled-averages')planes.averageExponent=Int8Array;
+    return planes;
+  }
+  function decisionSizes(node,players,privateSymmetry){
+    const n=players[node.p].ids.length;
+    const learned=node.compact?.reps.length??(privateSymmetry?.enabled?privateSymmetry.representatives[node.p]:n);
+    const current=node.compact?learned:n;
+    return [learned,current];
+  }
+  function planeSizes(learned,current,actions){
+    return {regret:learned*actions,averageSum:learned*actions,current:current*actions,
+      previousDelta:learned*actions,qreLog:current*actions,qreEntropy:current,averageExponent:learned};
+  }
+  function stateFootprint(planes,decisions,players,privateSymmetry=null){
+    let learned=0,current=0,learnedActions=0,currentActions=0;
+    for(const node of decisions)if(!node.isoAlias){
+      const [m,n]=decisionSizes(node,players,privateSymmetry),a=node.actionCount;
+      learned+=m;current+=n;learnedActions+=m*a;currentActions+=n*a;
+    }
+    const lengths={regret:learnedActions,averageSum:learnedActions,current:currentActions,
+      previousDelta:learnedActions,qreLog:currentActions,qreEntropy:current,averageExponent:learned};
+    const counts={8:0,4:0,1:0};
+    for(const [plane,type] of Object.entries(planes))counts[type.BYTES_PER_ELEMENT]+=lengths[plane];
+    return {counts,bytes:counts[8]*8+counts[4]*4+counts[1]};
+  }
+  function stateArena(footprint,precision){
+    // Larger elements first so every view is aligned. Float64-only games
+    // retain the original per-decision order and the native WASM ABI.
+    const buffer=new ArrayBuffer(footprint.bytes),counts=footprint.counts;
+    const bytes64=counts[8]*8,bytes32=counts[4]*4;
+    const arenas={8:new Float64Array(buffer,0,counts[8]),
+      4:new Float32Array(buffer,bytes64,counts[4]),1:new Int8Array(buffer,bytes64+bytes32,counts[1])};
+    const offsets={8:0,4:0,1:0};
+    return {storage:precision==='float64'?arenas[8]:new Uint8Array(buffer),
+      take(type,count){
+        const width=type.BYTES_PER_ELEMENT,first=offsets[width];
+        offsets[width]+=count;
+        return arenas[width].subarray(first,first+count);
+      }};
+  }
+
+  function storedProbability(node,offset,action){
+    const current=node.current,v=current[offset+action];
+    if(!node.current32)return v;
+    if(node.frequencyUnits)return v/node.frequencyUnits;
+    // Quantize all other actions and leave the largest as a Float64 residual.
+    // Its slack is large enough to absorb rounding without clipping rare actions.
+    let probability=v;
+    if(v<0){
+      let sum=0;
+      for(let k=0;k<node.actionCount;k++)if(k!==action)sum+=current[offset+k];
+      probability=1-sum;
+    }
+    return node.policyFloor+node.policyScale*probability;
+  }
+  function storeProbabilityRow(node,offset,row){
+    const current=node.current,a=node.actionCount,units=node.frequencyUnits;
+    if(units){
+      for(let k=0;k<a;k++)current[offset+k]=Math.round(row[k]*units);
+      return;
+    }
+    let largest=0;
+    for(let k=1;k<a;k++)if(row[k]>row[largest])largest=k;
+    for(let k=0;k<a;k++)current[offset+k]=k===largest?-1:Math.max(0,(row[k]-node.policyFloor)/node.policyScale);
+  }
+
+  // One binary exponent per row preserves common tiny reach weights without
+  // increasing the width of each action. Averaging uses ratios, so decoding a
+  // policy cancels the exponent. Buckets span the full finite Float64 range.
+  const averageScaleLimit=15,averageScaleStep=64,averageMantissaLimit=2**64;
+  const inverseAverageScales=Float64Array.from({length:2*averageScaleLimit+1},(_,i)=>2**((averageScaleLimit-i)*averageScaleStep));
+  function addAverage(node,row,action,increment){
+    const average=node.averageSum,a=node.actionCount,offset=row*a,index=offset+action;
+    const exponents=node.averageExponent;
+    if(!exponents){average[index]+=increment;return;}
+    if(!increment)return;
+    let bucket=exponents[row],delta=increment*inverseAverageScales[bucket+averageScaleLimit];
+    const needsHeadroom=average[index]+delta>averageMantissaLimit;
+    if(needsHeadroom||(delta<1/averageMantissaLimit&&!average[index])){
+      const byIncrement=Math.floor(Math.log2(increment)/averageScaleStep);
+      const desired=Math.max(-averageScaleLimit,Math.min(averageScaleLimit,
+        needsHeadroom?Math.max(bucket+1,byIncrement):byIncrement));
+      let empty=desired<bucket;
+      for(let k=0;empty&&k<a;k++)empty=average[offset+k]===0;
+      if(desired>bucket||empty){
+        const scale=2**((bucket-desired)*averageScaleStep);
+        for(let k=0;k<a;k++)if(average[offset+k])average[offset+k]*=scale;
+        exponents[row]=bucket=desired;
+        delta=increment*inverseAverageScales[bucket+averageScaleLimit];
+      }
+    }
+    average[index]+=delta;
+  }
+
+  function storagePlan(tree,players,config,planes,precision,transforms){
     const requested=config.storageLayout??'auto';
     if(!['auto','dense','compact'].includes(requested))throw Error('Unknown numerical storage layout.');
-    const qre=equilibrium==='qre',predictive=['optimistic','dcfr-predictive'].includes(gtoAlgorithm);
     const decisions=tree.decisionNodes.filter(node=>!node.isoAlias);
-    const dense=(node,n=players[node.p].ids.length)=>n*node.actionCount*(3+Number(predictive)+(qre?1:0))+(qre?n:0);
-    const denseSlots=decisions.reduce((sum,node)=>sum+dense(node),0);
-    // Auto starts with the fast dense layout. Only build compact row maps
-    // after the memory check selects Compact or the caller requests it.
-    if(requested!=='compact')return {mode:'dense',denseBytes:denseSlots*8};
+    const denseBytes=stateFootprint(planes,decisions,players).bytes;
+    // Auto starts with dense rows. Only allocate compact maps when selected.
+    if(requested!=='compact')return {mode:'dense',precision,denseBytes};
     const supports=new Map(),orbits=new Map(),sharedRows=new Map();
     function boardSupport(turn,river){
       const key=(turn??52)*53+(river??52);
@@ -754,7 +861,7 @@ function createSolverCore() {
         (turn==null||t.suits[turn&3]===(turn&3))&&(river==null||t.suits[river&3]===(river&3))));
       return orbits.get(key);
     }
-    let slots=0,metadata=0,omittedRows=0,orbitRows=0;
+    let metadata=0,omittedRows=0,orbitRows=0;
     const layouts=[],noRows={map:null,reps:new Uint16Array(0)};
     for(const node of decisions){
       const p=node.p,n=players[p].ids.length,a=node.actionCount;
@@ -778,7 +885,6 @@ function createSolverCore() {
       if(!layout.map)omittedRows+=n;
       else for(const row of layout.map)if(row<0)omittedRows++;
       if(layout.map)orbitRows+=n-layout.reps.length-layout.map.reduce((sum,row)=>sum+Number(row<0),0);
-      slots+=dense(node,layout.reps.length);
       layouts.push(layout);
     }
     const implicitShapes=new Set();
@@ -790,7 +896,7 @@ function createSolverCore() {
     }
     for(const node of tree.decisionNodes)if(node.locked)metadata+=node.lockedRows.byteLength+
       (node.lockOffsets?.byteLength??0)+node.lockedMask.byteLength;
-    return {mode:'compact',denseBytes:denseSlots*8,slots,metadata,omittedRows,orbitRows};
+    return {mode:'compact',precision,denseBytes,metadata,omittedRows,orbitRows};
   }
 
   function learnedRow(node,h){
@@ -798,10 +904,14 @@ function createSolverCore() {
     return node.symmetry?node.symmetry.ordinals[h]:h;
   }
   function currentProbability(node,h,k){
-    if(!node.compact)return node.current[h*node.actionCount+k];
+    if(!node.compact){
+      const offset=h*node.actionCount;
+      if(!node.current32)return node.current[offset+k];
+      return node.lockedMask?.[h]?lockedProbability(node,h,k):storedProbability(node,offset,k);
+    }
     if(node.lockedMask?.[h])return lockedProbability(node,h,k);
     const row=learnedRow(node,h);
-    return row<0?node.implicitPolicy[k]:node.current[row*node.actionCount+k];
+    return row<0?node.implicitPolicy[k]:storedProbability(node,row*node.actionCount,k);
   }
   function learnRepresentative(node,h,row){
     return node.compact?row>=0&&node.compact.reps[row]===h:!node.symmetry||node.symmetry.master[h]===h;
@@ -839,6 +949,14 @@ function createSolverCore() {
     if(!Number.isFinite(qreTemperaturePercent)||qreTemperaturePercent<0.005||qreTemperaturePercent>50)
       throw Error('QRE temperature must be between 0.005% and 50% of the initial pot.');
     if(!Number.isInteger(pot)||pot<1||!Number.isInteger(stack)||stack<1)throw Error('Pot and effective stack must be positive whole chips.');
+    const precision=config.storagePrecision??'float64';
+    if(typeof precision!=='string'||!Object.hasOwn(storagePrecisions,precision))throw Error('Unknown solver storage precision.');
+    const mixed=precision!=='float64';
+    if(mixed&&!Number.isFinite(pot+2*stack))throw Error('Pot and stack produce a non-finite payoff.');
+    // Float32 regrets use a power-of-two chip unit. The CFR delta is formed
+    // in Float64 before rescaling, and the same scale applies to matching.
+    const regretScale=mixed?2**(-Math.min(1023,Math.floor(Math.log2(Math.max(pot,stack))))):1;
+    const planes=statePlanes(precision,equilibrium==='qre',gtoAlgorithm);
     const sizes=[parseSizes(config.sizes0),parseSizes(config.sizes1)];
     const maxRaises=Number(config.maxRaises),allIn=!!config.allIn;
     if(!Number.isInteger(maxRaises)||maxRaises<0||maxRaises>4)throw Error('Maximum raises must be 0–4.');
@@ -1038,7 +1156,7 @@ function createSolverCore() {
     const suitIsomorphism=installSuitIsomorphism(tree,board,players,
       allowPublic&&(explicitCompact||!nodeLocks.length),turnSamples??49,riverSamples??48,flopSamplingSeed,
       explicitCompact?group:null);
-    const numericStorage=storagePlan(tree,players,config,equilibrium,gtoAlgorithm,suitIsomorphism.transforms??group);
+    const numericStorage=storagePlan(tree,players,config,planes,precision,suitIsomorphism.transforms??group);
     const riverPrivateSymmetry=installRiverPrivateSymmetry(board,players,
       numericStorage.mode==='dense'&&!!config.useRiverHandSymmetry&&!isTurn&&!isFlop);
     if(riverPrivateSymmetry.enabled&&nodeLocks.length){
@@ -1059,16 +1177,13 @@ function createSolverCore() {
     const memoryLimit=Number(config.memoryLimitBytes);
     if(autoLayout&&memoryLimit>0&&!riverPrivateSymmetry.enabled&&numericStorage.denseBytes>memoryLimit)
       return makeGame({...config,storageLayout:'compact'},options);
+    const footprint=stateFootprint(planes,tree.decisionNodes,players,riverPrivateSymmetry);
+    numericStorage.stateBytes=footprint.bytes;
+    const layoutBytes=numericStorage.mode==='compact'?numericStorage.metadata:
+      tree.decisionNodes.reduce((sum,node)=>sum+(node.lockedRows?.byteLength??0)+(node.lockedMask?.byteLength??0),0);
     if(preview){
-      // Accurate strategy-buffer estimate, plus a conservative allowance for
-      // the board-specific numerical tables allocated by the solving worker.
-      let stateBytes=0;
-      for(const node of tree.decisionNodes)if(!node.isoAlias){
-        const n=players[node.p].ids.length,a=node.actionCount;
-        const m=riverPrivateSymmetry.enabled?riverPrivateSymmetry.representatives[node.p]:n;
-        stateBytes+=(m*2+n)*a*8+(equilibrium==='qre'?(n*a+n)*8:0)+(['optimistic','dcfr-predictive'].includes(gtoAlgorithm)?m*a*8:0);
-      }
-      if(numericStorage.mode==='compact')stateBytes=numericStorage.slots*8+numericStorage.metadata;
+      // Add a conservative allowance for the worker's board payoff programs.
+      const stateBytes=footprint.bytes+layoutBytes;
       const distinctBoards=isFlop?(packed?new Set(Array.from(tree.riverTables).flatMap(([t,table])=>
         Array.from(table.cards,r=>Math.min(t,r)*52+Math.max(t,r)))).size:turnSamples*riverSamples):isTurn?tree.rivers.length:1;
       const approxBoardBytes=distinctBoards*(1326*4+(players[0].ids.length+players[1].ids.length)*12+3000);
@@ -1162,18 +1277,7 @@ function createSolverCore() {
     for(const indices of legalRunoutIndices.values())memory+=indices[0].byteLength+indices[1].byteLength;
     memory+=fullHandIndices[0].byteLength+fullHandIndices[1].byteLength;
     if(isFlop)for(const v of new Set(scoresByRunout.values()))memory+=v.scores.byteLength+v.sorted.reduce((sum,ids)=>sum+ids.length*8,0);
-    // One contiguous Float64 arena instead of thousands of independently
-    // allocated backing stores. Every node receives a stable view; neither
-    // the game's indexing nor the order of arithmetic changes.
-    let slots=0;
-    for(const node of tree.decisionNodes)if(!node.isoAlias){
-      const n=players[node.p].ids.length,a=node.actionCount;
-      const m=riverPrivateSymmetry.enabled?riverPrivateSymmetry.representatives[node.p]:n;
-      slots+=m*a*2+n*a+(equilibrium==='qre'?n*a+n:0)+(['optimistic','dcfr-predictive'].includes(gtoAlgorithm)?m*a:0);
-    }
-    if(numericStorage.mode==='compact'){slots=numericStorage.slots;memory+=numericStorage.metadata;}
-    else memory+=tree.decisionNodes.reduce((sum,node)=>sum+(node.lockedRows?.byteLength??0)+(node.lockedMask?.byteLength??0),0);
-    const projectedMemory=memory+slots*8;
+    const projectedMemory=memory+footprint.bytes+layoutBytes;
     if(memoryLimit>0&&projectedMemory>memoryLimit){
       if(autoLayout)return makeGame({...config,storageLayout:'compact'},options);
       throw Error('Estimated strategy state exceeds the memory budget. Reduce runouts, ranges, bet sizes or raises.');
@@ -1181,21 +1285,21 @@ function createSolverCore() {
     const allInEvaluation=config.allInEvaluation??'auto';
     if(!['auto','boards','counts','float64','ondemand'].includes(allInEvaluation))throw Error('Unknown all-in operator.');
     const allInOperators=installAllInPlans(tree,players,pot,stack,
-      Math.max(0,Math.min(16*1024*1024,memoryLimit>0?memoryLimit-memory-slots*8:Infinity)),allInEvaluation);
+      Math.max(0,Math.min(16*1024*1024,memoryLimit>0?memoryLimit-projectedMemory:Infinity)),allInEvaluation);
     buildAllInPlans(allInOperators,boardTerminal);
-    const stateStorage=new Float64Array(slots);
-    let nextSlot=0;
+    const arena=stateArena(footprint,precision),planeEntries=Object.entries(planes);
     const implicitRows=new Map();
-    function take(count){const view=stateStorage.subarray(nextSlot,nextSlot+count);nextSlot+=count;return view;}
     for(const node of tree.decisionNodes)if(!node.isoAlias){
+      const [m,currentRows]=decisionSizes(node,players,riverPrivateSymmetry);
       const n=players[node.p].ids.length,a=node.actionCount;
-      const m=node.compact?node.compact.reps.length:riverPrivateSymmetry.enabled?riverPrivateSymmetry.representatives[node.p]:n;
-      const currentRows=node.compact?m:n;
       if(riverPrivateSymmetry.enabled)node.symmetry=riverPrivateSymmetry.maps[node.p];
-      node.regret=take(m*a);
-      node.averageSum=take(m*a);
-      node.current=take(currentRows*a);
-      if(['optimistic','dcfr-predictive'].includes(gtoAlgorithm))node.previousDelta=take(m*a);
+      const counts=planeSizes(m,currentRows,a);
+      for(const [field,type] of planeEntries)node[field]=arena.take(type,counts[field]);
+      if(planes.current===Float32Array){
+        node.current32=true;
+        node.policyFloor=equilibrium==='qre'?QRE_PROBABILITY_FLOOR:0;
+        node.policyScale=1-a*node.policyFloor;
+      }
       if(node.compact){
         const key=a+':'+(node.frequencyUnits??0);
         if(actionPruning.enabled||!implicitRows.has(key)){
@@ -1204,26 +1308,30 @@ function createSolverCore() {
           implicitRows.set(key,row);
         }
         node.implicitPolicy=implicitRows.get(key);
+      }
+      if(node.current32){
+        const initial=node.implicitPolicy??new Float64Array(a).fill(1/a);
+        if(!node.implicitPolicy)projectFrequencyRows(node,initial,false);
+        if(currentRows)storeProbabilityRow(node,0,initial);
+      }else if(node.compact){
         if(currentRows)node.current.set(node.implicitPolicy,0);
-        for(let off=a;off<node.current.length;off+=a)node.current.copyWithin(off,0,a);
       }else{
         for(let h=0;h<n;h++)for(let k=0;k<a;k++)node.current[h*a+k]=
           node.lockedMask?.[h]?lockedProbability(node,h,k):1/a;
         projectFrequencyRows(node,node.current);
       }
-      if(equilibrium==='qre'){
-        node.qreLog=take(currentRows*a);
-        node.qreEntropy=take(currentRows);
-        refreshQreNodeCache(node,currentRows);
-      }
+      if(node.current32||node.compact)
+        for(let off=a;off<node.current.length;off+=a)node.current.copyWithin(off,0,a);
+      if(equilibrium==='qre')refreshQreNodeCache(node,currentRows);
     }
     // Aliased river nodes have no independent numerical state: the report
     // expands canonical policies through the exact suit-index permutation.
     // Keeping their structural nodes preserves every original runout/history.
     suitIsomorphism.stateBytesSaved=tree.decisionNodes.reduce((sum,node)=>{
       if(!node.isoAlias)return sum;
-      const n=players[node.p].ids.length,a=node.actionCount;
-      return sum+8*(n*a*3+(equilibrium==='qre'?n*a+n:0)+(['optimistic','dcfr-predictive'].includes(gtoAlgorithm)?n*a:0));
+      const n=players[node.p].ids.length,counts=planeSizes(n,n,node.actionCount);
+      for(const [field,type] of planeEntries)sum+=counts[field]*type.BYTES_PER_ELEMENT;
+      return sum;
     },0);
     memory=projectedMemory;
     return {board,isFlop,isTurn,pot,stack,equilibrium,qreTemperaturePercent,gtoAlgorithm,hybridSchedule,zeroReachPruning:!!config.useZeroReachPruning,regretPruning:!!config.useRegretPruning,sparseTraversal,
@@ -1232,7 +1340,7 @@ function createSolverCore() {
       qreWarmupIterations:0,
       sizes,turnSizes,turnDonkSizes0,turnEntryMode,flopSizes,flopDonkSizes0,flopEntryMode,riverDonkSizes0,riverEntryMode,raisesByStreet,turnSamples,riverSamples,
       sampledChance:isFlop&&(turnSamples<49||riverSamples<48),maxRaises,allIn,scores,scoresByRiver,scoresByRunout,riverPayoffLayouts,
-      players,...tree,jointZ,memory,memoryLimit,stateStorage,boardTerminal,allInOperators,numericStorage,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks,frequencyIncrements,hasFrequencyIncrements};
+      players,...tree,jointZ,memory,memoryLimit,stateStorage:arena.storage,regretScale,boardTerminal,allInOperators,numericStorage,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks,frequencyIncrements,hasFrequencyIncrements};
   }
 
   function installAllInPlans(tree,players,pot,stack,memoryAvailable,requested){
@@ -1387,11 +1495,11 @@ function createSolverCore() {
   // owners can reuse the same exact Float64 Math.log results. Refreshing after
   // currentPolicy preserves the sequential (OOP, then IP) update schedule.
   function refreshQreNodeCache(node,n){
-    const s=node.current,logs=node.qreLog,entropies=node.qreEntropy,a=node.actionCount;
+    const logs=node.qreLog,entropies=node.qreEntropy,a=node.actionCount;
     for(let i=0;i<n;i++){
       const off=i*a;let h=0;
       for(let k=0;k<a;k++){
-        const p=s[off+k],l=Math.log(p);
+        const p=storedProbability(node,off,k),l=Math.log(p);
         logs[off+k]=l;
         if(p>0)h-=p*l;
       }
@@ -1504,19 +1612,37 @@ function createSolverCore() {
       else {for(let k=0;k<a;k++)policy[off+k]=node.pruned[k]?0:1/remaining;}
     }
   }
+  function enforceImplicitMask(node){
+    if(!node.pruned)return;
+    node.implicitPolicy.fill(1/node.actionCount);
+    maskRangeWidePolicy(node,node.implicitPolicy,1);
+    projectFrequencyRows(node,node.implicitPolicy,false);
+  }
+  let currentScratch=new Float64Array(0);
+  function scratchPolicy(a){
+    if(currentScratch.length<a)currentScratch=new Float64Array(a);
+    return currentScratch.length===a?currentScratch:currentScratch.subarray(0,a);
+  }
+  function restrictCurrentRow(node,row){
+    maskRangeWidePolicy(node,row,1);
+    projectFrequencyRows(node,row,false);
+  }
   function enforceActionMask(node,handCount){
-    if(node.compact){
-      maskRangeWidePolicy(node,node.current,node.compact.reps.length);
-      projectFrequencyRows(node,node.current,false);
-      if(node.pruned){
-        node.implicitPolicy.fill(1/node.actionCount);
-        maskRangeWidePolicy(node,node.implicitPolicy,1);
-        projectFrequencyRows(node,node.implicitPolicy,false);
+    const compact=node.compact,n=compact?compact.reps.length:handCount,a=node.actionCount;
+    if(node.current32){
+      const row=scratchPolicy(a);
+      for(let h=0;h<n;h++){
+        if(!compact&&node.lockedMask?.[h])continue;
+        const off=h*a;
+        for(let k=0;k<a;k++)row[k]=storedProbability(node,off,k);
+        restrictCurrentRow(node,row);
+        storeProbabilityRow(node,off,row);
       }
     }else{
-      maskRangeWidePolicy(node,node.current,handCount);
-      projectFrequencyRows(node,node.current);
+      maskRangeWidePolicy(node,node.current,n);
+      projectFrequencyRows(node,node.current,!compact);
     }
+    if(compact)enforceImplicitMask(node);
   }
   function restoreLockedPolicy(game,p) {
     for(const node of game.decisionNodes)if(node.locked&&!node.compact&&!node.isoAlias&&node.p===p){
@@ -1540,25 +1666,35 @@ function createSolverCore() {
     }
     for(const node of game.decisionNodes) if(!node.terminal && !node.chance && !node.isoAlias && node.p===p) {
       if(node.allLocked)continue;
-      const a=node.actionCount, n=node.compact?node.compact.reps.length:game.players[p].ids.length, r=node.regret, s=node.current;
+      const a=node.actionCount,n=node.compact?node.compact.reps.length:game.players[p].ids.length,r=node.regret;
+      const scratch=node.current32?scratchPolicy(a):null,s=scratch??node.current;
       const floor=game.equilibrium==='qre'?QRE_PROBABILITY_FLOOR:0,scale=1-a*floor;
-      const tieFloor=game.equilibrium==='qre'?0:16*Number.EPSILON*Math.max(1,game.pot+game.stack);
-      // Deterministic regret matching at Float64 noise scale, not a relaxed stopping criterion.
-      for(let h=0;h<n;h++) {
-        let sum=0, off=(node.symmetry?node.symmetry.ordinals[h]:h)*a,so=h*a;
-        const variant=game.gtoAlgorithm;
+      const tieFloor=game.equilibrium==='qre'?0:16*Number.EPSILON*Math.max(1,game.pot+game.stack)*game.regretScale;
+      const predictive=node.previousDelta;
+      // Use the same Float64 noise threshold in the stored regret's chip unit.
+      for(let h=0;h<n;h++){
+        if(scratch&&!node.compact&&node.lockedMask?.[h])continue;
+        let sum=0,off=(node.symmetry?node.symmetry.ordinals[h]:h)*a;
+        const so=scratch?0:h*a;
         for(let k=0;k<a;k++){
-          const v=['optimistic','dcfr-predictive'].includes(variant)?r[off+k]+node.previousDelta[off+k]:r[off+k];
+          const v=predictive?r[off+k]+predictive[off+k]:r[off+k];
           sum+=v>0?v:0;
         }
         for(let k=0;k<a;k++){
-          const v=['optimistic','dcfr-predictive'].includes(variant)?r[off+k]+node.previousDelta[off+k]:r[off+k];
+          const v=predictive?r[off+k]+predictive[off+k]:r[off+k];
           s[so+k]=floor+scale*(sum>tieFloor?(v>0?v:0)/sum:1/a);
         }
+        if(scratch){
+          restrictCurrentRow(node,scratch);
+          storeProbabilityRow(node,h*a,scratch);
+        }
       }
-      enforceActionMask(node,n);
-      if(node.locked&&!node.compact){for(let h=0;h<n;h++)if(node.lockedMask[h])
-        for(let k=0;k<a;k++)s[h*a+k]=lockedProbability(node,h,k);}
+      if(scratch){if(node.compact)enforceImplicitMask(node);}
+      else {
+        enforceActionMask(node,n);
+        if(node.locked&&!node.compact){for(let h=0;h<n;h++)if(node.lockedMask[h])
+          for(let k=0;k<a;k++)s[h*a+k]=lockedProbability(node,h,k);}
+      }
       if(game.equilibrium==='qre')refreshQreNodeCache(node,n);
     }
   }
@@ -1889,6 +2025,7 @@ function createSolverCore() {
     return result;
   }
   function accumulate(game,weight) {
+    if(!Number.isFinite(weight)||weight<0)throw Error('Averaging requires a finite, nonnegative weight.');
     for(let p=0;p<2;p++) {
       const own=game.players[p], initial=new Float64Array(own.ids.length).fill(1);
       function visit(id,reach) {
@@ -1904,11 +2041,11 @@ function createSolverCore() {
           return;
         }
         if(node.p!==p) { for(const act of node.actions) visit(act.child,reach);return; }
-        const n=own.ids.length,a=node.actionCount,avg=node.averageSum;
+        const n=own.ids.length,a=node.actionCount;
         for(let i=0;i<n;i++){
           const row=learnedRow(node,i);
           if(!learnRepresentative(node,i,row))continue;
-          for(let j=0;j<a;j++)avg[row*a+j]+=weight*reach[i]*currentProbability(node,i,j);
+          for(let j=0;j<a;j++)addAverage(node,row,j,weight*reach[i]*currentProbability(node,i,j));
         }
         for(let j=0;j<a;j++) {
           const next=new Float64Array(n);
@@ -1925,7 +2062,7 @@ function createSolverCore() {
   const traversalWorkspaces=new WeakMap();
   function traverseCfr(game,id,target,oppReach,averageWeight=0) {
     if(game.compiled?.fullTraversal)return game.compiled.traverse(id,target,oppReach,averageWeight);
-    const myN=game.players[target].ids.length;
+    const myN=game.players[target].ids.length,regretScale=game.regretScale;
     const oppN=game.players[1-target].ids.length;
     // Retain scratch buffers across iterations, but discard reach-dependent
     // showdown cache entries at the start of every traversal.
@@ -1998,9 +2135,8 @@ function createSolverCore() {
       // zero entropy, and zero regret. Its reach/CFV need no new branch arrays.
       if(node.forcedChild!==undefined){
         if(!node.compact&&node.p===target && ownReach){
-          const avg=node.averageSum,cur=node.current;
           for(let i=0;i<myN;i++)if(!node.symmetry||node.symmetry.master[i]===i)
-            avg[node.symmetry?node.symmetry.ordinals[i]:i]+=averageWeight*ownReach[i]*cur[i];
+            addAverage(node,learnedRow(node,i),0,averageWeight*ownReach[i]);
         }
         visit(node.forcedChild,reach,output,ownReach);
         return;
@@ -2035,10 +2171,9 @@ function createSolverCore() {
         let ownNext=null;
         if(ownReach){
           ownNext=acquire(myN);
-          const avg=node.averageSum;
           for(let i=0;i<myN;i++){
             const row=learnedRow(node,i),probability=currentProbability(node,i,a);
-            if(learnRepresentative(node,i,row))avg[row*nActions+a]+=averageWeight*ownReach[i]*probability;
+            if(learnRepresentative(node,i,row))addAverage(node,row,a,averageWeight*ownReach[i]*probability);
             ownNext[i]=ownReach[i]*probability;
           }
         }
@@ -2079,11 +2214,11 @@ function createSolverCore() {
           if(!node.compact)output[i]+=t*node.qreEntropy[i];
           let mean=0;
           const logs=node.qreLog;
-          for(let a=0;a<nActions;a++)mean+=(node.current[off+a]-floor)/scale*(actionVals[a][i]-t*logs[off+a]);
-          for(let a=0;a<nActions;a++)r[ro+a]=Math.max(0,r[ro+a]+scale*(actionVals[a][i]-t*logs[off+a]-mean));
+          for(let a=0;a<nActions;a++)mean+=(storedProbability(node,off,a)-floor)/scale*(actionVals[a][i]-t*logs[off+a]);
+          for(let a=0;a<nActions;a++)r[ro+a]=Math.max(0,r[ro+a]+(scale*(actionVals[a][i]-t*logs[off+a]-mean))*regretScale);
         }else for(let a=0;a<nActions;a++){
           if(node.pruned?.[a])continue;
-          const delta=actionVals[a][i]-v,x=r[ro+a]+delta;
+          const delta=(actionVals[a][i]-v)*regretScale,x=r[ro+a]+delta;
           if(['dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','dcfr-predictive','lcfr','dcfr-cubic','dcfr-2-0.5-2'].includes(game.gtoAlgorithm)){
             r[ro+a]=x*(x>0?game._positiveDiscount:game._negativeDiscount);
             if(game.gtoAlgorithm==='dcfr-predictive')node.previousDelta[ro+a]=delta;
@@ -2144,7 +2279,7 @@ function createSolverCore() {
       for(let r=0;r<n;r++){
         const off=r*a;let sum=0;
         for(let k=0;k<a;k++)sum+=node.averageSum[off+k];
-        for(let k=0;k<a;k++)rows[off+k]=sum>0?node.averageSum[off+k]/sum:node.current[off+k];
+        for(let k=0;k<a;k++)rows[off+k]=sum>0?node.averageSum[off+k]/sum:storedProbability(node,off,k);
       }
       maskRangeWidePolicy(node,rows,n);
       projectFrequencyRows(node,rows,false);
@@ -2432,7 +2567,7 @@ function createSolverCore() {
       qreResidualUnits:game.equilibrium==='qre'?'chips-per-player':null,
       qreResidual,qreCompared,tpwl,tpwlNodes,
       exploitability:nashConv/2,nashConv,lockedNodes:game.nodeLocks?.length||0,unrestrictedExploitability:unrestrictedNashConv/2,convergenceMetric:locked?'locked-game':'unrestricted-nash',
-      br0:br0+rootOffset,br1:br1+rootOffset,
+      br0:br0+rootOffset,br1:br1+rootOffset,oopEvBounds:oopEvBounds(game,br0,br1),
       value0:value0+rootOffset,value1:value1+rootOffset,
       evBasis:'fold-zero',
       // The reported root EVs sum to the starting pot; this measures any
@@ -2457,6 +2592,10 @@ function createSolverCore() {
         hand[4][k]=node.actions[k].type==='fold'?0:shifted(hand[4][k]);
     }
     return record;
+  }
+  function oopEvBounds(game,br0,br1){
+    const offset=game.pot/2;
+    return {lower:offset-br1,upper:offset+br0};
   }
   // Summary-only reporting runs the original exact best-response stopping
   // tests, plus a compiled average-policy root value.  No detailed nodes,
@@ -2498,7 +2637,7 @@ function createSolverCore() {
       const nashConv=Math.max(0,br0+br1);
       return {iteration,elapsedMs,ips:elapsedMs>0?1000*iteration/elapsedMs:0,
         equilibrium:game.equilibrium,gtoAlgorithm:game.gtoAlgorithm,nashConv,
-        exploitability:nashConv/2,qreResidual:r0===null?null:Math.max(0,r0+r1)/2,
+        exploitability:nashConv/2,oopEvBounds:oopEvBounds(game,br0,br1),qreResidual:r0===null?null:Math.max(0,r0+r1)/2,
         history:history||[]};
     }catch(_){
       // A constrained mobile scratch arena may reject the native evaluator;
@@ -2526,7 +2665,7 @@ function createSolverCore() {
       qreResidual=Math.max(0,r0+r1)/2;
     }
     return {iteration,elapsedMs,ips:elapsedMs>0?1000*iteration/elapsedMs:0,
-      equilibrium:game.equilibrium,gtoAlgorithm:game.gtoAlgorithm,nashConv,exploitability:nashConv/2,qreResidual,
+      equilibrium:game.equilibrium,gtoAlgorithm:game.gtoAlgorithm,nashConv,exploitability:nashConv/2,oopEvBounds:oopEvBounds(game,br0,br1),qreResidual,
       lockedNodes:game.nodeLocks?.length||0,unrestrictedExploitability:unrestrictedNashConv/2,
       convergenceMetric:locked?'locked-game':'unrestricted-nash',history:history||[]};
   }
@@ -2595,8 +2734,48 @@ function createSolverCore() {
         feed(node.isoAlias.source);for(const hand of node.isoAlias.map)feed(hand);
       }else if(node.compact?.map)for(const row of node.compact.map)feed(row+1);
     }
-    if(!physicalOnly)feed(game.stateStorage.length);
+    if(!physicalOnly){
+      if(game.numericStorage.precision!=='float64'){str('mixed-state-v1');str(game.numericStorage.precision);}
+      feed(game.stateStorage.length);
+    }
     return h1.toString(16).padStart(8,'0')+h2.toString(16).padStart(8,'0');
+  }
+  function checkpointFormat(game){
+    return game.numericStorage.precision==='float64'?'TurnRiverLab-checkpoint-v1':'TurnRiverLab-checkpoint-v2';
+  }
+  function validateMixedCheckpoint(game,values){
+    const bytes=new DataView(values.buffer,values.byteOffset,values.byteLength);
+    const fields=Object.keys(statePlanes(game.numericStorage.precision,game.equilibrium==='qre',game.gtoAlgorithm));
+    const read={1:(o)=>bytes.getInt8(o),4:(o)=>bytes.getFloat32(o,true),8:(o)=>bytes.getFloat64(o,true)};
+    for(const node of game.decisionNodes)if(!node.isoAlias){
+      for(const field of fields){
+        const plane=node[field],width=plane.BYTES_PER_ELEMENT,readValue=read[width];
+        for(let i=0;i<plane.length;i++){
+          const v=readValue(plane.byteOffset+i*width);
+          if(!Number.isFinite(v))throw Error('Checkpoint has non-finite solver state');
+          if(field==='averageExponent'&&Math.abs(v)>averageScaleLimit)throw Error('Invalid checkpoint average exponent');
+          if(field==='averageSum'&&v<0)throw Error('Invalid checkpoint strategy average');
+        }
+      }
+      if(node.current32){
+        const a=node.actionCount,units=node.frequencyUnits,offset=node.current.byteOffset;
+        for(let i=0;i<node.current.length;i+=a){
+          let total=0,residuals=0;
+          for(let k=0;k<a;k++){
+            const v=bytes.getFloat32(offset+(i+k)*4,true);
+            if(units){
+              if(!Number.isInteger(v)||v<0||v>units)throw Error('Invalid checkpoint grid strategy');
+              total+=v;
+            }else if(v===-1)residuals++;
+            else {
+              if(v<0||v>1)throw Error('Invalid checkpoint current strategy');
+              total+=v;
+            }
+          }
+          if(units?total!==units:residuals!==1||total>1)throw Error('Invalid checkpoint current strategy');
+        }
+      }
+    }
   }
   class CFRSolver {
     constructor(game) {
@@ -2638,6 +2817,9 @@ function createSolverCore() {
         Math.pow(t,this.game.hybridSchedule.averagingPower):
         this.game.gtoAlgorithm==='dcfr-cubic'?t*t*t:
         (['dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','dcfr-predictive','dcfr-2-0.5-2'].includes(this.game.gtoAlgorithm))?t*t:t;
+      const precision=this.game.numericStorage.precision;
+      if(t>10_000_000&&(precision==='f32-regrets-averages'||precision==='f32-all')&&averagingWeight*t>2**124)
+        throw Error('Float32 averaging exceeds its weight range. Use scaled averages or Float64 for this length.');
       const p=this.profileEnabled?()=>typeof performance!=='undefined'?performance.now():Date.now():null;
       let mark=p?p():0;
       traverseCfr(this.game,this.game.root,0,this.game.players[1].priors,averagingWeight);
@@ -2680,10 +2862,10 @@ function createSolverCore() {
       nodes:this.game.nodes.length,equilibrium:this.game.equilibrium,algorithm:this.game.gtoAlgorithm};}
     saveCheckpoint(){
       if(!this.game.stateStorage)throw Error('Checkpoint requires a complete numerical game');
-      return {format:'TurnRiverLab-checkpoint-v1',fingerprint:gameSignature(this.game),iteration:this.iteration,
-        storageLayout:this.game.numericStorage.mode,elapsedMs:Math.max(0,Date.now()-this.startTime),history:this.history.map(pair=>pair.slice()),
+      return {format:checkpointFormat(this.game),fingerprint:gameSignature(this.game),iteration:this.iteration,
+        storageLayout:this.game.numericStorage.mode,storagePrecision:this.game.numericStorage.precision,elapsedMs:Math.max(0,Date.now()-this.startTime),history:this.history.map(pair=>pair.slice()),
         prunedMasks:this.game.actionPruning?.enabled?this.game.nodes.map(n=>n.pruned?Array.from(n.pruned):null):null,
-        storage:Float64Array.from(this.game.stateStorage)};
+        storage:this.game.stateStorage.slice()};
     }
     // Seed a fresh session from a solved policy, never from stale offsets or
     // averages. Rebuilding the game first revalidates locks and symmetry.
@@ -2696,7 +2878,7 @@ function createSolverCore() {
       const solver=new CFRSolver(game);
       game.currentIteration=0;
       for(const node of game.decisionNodes)if(!node.terminal&&!node.chance&&!node.isoAlias){
-        node.regret.fill(0);node.averageSum.fill(0);node.previousDelta?.fill(0);
+        node.regret.fill(0);node.averageSum.fill(0);node.previousDelta?.fill(0);node.averageExponent?.fill(0);
         if(node.pruned)node.pruned.fill(0);
         const seed=policyAccessor(previousGame,policy,previousGame.nodes[node.id]);
         const a=node.actionCount,floor=game.equilibrium==='qre'?QRE_PROBABILITY_FLOOR:0;
@@ -2704,20 +2886,23 @@ function createSolverCore() {
         for(let h=0;h<n;h++){
           const row=learnedRow(node,h);
           if(node.lockedMask?.[h]||!learnRepresentative(node,h,row))continue;
-          for(let k=0;k<a;k++)node.regret[row*a+k]=Math.max(0,seed(h,k)-floor);
+          for(let k=0;k<a;k++)node.regret[row*a+k]=Math.max(0,seed(h,k)-floor)*game.regretScale;
         }
       }
       currentPolicy(game,0);currentPolicy(game,1);
       return solver;
     }
     static resume(game,checkpoint){
-      if(!checkpoint||checkpoint.format!=='TurnRiverLab-checkpoint-v1')throw Error('Unsupported checkpoint format');
+      if(!checkpoint||!game.stateStorage)throw Error('Checkpoint requires a complete numerical game');
+      if(checkpoint.format!==checkpointFormat(game))throw Error('Checkpoint precision does not match this numerical game');
       if(checkpoint.fingerprint!==gameSignature(game))throw Error('Checkpoint does not match this game, ranges, tree or algorithm');
       if(!Number.isSafeInteger(checkpoint.iteration)||checkpoint.iteration<0||!Number.isFinite(checkpoint.elapsedMs)||checkpoint.elapsedMs<0)
         throw Error('Invalid checkpoint iteration or elapsed time');
       const values=checkpoint.storage;
-      if(!ArrayBuffer.isView(values)||values.BYTES_PER_ELEMENT!==8||values.length!==game.stateStorage.length)throw Error('Checkpoint state size mismatch');
-      for(const x of values)if(!Number.isFinite(x))throw Error('Checkpoint has non-finite solver state');
+      if(!(values instanceof game.stateStorage.constructor)||values.length!==game.stateStorage.length)throw Error('Checkpoint state size mismatch');
+      if(values instanceof Float64Array){
+        for(const x of values)if(!Number.isFinite(x))throw Error('Checkpoint has non-finite solver state');
+      }else validateMixedCheckpoint(game,values);
       if(!Array.isArray(checkpoint.history)||checkpoint.history.some(p=>!Array.isArray(p)||p.length!==2||!Number.isFinite(p[0])||!Number.isFinite(p[1])))
         throw Error('Invalid checkpoint convergence history');
       game.stateStorage.set(values);
@@ -2732,6 +2917,7 @@ function createSolverCore() {
               throw Error('Invalid frequency-pruning checkpoint mask');
             if(node.pruned&&node.pruned.length===mask.length)node.pruned.set(mask);
             else node.pruned=Uint8Array.from(mask);
+            if(node.compact)enforceImplicitMask(node);
           }
         }
         game.actionPruning.prunedActions=game.decisionNodes.reduce((total,n)=>total+(n.pruned?n.pruned.reduce((s,x)=>s+x,0):0),0);
@@ -2769,6 +2955,6 @@ function createSolverCore() {
   return {RANKS,SUITS,CATEGORY_RANKS,ALL_COMBOS,CATEGORY_IDS,cardId,cardText,rank,comboId,comboCategory,
     boardMask,turnMask,flopMask,boardCombos,compatible,straightHigh,evaluate7,showdownScores,buildTree,buildTurnRiverTree,buildFlopTurnRiverTree,makeGame,frequencyStreets,parseFrequencyIncrements,
     terminalCfv,compatibilityMass,rangeValue,averagePolicy,evaluatePolicy,makeReport,makeNodeReport,makeSummary,makeConvergenceCheck,gameSignature,CFRSolver,
-    currentPolicy,rangeWideActionFrequencies,accumulate,traverseCfr,logitResponse,QRE_PROBABILITY_FLOOR};
+    currentPolicy,currentProbability,rangeWideActionFrequencies,accumulate,traverseCfr,logitResponse,QRE_PROBABILITY_FLOOR,storagePrecisions};
 }
 if(typeof window!=='undefined') window.createSolverCore=createSolverCore;

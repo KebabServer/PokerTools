@@ -2,6 +2,8 @@
 function createCompiledTraversal(game, base64, limitBytes) {
   'use strict';
   limitBytes=Number(limitBytes)||0;
+  // The native kernels use the original Float64 arena offsets and widths.
+  if(!(game.stateStorage instanceof Float64Array))return null;
   if(game.numericStorage?.mode==='compact')return compactTraversal();
 
   function compactTraversal(){

@@ -90,6 +90,8 @@ function solveCompletionText({kind,report,config:cfg,game,mode,run,targetPercent
  out('OOP EV',numeric(report.value0,4)+' chips');
  out('Pot accounting error',numeric(report.zeroSumError,8)+' chips');
  out('Numerical storage',report.numericStorage?.mode||'dense');
+ out('Storage precision',C.storagePrecisions[report.numericStorage?.precision??cfg.storagePrecision??'float64']);
+ if(report.oopEvBounds)out(cfg.nodeLocks?.length?'OOP constrained EV interval':'OOP Nash EV interval',numeric(report.oopEvBounds.lower,6)+' to '+numeric(report.oopEvBounds.upper,6)+' chips');
  out('Solver memory',Number.isFinite(report.memoryBytes)?numeric(report.memoryBytes/1048576,2)+' MiB':'—');
  breakSection('Game and betting tree');
  out('Starting street',mode.charAt(0).toUpperCase()+mode.slice(1));
@@ -587,7 +589,7 @@ function config(){
   scheduledAlphaStart:Number($('scheduled-alpha-start').value),scheduledAlphaGain:Number($('scheduled-alpha-gain').value),
   scheduledRampLength:Number($('scheduled-ramp-length').value),scheduledAveragingPower:Number($('scheduled-averaging-power').value),
   useAdaptiveConvergence:$('adaptive-convergence').checked,
-  memoryLimitBytes:Number($('memory-limit').value)*1048576,storageLayout:$('storage-layout').value,
+  memoryLimitBytes:Number($('memory-limit').value)*1048576,storageLayout:$('storage-layout').value,storagePrecision:$('storage-precision').value,
   useSuitIsomorphism:$('suit-isomorphism').checked,useRiverHandSymmetry:$('river-hand-symmetry').checked,
   useActionFrequencyPruning:$('action-frequency-pruning').checked&&$('solver-method').value==='gto',
   actionPruneThresholdPercent:Number($('action-prune-threshold').value),
@@ -998,7 +1000,7 @@ function renderPreSolveQuality(){
  const el=$('pre-solve-quality');if(!el)return;
  if(!view.game){el.textContent='Game preview unavailable. Check ranges, betting settings, and node budget.';return;}
  const game=view.game,mb=game.memory/1048576,cap=Number($('memory-limit').value),locks=view.nodeLocks.length;
- const parts=[game.nodes.length.toLocaleString()+' logical tree nodes', (game.numericStorage?.mode??'dense')+' Float64 storage',fmt(mb,1)+' MiB estimated solver state',
+ const parts=[game.nodes.length.toLocaleString()+' logical tree nodes', (game.numericStorage?.mode??'dense')+' · '+C.storagePrecisions[game.numericStorage?.precision??'float64'],fmt(mb,1)+' MiB estimated solver state',
   (game.isFlop?(game.sampledChance?'Sampled flop, not full-game exact':'Fully enumerated flop'):
    game.isTurn?'All legal river runouts':'Fixed river board'),
   locks?locks+' locked nodes; target is constrained':'No locks; unrestricted Nash target'];
@@ -1269,7 +1271,7 @@ function updateReport(report,kind){
  updateProgress(report,kind);
  $('stat-memory').textContent=fmt(report.memoryBytes/1048576,2)+' MiB';
  if($('phase-profile')){const p=report.performance; $('phase-profile').hidden=!p;
-  if(p)$('phase-profile').textContent='WASM phases — P0 traversal '+fmt(p.traversal0Ms,1)+' ms; P1 traversal '+fmt(p.traversal1Ms,1)+' ms; policy '+(p.fusedPolicy?'fused into traversal':fmt(p.policy0Ms+p.policy1Ms,1)+' ms')+'; exact checks '+fmt(p.checkMs,1)+' ms; checks '+p.checks+'.';}
+  if(p)$('phase-profile').textContent='Solver phases — P0 traversal '+fmt(p.traversal0Ms,1)+' ms; P1 traversal '+fmt(p.traversal1Ms,1)+' ms; policy '+(p.fusedPolicy?'fused into traversal':fmt(p.policy0Ms+p.policy1Ms,1)+' ms')+'; exact checks '+fmt(p.checkMs,1)+' ms; checks '+p.checks+'.';}
  const isQre=report.equilibrium==='qre';
  $('chart').setAttribute('aria-label','Exploitability versus iterations');
  $('stat-exploit').textContent=fmt(report.exploitability,4);
@@ -1521,7 +1523,7 @@ function solutionData(){
   config:{mode:view.mode,equilibrium:cfg.equilibrium,gtoAlgorithm:cfg.gtoAlgorithm,
    scheduledAlphaStart:cfg.scheduledAlphaStart,scheduledAlphaGain:cfg.scheduledAlphaGain,
    scheduledRampLength:cfg.scheduledRampLength,scheduledAveragingPower:cfg.scheduledAveragingPower,
-   useAdaptiveConvergence:cfg.useAdaptiveConvergence,frequencyIncrements:cfg.frequencyIncrements,storageLayout:view.report?.numericStorage?.mode??cfg.storageLayout,
+   useAdaptiveConvergence:cfg.useAdaptiveConvergence,frequencyIncrements:cfg.frequencyIncrements,storageLayout:view.report?.numericStorage?.mode??cfg.storageLayout,storagePrecision:view.report?.numericStorage?.precision??cfg.storagePrecision,
    algorithmRevision:cfg.gtoAlgorithm==='dcfr-2-0.5-2'?'dcfr-2-0.5-2-quadratic-v2':null,
    qreTemperaturePercent:cfg.qreTemperaturePercent,targetExploitabilityPercent:view.solveTargetPercent,
    board:cfg.board.map(C.cardText),pot:cfg.pot,stack:cfg.stack,oopBetSizesPercent:cfg.sizes0,
@@ -1624,7 +1626,7 @@ function restoreSolution(data){
     r.history.some(row=>!Array.isArray(row)||row.length!==2||!Number.isFinite(row[0])||!Number.isFinite(row[1])))
     throw Error('Not a TurnRiverLab solution file.');
  const board=d.board.map(C.cardId),w=d.ranges.map(range=>{const a=new Float64Array(1326);for(const h of range){const [x,y]=h.hand.map(C.cardId);if(x<0||y<0||x===y||!Number.isFinite(h.weight)||h.weight<0||h.weight>1)throw Error('Invalid saved range.');a[C.comboId(x,y)]=h.weight;}return a;});
- const cfg={board,pot:d.pot,stack:d.stack,storageLayout:d.storageLayout??'dense',frequencyIncrements:d.frequencyIncrements,flopSamplingSeed:d.flopSamplingSeed,nodeLocks:d.nodeLocks||[],useSuitIsomorphism:d.useSuitIsomorphism!==false,useRiverHandSymmetry:!!d.useRiverHandSymmetry,
+ const cfg={board,pot:d.pot,stack:d.stack,storageLayout:d.storageLayout??'dense',storagePrecision:d.storagePrecision??'float64',frequencyIncrements:d.frequencyIncrements,flopSamplingSeed:d.flopSamplingSeed,nodeLocks:d.nodeLocks||[],useSuitIsomorphism:d.useSuitIsomorphism!==false,useRiverHandSymmetry:!!d.useRiverHandSymmetry,
   useActionFrequencyPruning:!!d.useActionFrequencyPruning,actionPruneThresholdPercent:d.actionPruneThresholdPercent,actionPruneWarmupPercent:d.actionPruneWarmupPercent,actionPruneWarmupIterations:d.actionPruneWarmupIterations,actionPruneRecheckIterations:d.actionPruneRecheckIterations,actionPrunePlannedIterations:d.actionPrunePlannedIterations,useRegretPruning:!!d.useRegretPruning,sizes0:d.oopBetSizesPercent,sizes1:d.ipBetSizesPercent,turnSizes0:d.oopTurnBetSizesPercent,turnSizes1:d.ipTurnBetSizesPercent,
   turnDonkSizes0:d.oopTurnDonkBetSizesPercent,turnEntryMode:d.turnEntryMode,flopDonkSizes0:d.oopFlopDonkBetSizesPercent,flopEntryMode:d.flopEntryMode,riverDonkSizes0:d.oopRiverDonkBetSizesPercent,riverEntryMode:d.riverEntryMode,flopSizes0:d.oopFlopBetSizesPercent,flopSizes1:d.ipFlopBetSizesPercent,raiseSizes0:d.oopRaiseSizesPercent,raiseSizes1:d.ipRaiseSizesPercent,turnRaiseSizes0:d.oopTurnRaiseSizesPercent,turnRaiseSizes1:d.ipTurnRaiseSizesPercent,flopRaiseSizes0:d.oopFlopRaiseSizesPercent,flopRaiseSizes1:d.ipFlopRaiseSizesPercent,flopTurnSamples:d.flopTurnSamples,flopRiverSamples:d.flopRiverSamples,maxRaises:d.maxRaises,allIn:d.allIn,equilibrium:d.equilibrium||'gto',gtoAlgorithm:d.gtoAlgorithm||'cfrplus',qreTemperaturePercent:d.qreTemperaturePercent||0.05,
   scheduledAlphaStart:d.scheduledAlphaStart??1,scheduledAlphaGain:d.scheduledAlphaGain??0.5,
@@ -1653,6 +1655,7 @@ function restoreSolution(data){
  ['turn-donk-sizes0',cfg.turnDonkSizes0??[]],['flop-donk-sizes0',cfg.flopDonkSizes0??[]],['river-donk-sizes0',cfg.riverDonkSizes0??[]],['flop-sizes0',cfg.flopSizes0??cfg.turnSizes0??cfg.sizes0],['flop-sizes1',cfg.flopSizes1??cfg.turnSizes1??cfg.sizes1],['raise-sizes0',cfg.raiseSizes0??cfg.sizes0],['raise-sizes1',cfg.raiseSizes1??cfg.sizes1],['turn-raise-sizes0',cfg.turnRaiseSizes0??cfg.turnSizes0??cfg.sizes0],['turn-raise-sizes1',cfg.turnRaiseSizes1??cfg.turnSizes1??cfg.sizes1],['flop-raise-sizes0',cfg.flopRaiseSizes0??cfg.flopSizes0??cfg.turnSizes0??cfg.sizes0],['flop-raise-sizes1',cfg.flopRaiseSizes1??cfg.flopSizes1??cfg.turnSizes1??cfg.sizes1]])$(id).value=(val||[]).join(', ');
  $('turn-entry-mode').value=cfg.turnEntryMode||'normal';$('flop-entry-mode').value=cfg.flopEntryMode||'normal';$('river-entry-mode').value=cfg.riverEntryMode||'normal';
  $('storage-layout').value=cfg.storageLayout??'dense';
+ $('storage-precision').value=cfg.storagePrecision??'float64';
  $('suit-isomorphism').checked=cfg.useSuitIsomorphism!==false;
  $('river-hand-symmetry').checked=!!cfg.useRiverHandSymmetry;
  $('action-frequency-pruning').checked=!!cfg.useActionFrequencyPruning;
@@ -1702,6 +1705,7 @@ function applyCheckpointConfig(cfg){
  $('max-nodes').value=cfg.maxNodes;$('memory-limit').value=Math.min(4096,Math.max(2,Math.ceil(cfg.memoryLimitBytes/1048576)||128));
  $('turn-entry-mode').value=cfg.turnEntryMode||'normal';$('flop-entry-mode').value=cfg.flopEntryMode||'normal';$('river-entry-mode').value=cfg.riverEntryMode||'normal';
  $('storage-layout').value=cfg.storageLayout??'dense';
+ $('storage-precision').value=cfg.storagePrecision??'float64';
  $('suit-isomorphism').checked=cfg.useSuitIsomorphism!==false;
  $('river-hand-symmetry').checked=!!cfg.useRiverHandSymmetry;
  $('action-frequency-pruning').checked=!!cfg.useActionFrequencyPruning;
@@ -1809,7 +1813,7 @@ function wire(){
      notify('This solve uses an experimental algorithm. Choose a recommended method before hiding the others.','warn');
    }else setExperimentalAlgorithmVisibility(e.target.checked);
  });
- for(const id of ['qre-temperature','pot','stack','sizes0','sizes1','turn-sizes0','turn-sizes1','turn-donk-sizes0','turn-entry-mode','flop-donk-sizes0','flop-entry-mode','river-donk-sizes0','river-entry-mode','flop-sizes0','flop-sizes1','raise-sizes0','raise-sizes1','turn-raise-sizes0','turn-raise-sizes1','flop-raise-sizes0','flop-raise-sizes1','flop-turn-samples','flop-river-samples','flop-sampling-seed','raises','max-nodes','allin','memory-limit','storage-layout','suit-isomorphism','river-hand-symmetry','action-frequency-pruning','action-prune-threshold','action-prune-warmup','action-prune-recheck','scheduled-alpha-start','scheduled-alpha-gain','scheduled-ramp-length','scheduled-averaging-power','adaptive-convergence','zero-reach-pruning','enable-profile'])$(id).addEventListener('change',()=>{if(id==='pot'||id==='stack'){view.source=null;showSource();}if(id.startsWith('action-prune')){view.fixedActionWarmup=null;view.fixedPrunePlanned=null;}renderBoard();invalidate();});
+ for(const id of ['qre-temperature','pot','stack','sizes0','sizes1','turn-sizes0','turn-sizes1','turn-donk-sizes0','turn-entry-mode','flop-donk-sizes0','flop-entry-mode','river-donk-sizes0','river-entry-mode','flop-sizes0','flop-sizes1','raise-sizes0','raise-sizes1','turn-raise-sizes0','turn-raise-sizes1','flop-raise-sizes0','flop-raise-sizes1','flop-turn-samples','flop-river-samples','flop-sampling-seed','raises','max-nodes','allin','memory-limit','storage-layout','storage-precision','suit-isomorphism','river-hand-symmetry','action-frequency-pruning','action-prune-threshold','action-prune-warmup','action-prune-recheck','scheduled-alpha-start','scheduled-alpha-gain','scheduled-ramp-length','scheduled-averaging-power','adaptive-convergence','zero-reach-pruning','enable-profile'])$(id).addEventListener('change',()=>{if(id==='pot'||id==='stack'){view.source=null;showSource();}if(id.startsWith('action-prune')){view.fixedActionWarmup=null;view.fixedPrunePlanned=null;}renderBoard();invalidate();});
  $('solve-console-copy').addEventListener('click',async()=>{
   const text=view.solveLog;if(!text)return;
   try{
