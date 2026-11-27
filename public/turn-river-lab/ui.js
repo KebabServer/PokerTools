@@ -314,7 +314,10 @@ function renderBenchmark(){
 }
 
 function downloadJson(name,data){
- const href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+ downloadText(name,JSON.stringify(data,null,2),'application/json');
+}
+function downloadText(name,text,type){
+ const href=URL.createObjectURL(new Blob([text],{type}));
  const a=document.createElement('a');a.href=href;a.download=name;document.body.appendChild(a);a.click();a.remove();
  setTimeout(()=>URL.revokeObjectURL(href),30000);
 }
@@ -1369,13 +1372,26 @@ function workerMain(){
  function send(message,transfer){message.runId=runId;hostPostMessage(message,transfer);}
  self.onmessage=function(e){const m=e.data;
   if(m.type==='heuristic-cancel'){if(heuristicJob)heuristicJob.cancelled=true;return;}
+  if(m.type==='heuristic-export'){
+   if(heuristicJob?.snapshot)hostPostMessage({type:'heuristic-snapshot',result:heuristicJob.snapshot()});
+   return;
+  }
   if(m.type==='heuristic-start'){
    if(heuristicJob)return;
    const run=heuristicJob={cancelled:false};
-   createHeuristicTester(core).evaluateStudy(m.request,{compile:compileGame,
+   const single=createHeuristicTester(core),hooks={compile:compileGame,
     yieldControl:()=>new Promise(resolve=>setTimeout(resolve,0)),shouldCancel:()=>run.cancelled,
-    onProgress:progress=>hostPostMessage({type:'heuristic-progress',progress})})
-    .then(result=>hostPostMessage({type:'heuristic-finished',result}),
+    onSnapshot:snapshot=>{run.snapshot=snapshot;},
+    onProgress:progress=>hostPostMessage({type:'heuristic-progress',progress})};
+   const multi=m.mode==='multi'?createMultiFlopTester(core,single):null;
+   const work=multi?(m.planning?multi.prepare(m.request,hooks):multi.evaluate(m.request,hooks)):
+    single.evaluateStudy(m.request,hooks);
+   work.then(result=>{
+     if(multi&&m.planning){
+      const preview=result?{plan:result.meta.plan,fingerprints:result.meta.fingerprints}:null;
+      hostPostMessage({type:'heuristic-prepared',preview});
+     }else hostPostMessage({type:'heuristic-finished',result});
+    },
      error=>hostPostMessage({type:'heuristic-error',message:error.message||String(error)}))
     .finally(()=>{heuristicJob=null;});
    return;
@@ -1494,7 +1510,7 @@ function exploitabilityTargetChips(pot,percent){
  return chips;
 }
 function createSolverWorker(){
- const script=`const createSolverCore=${createSolverCore.toString()};\nconst createHeuristicTester=${createHeuristicTester.toString()};\nconst createCompiledTraversal=${createCompiledTraversal.toString()};\nconst WASM_SOURCE_SIMD=${JSON.stringify(WASM_SOURCE_SIMD)};\nconst WASM_SOURCE_SCALAR=${JSON.stringify(WASM_SOURCE_SCALAR)};\nconst WASM_TRAVERSAL_BYTES=${JSON.stringify(WASM_TRAVERSAL_BYTES)};\nconst WASM_TRAVERSAL_BYTES_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_SCALAR)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR)};\nconst createAdaptiveBatchController=${createAdaptiveBatchController.toString()};\nconst createReportScheduler=${createReportScheduler.toString()};\nconst solverProgress=${solverProgress.toString()};\nconst solutionConverged=${solutionConverged.toString()};\n(${workerMain.toString()})();`;
+ const script=`const createSolverCore=${createSolverCore.toString()};\nconst createHeuristicTester=${createHeuristicTester.toString()};\nconst createMultiFlopTester=${createMultiFlopTester.toString()};\nconst createCompiledTraversal=${createCompiledTraversal.toString()};\nconst WASM_SOURCE_SIMD=${JSON.stringify(WASM_SOURCE_SIMD)};\nconst WASM_SOURCE_SCALAR=${JSON.stringify(WASM_SOURCE_SCALAR)};\nconst WASM_TRAVERSAL_BYTES=${JSON.stringify(WASM_TRAVERSAL_BYTES)};\nconst WASM_TRAVERSAL_BYTES_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_SCALAR)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR)};\nconst createAdaptiveBatchController=${createAdaptiveBatchController.toString()};\nconst createReportScheduler=${createReportScheduler.toString()};\nconst solverProgress=${solverProgress.toString()};\nconst solutionConverged=${solutionConverged.toString()};\n(${workerMain.toString()})();`;
  const blobUrl=URL.createObjectURL(new Blob([script],{type:'text/javascript'}));
  try{return new Worker(blobUrl);}finally{setTimeout(()=>URL.revokeObjectURL(blobUrl),2000);}
 }
@@ -1822,7 +1838,7 @@ function wire(){
  });
  $('diagnostics-toggle').addEventListener('toggle',()=>{if($('diagnostics-toggle').open)drawChart(view.report?.history||[]);});
  $('node-lock-editor').addEventListener('toggle',()=>{if($('node-lock-editor').open)renderNodeLockEditor(getSelected());});
- $('iterations').addEventListener('input',renderSetupSummaries);
+ $('iterations').addEventListener('input',()=>{renderSetupSummaries();heuristicPanel?.invalidatePlan();});
  $('street-mode').addEventListener('change',e=>{
   view.source=null;showSource();view.mode=e.target.value;
   const length=view.mode==='flop'?3:view.mode==='turn'?4:5;
@@ -1999,10 +2015,11 @@ function wire(){
 }
 function init(){
  view.weights[0]=profile('example',0);view.weights[1]=profile('example',1);
- heuristicPanel=createHeuristicPanel(createHeuristicTester(C),{
-  config,game:()=>view.game,maxIterations:()=>Number($('iterations').value),
+ const single=createHeuristicTester(C);
+ heuristicPanel=createHeuristicPanel(single,createMultiFlopTester(C,single),{
+  config,game:()=>view.game,previewGame:cfg=>C.makeGame(cfg,{preview:true}),maxIterations:()=>Number($('iterations').value),
   busy:()=>view.active||view.benchmark?.running||view.sampleStudy?.running,createWorker:createSolverWorker,
-  format:fmt,escapeHtml,cardText:C.cardText,download:downloadJson,
+  format:fmt,escapeHtml,cardText:C.cardText,download:downloadJson,downloadText,
  });
  wire();libWire();storageWire();updateSolverMethod();setSolverTab('solve');renderBoard();renderRangeTab();makeLocalGame();renderExplorer();renderTree();
 }

@@ -3122,6 +3122,6 @@ function createSolverCore() {
   return {RANKS,SUITS,CATEGORY_RANKS,ALL_COMBOS,CATEGORY_IDS,cardId,cardText,rank,comboId,comboCategory,
     boardMask,turnMask,flopMask,boardCombos,compatible,straightHigh,evaluate7,fiveCardCategory,showdownScores,drawPublicChance,buildTree,buildTurnRiverTree,buildFlopTurnRiverTree,makeGame,frequencyStreets,parseFrequencyIncrements,
     terminalCfv,compatibilityMass,rangeValue,averagePolicy,evaluatePolicy,makeReport,makeNodeReport,makeSummary,makeConvergenceCheck,gameSignature,CFRSolver,
-    currentPolicy,currentProbability,rangeWideActionFrequencies,accumulate,traverseCfr,logitResponse,QRE_PROBABILITY_FLOOR,storagePrecisions};
+    currentPolicy,currentProbability,rangeWideActionFrequencies,accumulate,traverseCfr,logitResponse,suitPermutations,QRE_PROBABILITY_FLOOR,storagePrecisions};
 }
 if(typeof window!=='undefined') window.createSolverCore=createSolverCore;

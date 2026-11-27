@@ -6,18 +6,20 @@ const load = name => readFileSync(
     new URL('../../public/turn-river-lab/' + name, import.meta.url), 'utf8',
 )
 
-export const { core, compile, codec, heuristicTester } = runInThisContext(`(() => {
+export const { core, compile, codec, heuristicTester, multiFlopTester } = runInThisContext(`(() => {
   ${load('core.js')}
   ${load('compiled-traversal.js')}
   ${load('wasm-kernel-data.js')}
   ${load('source-kernel-data.js')}
   ${load('checkpoint-format.js')}
   ${load('heuristic-tester.js')}
-  const core = createSolverCore();
+  ${load('heuristic-multi.js')}
+  const core = createSolverCore(), heuristicTester = createHeuristicTester(core);
   return {
     core,
     compile: (game, limit, preference = 'legacy') => createCompiledTraversal(game, WASM_TRAVERSAL_BYTES, limit, preference),
     codec: createCheckpointFormat(),
-    heuristicTester: createHeuristicTester(core),
+    heuristicTester,
+    multiFlopTester: createMultiFlopTester(core, heuristicTester),
   }
 })()`)

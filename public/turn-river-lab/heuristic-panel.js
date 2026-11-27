@@ -1,5 +1,5 @@
 /* Heuristic Tester controls for the Solver's Setup view. */
-function createHeuristicPanel(tester,host) {
+function createHeuristicPanel(tester,multiTester,host) {
   'use strict';
   const $=id=>document.getElementById('heuristic-'+id),panel=document.getElementById('heuristic-tester');
   const {escapeHtml,format,cardText}=host;
@@ -7,7 +7,15 @@ function createHeuristicPanel(tester,host) {
   const seconds=ms=>format(ms/1000,2)+' s';
   const side=player=>player===0?'OOP':'IP';
   const scopeLabel=scope=>scope==='fixed-sampled-flop'?'Fixed sampled game':'Exact full flop game';
-  let choices=new Map(),worker=null,cancelling=false,preview=null,baseline=null,rows=[],result=null;
+  const isMulti=()=>$('mode').value==='multi';
+  const choiceKey=choice=>JSON.stringify([choice?.player,choice?.history,choice?.actions,choice?.actionTotals]);
+  let choices=new Map(),worker=null,cancelling=false,snapshotPending=false,preview=null,baseline=null,rows=[],result=null;
+  const multi=createMultiFlopPanel(multiTester,{...host,status,clearPreview,updateControls:renderControls,running:()=>!!worker,
+    restoreStudy(saved){
+      $('mode').value='multi';$('scope').value=saved.scope;$('target').value=saved.targetWidthPercent;
+      $('input').value=JSON.stringify(saved.candidates,null,2);
+      $('decision').value=choiceKey(saved.selection);clearPreview();renderActions();
+    }});
 
   function status(text,error=false) {
     $('status').textContent=text;
@@ -26,19 +34,21 @@ function createHeuristicPanel(tester,host) {
     $('action-labels').textContent=choice?'Legal action labels · '+choice.actions.join(' · '):'Set up a valid flop game with at least one decision.';
   }
   function renderControls() {
-    for(const id of ['decision','scope','target','input','example','import','preview','run'])$(id).disabled=!!worker;
+    for(const id of ['mode','decision','scope','target','input','example','import','preview','run'])$(id).disabled=!!worker;
     $('example').disabled=$('preview').disabled=$('run').disabled=!!worker||!choices.size;
     $('cancel').hidden=!worker;$('cancel').disabled=cancelling;
-    $('export').disabled=!result?.baseline||!!worker;
+    $('export').disabled=isMulti()?(worker?!multi.canSnapshot():!multi.exportable()):!!worker||!result?.baseline;
     $('import').closest('label').setAttribute('aria-disabled',String(!!worker));
+    $('results').hidden=isMulti()||!baseline;
+    multi.controls(isMulti(),!!worker);
   }
   function refresh() {
-    clearPreview();
+    clearPreview();multi.invalidatePlan();
     if(panel.hidden||!panel.open)return;
     const nodes=tester.flopDecisions(host.game()),select=$('decision'),previous=select.value;
     choices=new Map(nodes.map(node=>{
       const choice=tester.decisionDescriptor(node);
-      return [JSON.stringify([choice.player,choice.history,choice.actions,choice.actionTotals]),choice];
+      return [choiceKey(choice),choice];
     }));
     select.replaceChildren(...Array.from(choices,([value,choice])=>
       new Option(side(choice.player)+' · '+choice.history.join(' → '),value)));
@@ -52,7 +62,7 @@ function createHeuristicPanel(tester,host) {
 
   function parseCandidates(text) {
     const data=JSON.parse(text);
-    const candidates=data?.format==='PokerTools-heuristic-results-v1'?data.candidates:data;
+    const candidates=['PokerTools-heuristic-results-v1',multiTester.format].includes(data?.format)?data.candidates:data;
     if(!Array.isArray(candidates)||!candidates.length)throw Error('Enter a JSON array of one or more candidates.');
     return candidates;
   }
@@ -74,16 +84,21 @@ function createHeuristicPanel(tester,host) {
       ],default:passive},
     ];
     $('input').value=JSON.stringify(candidates,null,2);
-    clearPreview();status('Example loaded. Preview the mixes or run the comparison.');
+    clearPreview();multi.invalidatePlan();status('Example loaded. Preview the mixes or run the comparison.');
   }
   function previewCombos() {
     // The flop action labels and combo coverage are independent of how
     // later runouts are enumerated. Reuse Setup's tree for this preview.
-    preview=tester.compileCandidates(host.game(),selection(),parseCandidates($('input').value));
+    const skipBlockedCombos=isMulti()&&$('exact-policy').value==='skip-blocked';
+    const ranges=isMulti()?multi.ranges():null;
+    const game=ranges?host.previewGame({...tester.referenceConfig({...host.config(),...ranges}),
+      flopTurnSamples:1,flopRiverSamples:1}):host.game();
+    preview=tester.compileCandidates(game,selection(),parseCandidates($('input').value),{skipBlockedCombos});
     $('preview-candidate').replaceChildren(...preview.compiled.map((candidate,i)=>new Option(candidate.name,String(i))));
     $('preview-candidate').selectedIndex=Math.max(0,preview.compiled.findIndex(candidate=>candidate.lock));
     $('combos').hidden=false;$('combos').open=true;renderPreview();
-    status('All candidates validated for this decision.');
+    status(isMulti()?`Preview uses the Setup flop.${preview.skippedCombos.length?` ${preview.skippedCombos.length} blocked exact references skipped.`:''}`:
+      'All candidates validated for this decision.');
   }
   function renderPreview() {
     const candidate=preview?.compiled[$('preview-candidate').selectedIndex];
@@ -103,7 +118,7 @@ function createHeuristicPanel(tester,host) {
   }
 
   function renderResults() {
-    $('results').hidden=!baseline;
+    $('results').hidden=isMulti()||!baseline;
     if(!baseline)return;
     $('baseline').textContent=baseline.label+' · Unrestricted Hero EV '+interval(baseline.data.heroBounds)+' chips · '+
       (baseline.data.reached?'target met':'iteration limit')+' · '+baseline.data.backend;
@@ -120,20 +135,25 @@ function createHeuristicPanel(tester,host) {
   }
 
   function closeWorker() {
-    worker?.terminate();worker=null;cancelling=false;renderControls();
+    worker?.terminate();worker=null;cancelling=false;snapshotPending=false;multi.stop();renderControls();
   }
-  function run() {
+  function run(planning=false) {
     if(worker)return;
     if(host.busy())throw Error('Finish or cancel the current Solver run before comparing heuristics.');
-    const request=startRequest();
+    const base=startRequest(),mode=isMulti()?'multi':'single';
+    const request=mode==='multi'?multi.request(base,planning):base;
     const current=host.createWorker();
-    worker=current;baseline=null;result=null;rows=[];renderResults();renderControls();
-    status('Preparing the baseline game…');
+    worker=current;
+    if(mode==='multi')multi.begin(planning);
+    else {baseline=null;result=null;rows=[];renderResults();}
+    renderControls();
+    status(mode==='multi'?'Preparing the flop collection…':'Preparing the baseline game…');
     current.onmessage=event=>{
       if(worker!==current)return;
       const message=event.data;
       if(message.type==='heuristic-progress'){
         const progress=message.progress;
+        if(mode==='multi'){if(!cancelling)multi.progress(progress);return;}
         if(progress.type==='baseline'){
           baseline={data:progress.baseline,label:scopeLabel(progress.evaluationGame)};renderResults();
         }else if(progress.type==='candidate'){
@@ -144,10 +164,20 @@ function createHeuristicPanel(tester,host) {
             `${phase} · ${progress.name} · ${progress.iteration} / ${progress.maxIterations} iterations`);
         }
       }else if(message.type==='heuristic-finished'){
+        if(mode==='multi'){
+          if(snapshotPending&&message.result.completed.length)
+            host.download('PokerTools-heuristic-flops-progress.json',message.result);
+          multi.finish(message.result);closeWorker();return;
+        }
         result=message.result;rows=result.results;
         if(result.baseline)baseline={data:result.baseline,label:scopeLabel(result.evaluationGame)};
         closeWorker();renderResults();
         status(result.cancelled?'Comparison cancelled.':`Compared ${rows.length} candidates. Values are interval midpoints.`);
+      }else if(message.type==='heuristic-prepared'){
+        multi.prepared(message.preview);closeWorker();
+      }else if(message.type==='heuristic-snapshot'){
+        snapshotPending=false;
+        host.download('PokerTools-heuristic-flops-progress.json',message.result);
       }else if(message.type==='heuristic-error'){
         closeWorker();status(message.message,true);
       }
@@ -156,7 +186,7 @@ function createHeuristicPanel(tester,host) {
       if(worker!==current)return;
       event.preventDefault();closeWorker();status(event.message||'Could not start the Solver worker.',true);
     };
-    try{current.postMessage({type:'heuristic-start',request});}catch(error){closeWorker();throw error;}
+    try{current.postMessage({type:'heuristic-start',request,mode,planning});}catch(error){closeWorker();throw error;}
   }
   function cancel() {
     if(!worker||cancelling)return;
@@ -168,23 +198,32 @@ function createHeuristicPanel(tester,host) {
   }
 
   panel.addEventListener('toggle',()=>{if(panel.open)refresh();});
-  $('decision').addEventListener('change',()=>{clearPreview();renderActions();});
-  $('scope').addEventListener('change',clearPreview);
-  $('input').addEventListener('input',clearPreview);
+  $('mode').addEventListener('change',()=>{clearPreview();renderControls();status('');});
+  $('decision').addEventListener('change',()=>{clearPreview();multi.invalidatePlan();renderActions();});
+  $('scope').addEventListener('change',()=>{clearPreview();multi.invalidatePlan();});
+  $('target').addEventListener('input',multi.invalidatePlan);
+  $('input').addEventListener('input',()=>{clearPreview();multi.invalidatePlan();});
   $('example').addEventListener('click',attempt(loadExample));
   $('preview').addEventListener('click',attempt(previewCombos));
   $('preview-candidate').addEventListener('change',renderPreview);
   $('run').addEventListener('click',attempt(run));
+  $('plan-button').addEventListener('click',attempt(()=>run(true)));
   $('cancel').addEventListener('click',cancel);
-  $('export').addEventListener('click',()=>{if(result?.baseline)host.download('PokerTools-heuristic-results.json',result);});
+  $('export').addEventListener('click',()=>{
+    if(isMulti()&&worker){
+      if(!snapshotPending){snapshotPending=true;worker.postMessage({type:'heuristic-export'});}
+    }
+    else if(isMulti()&&multi.exportable())host.download('PokerTools-heuristic-flops.json',multi.exportData());
+    else if(!isMulti()&&result?.baseline)host.download('PokerTools-heuristic-results.json',result);
+  });
   $('import').addEventListener('change',async event=>{
     const input=event.currentTarget,file=input.files?.[0];
     try{
       if(!file)return;
       const candidates=parseCandidates(await file.text());
       if(worker)return;
-      $('input').value=JSON.stringify(candidates,null,2);clearPreview();status('Candidates imported.');
+      $('input').value=JSON.stringify(candidates,null,2);clearPreview();multi.invalidatePlan();status('Candidates imported.');
     }catch(error){status(error.message,true);}finally{input.value='';}
   });
-  return {refresh,setVisible,running:()=>!!worker};
+  return {refresh,setVisible,invalidatePlan:multi.invalidatePlan,running:()=>!!worker};
 }

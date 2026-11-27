@@ -1,5 +1,7 @@
 # Heuristic Tester v1
 
+Use **Multiple flops** in the same panel to evaluate a collection with range-conditioned weights, aggregate EV-loss bounds, and resume. [Multi-flop guide](heuristic-multi-flop.md)
+
 Open **Solver → Setup**, set **Start from** to **Flop**, and expand **Heuristic Tester**. Pick the IP or OOP decision to lock. **Load example** fills in candidate rules using the legal action labels at that decision. Edit the JSON or import candidates from a file, then use **Preview combos** to inspect each compiled mix. **Run comparison** starts the unrestricted baseline and the candidates in a browser worker. **Export JSON** records the settings, original rules, Hero decision, bounds, and run timings. An exported file's candidates can be imported again.
 
 The reference uses deterministic Float64 Nash/DCFR with the full 49 × 48 ordered public runouts. The tester uses the Setup board, weighted ranges, pot, effective stack, betting tree, storage layout, memory limit, and iteration cap. It starts with every decision free and applies exactly one Hero combo lock for each restricted candidate. QRE, frequency increments, and action culling are disabled in tester runs. Each result measures Hero's EV from the starting flop, so play before and after the selected decision can change in response to the lock.

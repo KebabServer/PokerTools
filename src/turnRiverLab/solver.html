@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#212121">
   <meta name="description" content="A local heads-up Texas Hold'em flop, turn and river solver.">
   <title>TurnRiverLab — Poker Solver</title>
-  <link rel="stylesheet" href="style.css?v=heuristic-tester">
+  <link rel="stylesheet" href="style.css?v=heuristic-multi">
 </head>
 <body>
   <div class="solver-shell">
@@ -217,6 +217,7 @@
             <details class="advanced section-disclosure" id="heuristic-tester" hidden>
               <summary>Heuristic Tester</summary>
               <div class="disclosure-body heuristic-controls">
+                <label>Study<select id="heuristic-mode"><option value="single">Single flop</option><option value="multi">Multiple flops</option></select></label>
                 <label>Hero decision<select id="heuristic-decision"></select></label>
                 <p id="heuristic-action-labels" class="subtle-note"></p>
                 <div class="field-row">
@@ -230,6 +231,34 @@
                   <button type="button" class="secondary small" id="heuristic-preview">Preview combos</button>
                 </div>
                 <p class="subtle-note">Rules use the first match, then the default. The tester uses Float64 DCFR and the iteration limit in Advanced. Only the selected Hero decision is locked.</p>
+                <section id="heuristic-multi-settings" class="heuristic-multi-section" aria-label="Flop collection" hidden>
+                  <div class="field-row">
+                    <label>Flop collection<select id="heuristic-collection"><option value="selected">Selected flops</option><option value="all">All valid flop classes</option></select></label>
+                    <label>Blocked exact combos<select id="heuristic-exact-policy"><option value="strict">Report the board as failed</option><option value="skip-blocked">Skip with a warning</option></select></label>
+                  </div>
+                  <div id="heuristic-listed-boards">
+                    <label>Flops, one per line<textarea id="heuristic-board-list" rows="4" spellcheck="false" placeholder="As 8h 3d"></textarea></label>
+                    <div class="heuristic-buttons">
+                      <button type="button" class="secondary small" id="heuristic-default-boards">Load representative flops</button>
+                      <label class="secondary small file-button">Import flops<input id="heuristic-board-import" type="file" accept=".json,application/json"></label>
+                    </div>
+                  </div>
+                  <label class="toggle-row"><input id="heuristic-collapse" type="checkbox" checked> Combine verified suit-equivalent flops</label>
+                  <label>Loss thresholds <span class="field-unit">% of pot, comma separated</span><input id="heuristic-thresholds" type="text" value="0.1, 0.5, 1"></label>
+                  <div class="heuristic-buttons">
+                    <label class="secondary small file-button">Import original ranges<input id="heuristic-range-import" type="file" accept=".json,application/json"></label>
+                    <button type="button" class="secondary small" id="heuristic-clear-ranges" hidden>Use Setup ranges</button>
+                  </div>
+                  <p id="heuristic-range-note" class="subtle-note">Using the range weights from Setup.</p>
+                  <p class="subtle-note">Supply preflop weights before removing any flop blockers. Preview the solve count before running all valid classes.</p>
+                  <div class="heuristic-buttons">
+                    <button type="button" class="secondary small" id="heuristic-plan-button">Preview collection</button>
+                    <label class="secondary small file-button">Resume JSON<input id="heuristic-resume" type="file" accept=".json,application/json"></label>
+                    <button type="button" class="secondary small" id="heuristic-clear-resume" hidden>Clear saved run</button>
+                  </div>
+                  <p id="heuristic-plan" class="subtle-note"></p>
+                  <p id="heuristic-resume-note" class="subtle-note" hidden></p>
+                </section>
                 <details id="heuristic-combos" hidden>
                   <summary>Compiled combo strategies</summary>
                   <label>Candidate<select id="heuristic-preview-candidate"></select></label>
@@ -240,8 +269,10 @@
                   <button type="button" id="heuristic-run">Run comparison</button>
                   <button type="button" class="secondary" id="heuristic-cancel" hidden>Cancel</button>
                   <button type="button" class="secondary" id="heuristic-export" disabled>Export JSON</button>
+                  <button type="button" class="secondary" id="heuristic-export-csv" hidden disabled>Export CSV</button>
                 </div>
                 <p id="heuristic-status" class="subtle-note" role="status"></p>
+                <p id="heuristic-multi-progress" class="subtle-note" hidden></p>
                 <section id="heuristic-results" aria-label="Heuristic Tester results" hidden>
                   <p id="heuristic-baseline" class="subtle-note"></p>
                   <p id="heuristic-summary" class="subtle-note"></p>
@@ -249,6 +280,33 @@
                     <thead><tr><th scope="col">Candidate</th><th scope="col">Loss (chips)</th><th scope="col">Loss (% pot)</th></tr></thead>
                     <tbody id="heuristic-result-rows"></tbody>
                   </table>
+                </section>
+                <section id="heuristic-multi-results" class="heuristic-multi-section" aria-label="Multi-flop results" hidden>
+                  <p id="heuristic-multi-summary" class="subtle-note"></p>
+                  <p id="heuristic-ranking-note" class="subtle-note" hidden>Aggregates use completed boards. Rankings use interval midpoints. Overlapping intervals are inconclusive.</p>
+                  <table class="heuristic-table" id="heuristic-aggregate-table" aria-label="Aggregate candidate results" hidden>
+                    <thead><tr><th scope="col">Candidate</th><th scope="col">Weighted loss</th><th scope="col">Below thresholds</th></tr></thead>
+                    <tbody id="heuristic-aggregate-rows"></tbody>
+                  </table>
+                  <div id="heuristic-per-flop" hidden>
+                    <div class="field-row">
+                      <label>Candidate<select id="heuristic-board-candidate"></select></label>
+                      <label>Sort flops<select id="heuristic-board-sort"><option value="worst">Highest loss</option><option value="best">Lowest loss</option><option value="mass">Highest probability</option><option value="board">Flop cards</option></select></label>
+                    </div>
+                    <table class="heuristic-table" aria-label="Per-flop results">
+                      <thead><tr><th scope="col">Flop</th><th scope="col">Probability</th><th scope="col">Loss (% pot)</th></tr></thead>
+                      <tbody id="heuristic-board-rows"></tbody>
+                    </table>
+                    <div class="heuristic-buttons" id="heuristic-board-pagination" hidden>
+                      <button type="button" class="secondary small" id="heuristic-prev-page">Previous</button>
+                      <span id="heuristic-board-page"></span>
+                      <button type="button" class="secondary small" id="heuristic-next-page">Next</button>
+                    </div>
+                  </div>
+                  <details id="heuristic-issues" hidden>
+                    <summary id="heuristic-issue-count"></summary>
+                    <ul id="heuristic-issue-list" class="heuristic-scroll"></ul>
+                  </details>
                 </section>
               </div>
             </details>
@@ -363,6 +421,6 @@
   </div>
   <script src="pokertools-host.js?v=solver-layout"></script>
   <script src="flop-combo-order.js"></script>
-  <script src="core.js?v=heuristic-tester"></script><script src="checkpoint-format.js?v=public-chance"></script><script src="wasm-kernel-data.js"></script><script src="source-kernel-data.js?v=public-chance"></script><script src="compiled-traversal.js?v=public-chance"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="heuristic-tester.js?v=1"></script><script src="heuristic-panel.js?v=1"></script><script src="ui.js?v=heuristic-tester"></script>
+  <script src="core.js?v=heuristic-multi"></script><script src="checkpoint-format.js?v=public-chance"></script><script src="wasm-kernel-data.js"></script><script src="source-kernel-data.js?v=public-chance"></script><script src="compiled-traversal.js?v=public-chance"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="heuristic-tester.js?v=2"></script><script src="heuristic-multi.js?v=1"></script><script src="heuristic-multi-panel.js?v=1"></script><script src="heuristic-panel.js?v=2"></script><script src="ui.js?v=heuristic-multi"></script>
 </body>
 </html>

@@ -424,4 +424,9 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .heuristic-table small{display:block;color:var(--muted);margin-top:3px}
 .heuristic-combo-table th:nth-child(2){width:55%}
 #heuristic-status[data-error]{color:#ffb1b1}
+.heuristic-multi-section{margin-top:12px;padding-top:10px;border-top:1px solid var(--border)}
+.heuristic-multi-section .toggle-row{margin:10px 0}
+#heuristic-board-pagination{align-items:center;justify-content:space-between;font-size:12px}
+#heuristic-issues{margin-top:12px;font-size:12px}
+#heuristic-issue-list{padding-left:20px;overflow-wrap:anywhere}
 @media(max-width:420px){.heuristic-buttons>button,.heuristic-buttons>.file-button{min-height:44px}}

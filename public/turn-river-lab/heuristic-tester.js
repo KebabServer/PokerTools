@@ -80,22 +80,31 @@ function createHeuristicTester(core) {
     return mix.map(percentage=>percentage/total*100);
   }
 
+  function exactComboId(value) {
+    const a=typeof value==='string'?core.cardId(value.slice(0,2)):-1;
+    const b=typeof value==='string'?core.cardId(value.slice(2)):-1;
+    if(a<0||b<0||a===b)throw Error(`“${value}” must name two distinct cards, for example AsKd.`);
+    return core.comboId(a,b);
+  }
+
   function matcher(match,context) {
     if(!object(match))throw Error('Each rule needs a match object.');
     if(match.type==='all')return ()=>true;
     if(!Array.isArray(match.values)||!match.values.length||match.values.some(value=>typeof value!=='string'))
       throw Error('Provide a nonempty array of match values.');
-    const {game,player,blocked}=context;
+    const {game,player,blocked,skipBlocked}=context;
     switch(match.type){
       case 'combo': {
-        const ids=new Set(match.values.map(value=>{
-          const a=core.cardId(value.slice(0,2)),b=core.cardId(value.slice(2));
-          if(a<0||b<0||a===b)throw Error(`“${value}” must name two distinct cards, for example AsKd.`);
-          if(blocked.has(a)||blocked.has(b))throw Error(`Combo “${value}” is blocked by the flop.`);
-          const id=core.comboId(a,b);
+        const ids=new Set();
+        for(const value of match.values){
+          const id=exactComboId(value),[a,b]=core.ALL_COMBOS[id];
+          if(blocked.has(a)||blocked.has(b)){
+            if(!skipBlocked)throw Error(`Combo “${value}” is blocked by the flop.`);
+            skipBlocked(value);continue;
+          }
           if(game.players[player].index[id]<0)throw Error(`Combo “${value}” is outside Hero’s range.`);
-          return id;
-        }));
+          ids.add(id);
+        }
         return id=>ids.has(id);
       }
       case 'class': {
@@ -119,10 +128,10 @@ function createHeuristicTester(core) {
     }
   }
 
-  function compileCandidates(game,selection,candidates) {
+  function compileCandidates(game,selection,candidates,{skipBlockedCombos=false}={}) {
     if(!Array.isArray(candidates)||!candidates.length)throw Error('Provide a JSON array with at least one heuristic candidate.');
     const node=selectDecision(game,selection),decision=decisionDescriptor(node),player=node.p,board=game.board;
-    const names=new Set(),blocked=new Set(board),boardRanks=board.map(core.rank).sort((a,b)=>b-a);
+    const names=new Set(),blocked=new Set(board),boardRanks=board.map(core.rank).sort((a,b)=>b-a),skippedCombos=[];
     const ids=game.players[player].ids;
     const traits=ids.map(id=>handTraits(board,boardRanks,core.ALL_COMBOS[id]));
     const compiled=candidates.map((candidate,i)=>{
@@ -145,7 +154,8 @@ function createHeuristicTester(core) {
         const rules=candidate.rules.map((rule,k)=>{
           try {
             if(!object(rule))throw Error('Provide a match and a mix.');
-            return {test:matcher(rule.match,{game,player,blocked}),mix:actionMix(rule.mix,decision.actions)};
+            const skipBlocked=skipBlockedCombos?combo=>skippedCombos.push({candidate:name,rule:k+1,combo}):null;
+            return {test:matcher(rule.match,{game,player,blocked,skipBlocked}),mix:actionMix(rule.mix,decision.actions)};
           }catch(error){throw Error(`Rule ${k+1}. ${error.message}`);}
         });
         const rows=ids.map((id,k)=>{
@@ -157,7 +167,7 @@ function createHeuristicTester(core) {
         return {name,rows,lock:{...decision,board:board.slice(),pot:game.pot,stack:game.stack,comboPercentages}};
       }catch(error){throw Error(`${name}. ${error.message}`);}
     });
-    return {decision,compiled};
+    return {decision,compiled,skippedCombos};
   }
 
   function gameKey(game) {
@@ -196,7 +206,8 @@ function createHeuristicTester(core) {
     return {chips,potPercent:Object.fromEntries(Object.entries(chips).map(([key,value])=>[key,100*value/pot]))};
   }
 
-  async function evaluateStudy({config,selection,candidates,scope='full',maxIterations,targetWidthPercent,initialization='cold'},hooks={}) {
+  async function evaluateStudy({config,selection,candidates,scope='full',maxIterations,targetWidthPercent,
+    initialization='cold',skipBlockedCombos=false},hooks={}) {
     if(!Number.isSafeInteger(maxIterations)||maxIterations<1||maxIterations>10000000)
       throw Error('Set the Solver iteration limit to a whole number from 1 to 10,000,000.');
     if(!Number.isFinite(targetWidthPercent)||targetWidthPercent<0)throw Error('Enter a nonnegative loss interval target.');
@@ -206,10 +217,11 @@ function createHeuristicTester(core) {
     if(!Number.isFinite(solveWidth))throw Error('Loss interval target is too large.');
     const {compile,onProgress=()=>{},yieldControl,shouldCancel=()=>false}=hooks;
     let game=core.makeGame(cfg);
-    const {decision,compiled}=compileCandidates(game,selection,definitions),reference=gameKey(game);
+    const {decision,compiled,skippedCombos}=compileCandidates(game,selection,definitions,{skipBlockedCombos}),reference=gameKey(game);
     const result={format:'PokerTools-heuristic-results-v1',evaluationGame:game.sampledChance?'fixed-sampled-flop':'full-flop',
       config:{...cfg,weights0:Array.from(cfg.weights0),weights1:Array.from(cfg.weights1)},decision,candidates:definitions,
-      gameKey:reference,maxIterations,targetWidthPercent,initialization,baseline:null,results:[],elapsedMs:0,cancelled:false};
+      gameKey:reference,maxIterations,targetWidthPercent,initialization,baseline:null,results:[],elapsedMs:0,cancelled:false,
+      skippedCombos,peakSolverBytes:0};
 
     async function solve(solver,index,name,begin) {
       onProgress({type:'solving',name,index,total:compiled.length,iteration:0,maxIterations});
@@ -235,12 +247,16 @@ function createHeuristicTester(core) {
       }
       return null;
     }
+    function bind(game) {
+      if(compile)game.compiled=compile(game,cfg.memoryLimitBytes);
+      result.peakSolverBytes=Math.max(result.peakSolverBytes,game.memory);
+    }
 
     function finalize(cancelled) {
       result.cancelled=cancelled;result.elapsedMs=now()-started;
       return result;
     }
-    if(compile)game.compiled=compile(game,cfg.memoryLimitBytes);
+    bind(game);
     let baselineSolver=new core.CFRSolver(game);
     result.baseline=await solve(baselineSolver,0,'Unrestricted baseline',started);
     if(!result.baseline)return finalize(true);
@@ -256,7 +272,7 @@ function createHeuristicTester(core) {
         onProgress({type:'preparing',name:candidate.name,index,total:compiled.length});
         const game=core.makeGame({...cfg,nodeLocks:[candidate.lock]});
         assertCandidateGame(game,reference,decision);
-        if(compile)game.compiled=compile(game,cfg.memoryLimitBytes);
+        bind(game);
         const solver=baselineSolver?core.CFRSolver.warmStart(game,baselineSolver):new core.CFRSolver(game);
         equilibrium=await solve(solver,index,candidate.name,begin);
         if(!equilibrium)return finalize(true);
@@ -274,6 +290,6 @@ function createHeuristicTester(core) {
     return finalize(false);
   }
 
-  return {referenceConfig,flopDecisions,decisionDescriptor,compileCandidates,gameKey,assertCandidateGame,
+  return {referenceConfig,flopDecisions,decisionDescriptor,compileCandidates,exactComboId,gameKey,assertCandidateGame,
     heroBounds,evLoss,evaluateStudy};
 }
