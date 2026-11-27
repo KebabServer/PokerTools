@@ -88,6 +88,7 @@ const plans = {
     synthetic('standard', 'turn-symmetric-lock', 300, algorithms, ['--target-pot-percent', '.1']),
     realistic('btn-bb-sampled-one', 230, algorithms),
     realistic('btn-bb-sampled-one-locked', 230, algorithms),
+    synthetic('standard', 'flop-exact-narrow', 120, algorithms, ['--target-pot-percent', '.1']),
   ],
   isa: [
     realistic('btn-bb-sampled-one', 90, ['compact', 'simd', 'native', 'native-scalar', 'native-avx2', 'native-avx512']),

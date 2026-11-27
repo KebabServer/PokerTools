@@ -1,6 +1,6 @@
 # TurnRiverLab v18 benchmark and engineering report
 
-The baseline was `4f68dcc` on `solver/repeated-constrained-solving`. Its 71 tests passed before implementation. The v18 engine was measured from `23be02c`. The v18 suite includes archived weighted combination inputs, public chance settings, numerical layouts, training and evaluation backend names, EV endpoints, range and tree fingerprints, and per-repetition measurements. The production browser build and the new native/JS/WASM parity tests are part of validation.
+The baseline was `4f68dcc` on `solver/repeated-constrained-solving`. Its 71 tests passed before implementation. The v18 numerical engine was measured from `23be02c`. The suite records archived weighted inputs, chance settings, layouts, backends, EV endpoints, fingerprints, and individual measurements. All 85 tests passed with the native addon built. The generated WASM reproduced byte for byte, the production build succeeded, and Chromium completed a worker solve and downloaded its checkpoint. [Machine-readable results](benchmarks/turn-river-v18.json)
 
 ## Benchmark games
 
@@ -53,9 +53,26 @@ One exact bet size per street gave a 33% reduction in estimated engine memory an
 
 The 10-iteration exact one-size widths were 8.75% unrestricted and 4.85% locked in both revisions. Sampled and exact river-only target runs reached their stopping widths in 90 and 30 iterations respectively. Both revisions independently evaluated their trained profiles through JavaScript. Compact WASM saved state in the one-size cases but took longer on the measured target runs. The existing dense WASM backend therefore remains the default.
 
+The data contain 378 independent Float64 re-evaluations. The recorded profile EVs, bound endpoints and unrestricted responses agree with the primary evaluations for those same trained strategies. Cross-precision comparisons compare separately trained strategies and report the differences below.
+
 ### CPU and memory profile
 
 V8 CPU sampling on a 12-iteration exact BTN–BB game attributed 28.5% of v17 sample time to terminal leaves, 11.1% to reach basis construction and 29.6% to the main training visit function. In source-backed compact SIMD WASM, terminal evaluation accounted for 34.3%, training recursion for 39.2%, and decoding the current or average policy for 12.8%. Decision state remains the largest memory allocation. In the one-size exact case the baseline state alone was 451 MiB of a 505 MiB engine estimate. The compact compiler packs 47,535 nodes for that same 57,042-node game. Phase measurements and sampled CPU breakdowns accompany the raw results.
+
+### SIMD and native execution
+
+These are three-run medians for the same compact stored Float64 layout. The exact case ran ten iterations. Independent evaluations agreed on the resulting EV widths.
+
+| Build | Sampled flop ms/iteration | Exact river-betting flop ms/iteration |
+| --- | ---: | ---: |
+| Scalar WASM | 12.94 | 252.27 |
+| SIMD128 WASM | 13.03 | 257.12 |
+| Native, compiler baseline ISA | 8.02 | 159.74 |
+| Native, vectorization disabled | 9.27 | 175.05 |
+| Native, AVX2 | 8.64 | 170.29 |
+| Native, AVX-512 | 8.53 | 187.04 |
+
+The GCC vectorization reports and disassembly confirmed instructions at each requested ISA. A higher ISA offered no consistent end-to-end gain over the native baseline on this host. Compact training uses hand-major persistent banks and action-major scratch. This comparison holds the layout fixed. Cache hit rates, hardware memory bandwidth and branch counters were unavailable on the host. ARM64 remains unmeasured.
 
 ## Exact-flop capacity
 
@@ -63,11 +80,12 @@ V8 CPU sampling on a 12-iteration exact BTN–BB game attributed 28.5% of v17 sa
 | --- | ---: | --- |
 | IP-only river betting | 14,262 | Converged below 0.1% in both revisions |
 | One IP bet size per street | 57,042 | Compact Float64 fits with stored or derived current policy |
-| Two IP flop bet sizes, one IP size on each later street, c-bet lock | 85,563 | Prior engine exceeded 512 MiB. Native derived Float64 traversed two iterations at 484 MiB estimated and 713 MiB peak RSS including validation. The interval was 22.76% of the starting pot. |
-| Two flop sizes, both players have a turn and river size | 191,844 | Prior and new engines exceeded 512 MiB. All-Float32 state reached 998 MiB before the arena and exceeded the tested 1 GiB total budget. |
+| Two IP flop bet sizes, one IP size on each later street, c-bet lock | 85,563 | Prior engine exceeded 512 MiB. Native derived Float64 traversed two iterations at 484 MiB estimated and 710 MiB peak RSS including validation. The interval was 22.76% of the starting pot. |
+| Two IP flop bet sizes, one OOP flop raise, one IP size on each later street, c-bet lock | 142,605 | Native derived Float64 traversed two iterations at 779 MiB estimated and 937 MiB peak RSS including validation. The interval was 34.09%. |
+| Two flop sizes, both players have a turn and river size | 191,844 | All-Float32 compact SIMD WASM exceeded 1 GiB. It traversed two iterations at a 1.25 GiB budget with 1,037 MiB estimated and 1,419 MiB peak RSS including validation. The interval was 136.79%. |
 | Stretch including a flop raise, all-in branches, and a c-bet lock | 717,828 | Prior tree exceeded its 250,000-node cap. Compact built the tree and counted 131,015,101 free canonical rows. Estimated all-Float32 state with prepared metadata was 3.81 GiB before the arena. The 1.5 GiB solves stopped at the numerical budget. |
 
-The 85,563-node solve uses exact private combinations, the full 49 × 48 public chance tree, and the documented BTN–BB preflop inputs. Its later streets are one-sided and its two iterations are a capacity check. The full stretch benchmark and its 0.1% target remain open.
+The capacity rows use exact private combinations, the full 49 × 48 public chance tree, and the documented BTN–BB preflop inputs. The two-iteration runs measure allocation and traversal. The full stretch benchmark and its 0.1% target remain open.
 
 ## High-accuracy solves
 
@@ -85,6 +103,8 @@ These are single isolated runs. The JS column is the time to evaluate the final 
 | Exact, one IP size per street with a c-bet lock | 0.1 | 0.090654 | 70 | 53.35 s | 9.15 s |
 
 The last two solves estimated 337 MiB each for the engine. Their solving peak RSS values were 511 and 592 MiB, and independent evaluation raised the process peaks to 627 and 688 MiB. Fold-zero IP values were 386.253–386.733 chips unrestricted and 364.804–365.303 chips with the 25% c-bet lock. These compatible intervals imply an IP EV loss of 20.951–21.929 chips. The loss interval width is about 0.178% of the starting pot because it includes uncertainty from both solves.
+
+The v17 high-accuracy reference used the same exact games and reached the same verified widths in the same iteration counts. It took 13.89 s for the river-betting game, 73.39 s for one size per street, and 67.93 s with the c-bet lock. Its solving peak RSS values were 251, 694 and 751 MiB respectively. These single high-accuracy runs show the memory tradeoff and give a timing reference. The matched repeated measurements above provide variability.
 
 ## Precision
 
@@ -146,13 +166,15 @@ Both methods identified the same highest-value candidate independently in each s
 
 DCFR remains the reference. Its positive and negative regret discounts and its strategy averaging schedule are applied to exhaustive chance traversals in the exact game. The compact backend also runs the existing CFR+, discounted variants and predictive options. Published PCFR+ couples predictive regret matching with Blackwell approachability. Published DDCFR uses a learned discount policy. The similarly named existing PokerTools heuristic schedules and predictive variant have their own update rules. Direct implementations of the published algorithms would require separate parity and convergence measurements. [Discounted regret minimization](https://arxiv.org/abs/1809.04040) · [Predictive Blackwell approachability](https://ojs.aaai.org/index.php/AAAI/article/view/16676) · [Dynamic Discounted CFR](https://proceedings.iclr.cc/paper_files/paper/2024/hash/a89331e2ecbbd9d9618bc94717a91155-Abstract-Conference.html) · [Hyperparameter schedules](https://ojs.aaai.org/index.php/AAAI/article/view/38784)
 
+At the 0.1% sampled BTN–BB target, the single-run compact SIMD comparisons reached target in 1.35 s for DCFR, 2.26 s for CFR+, 1.28 s for scheduled DCFR, 1.85 s for predictive DCFR and 1.84 s for the α=2, β=0.5, γ=2 variant. With the c-bet lock, the respective times were 1.17 s, 1.73 s, 1.29 s, 1.67 s and 1.90 s. An exact narrow flop reached its 0.1% width in 50–80 iterations across the five variants. The raw results also cover a synthetic narrow river and a symmetric locked turn. Preparation and strategy update costs affect these end-to-end results.
+
 Fixed sampled chance trees are useful for screening. A fresh public sample can also estimate the EV of a fixed full-game strategy if every relevant outcome has nonzero inclusion probability and the evaluation weights account for the sampling design. A stochastic CFR update is a separate operation. For a public sequence drawn with probability `q`, the sampled counterfactual contribution must use its exact chance weight divided by `q`, with blocked private deals contributing zero. A correct implementation also needs a realization-weighted average and a schedule for discounted regrets at unvisited information sets. Full-game exact best responses are the final test of a learned stochastic policy. Taking the maximum over noisy action estimates can bias a best-response estimate. Common random draws reduce noise in comparisons when samples are shared by the corresponding strategies. [MCCFR](https://proceedings.neurips.cc/paper/2009/hash/00411460f7c92d2124a67ea0f4cb5f85-Abstract.html) · [Public chance sampling](https://johanson.ca/publications/poker/2012-aamas-pcs/2012-aamas-pcs.html)
 
 A practical next sampling experiment would draw suit-orbit representatives, weight each member by its actual inclusion probability, and keep the exact-tree row map for every public outcome. This makes exact evaluation possible even for rare runouts. Stratification by public texture can reduce variance with positive probability for every stratum. External sampling also changes the opponent-action estimator, which must account for hand-specific opponent policies in the vectorized engine. Training currently enumerates the configured chance tree.
 
 ## Remaining bottlenecks in priority order
 
-1. **Persistent state across betting histories.** The stretch game requires more than 131 million canonical private-hand rows. Some histories share the same pot and remaining stacks while retaining separate reach and strategy. The next design work should test segmented arenas and representations that preserve independent regrets. Validate exact fallback cases before expanding the full tree.
+1. **Persistent state across betting histories.** The stretch game requires more than 131 million canonical private-hand rows. Some histories share the same pot and remaining stacks while retaining separate reach and strategy. The compiled bridge uses one arena with a 2 GiB address limit. The next design work should test segmented arenas and representations that preserve independent regrets. Validate exact fallback cases before expanding the full tree.
 2. **Repeated terminal and traversal work.** Profile and best responses continue to walk the actual chance tree. Candidate changes near the flop root can alter reach throughout the tree. Investigate sharing immutable payoff metadata across engines, lazily building physical board metadata, and reusing payoff bases only for identical opponent reach and public cards. A reach-dependent cache must include the generation of a reused scratch vector.
 3. **Within-game parallelism.** The existing worker scheduler parallelizes independent games. Within one alternating update, canonical chance subtrees can own disjoint descendant state. Dealt branches must join in a deterministic order before updating ancestor regrets and changing the other player's policy. Sharing a representative with multiple workers would require one writer or an explicit deterministic aggregation rule. Compare a bounded worker pool with independent-game throughput before adding a threaded kernel.
 4. **Learning and candidate accuracy.** Fixed samples and early EV bounds screen candidates within compatible games. Measure revised discount schedules and stochastic updates against the exact Float64 evaluator at the same EV width, including rare or previously unreachable continuations. Cross-seed and cross-fidelity evidence serves screening. Full-game ranking needs comparable exact bounds.
@@ -176,6 +198,8 @@ node scripts/benchmark-turn-river-v18.mjs --group accuracy --repetitions 1 \
   --baseline-source /tmp/pokertools-v17/public/turn-river-lab --revision 23be02c
 node scripts/benchmark-turn-river-v18.mjs --group capacity --repetitions 1 \
   --baseline-source /tmp/pokertools-v17/public/turn-river-lab --revision 23be02c
+node scripts/benchmark-turn-river-v18.mjs --group textures --repetitions 1 --revision 23be02c
+node scripts/benchmark-turn-river-v18.mjs --group algorithms --repetitions 1 --revision 23be02c
 node scripts/benchmark-turn-river-candidates.mjs --backend native --repetitions 3
 ```
 
@@ -190,3 +214,5 @@ node scripts/benchmark-turn-river.mjs --suite repeated --repetitions 3 \
 node scripts/benchmark-turn-river.mjs --suite repeated --repetitions 3 \
   --storage compact --backend native --revision 23be02c
 ```
+
+For the native ISA matrix, use the same compiler and `NODE_INCLUDE` as the baseline addon. Build separate outputs using `NATIVE_OUTPUT` with `CPU_CFLAGS=-fno-tree-vectorize`, `CPU_CFLAGS=-mavx2` and `CPU_CFLAGS='-mavx512f -mavx512bw -mprefer-vector-width=512'`. Supply their paths through `--native-scalar-addon`, `--native-avx2-addon` and `--native-avx512-addon` to `--group isa`.

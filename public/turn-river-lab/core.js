@@ -2408,7 +2408,7 @@ function createSolverCore() {
           const values=acts.map(action=>action[i]),compatibleOpponentMass=mass[i];
           const probabilities=Array.from(strat.subarray(i*a,(i+1)*a));
           hands.push({comboId,opponentReach:compatibleOpponentMass,compatibleOpponentMass,values,
-            conditionalActionEVs:values.map(value=>compatibleOpponentMass>evCutoff?value/compatibleOpponentMass:null),
+            conditionalActionEVs:values.map(value=>compatibleOpponentMass>0?value/compatibleOpponentMass:null),
             probabilities,lockedActionProbabilities:node.lockedMask?.[i]?probabilities.slice():null,
             ownReach:ownReach[i],reachMass:mine.priors[i]*ownReach[i]*compatibleOpponentMass/game.jointZ});
         }

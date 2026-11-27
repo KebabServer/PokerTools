@@ -238,6 +238,7 @@ function run(c, algorithm, repeat, config = null, reused = null) {
   const validationMs = options.independent ? performance.now() - validationStart : null
   return {
     id: c.id, repeat, algorithm, mode: reused?.mode ?? 'cold-fresh', backend: game.compiled?.mode ?? 'javascript',
+    evaluationBackend: summary.evaluationBackend,
     locked: c.lock ?? null, targetExploitability: target, targetIntervalWidth: target * 2,
     reached: targetMs !== null && (validation?.constrainedExploitability ?? gap.exploitability) <= target,
     iterations: solver.iteration, targetMs,

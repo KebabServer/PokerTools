@@ -196,6 +196,7 @@ test('native addon, scalar WASM, SIMD WASM and JS agree on locked weighted turns
     const result = s.solveUntil({ maxIterations: 30 })
     if (backend === 'native') assert.match(result.backend, /^native-compact/)
     if (backend === 'wasm-simd') assert.match(result.backend, /^wasm-source-simd/)
+    assert.equal(result.evaluationBackend, result.backend)
     return result
   })
   for (const result of results.slice(1)) parity(results[0], result, 1e-7)
@@ -218,6 +219,14 @@ test('selected sensitivities report compatible mass, zero-frequency actions and 
   near(actions.groups.selected.reachMass, 1)
   near(actions.groups.selected.deltasFromFirstAction[0], 0)
   assert.equal(s.counterfactualActionValues(0, 'constrainedBest').localSensitivity, false)
+
+  const tiny = prepareGame({ ...river, ...compact,
+    weights0: makeRange([['Ah', 'Ad', 1]]),
+    weights1: makeRange([['Ah', 'Kh', 1], ['Jh', 'Jd', 1e-15]]),
+  }).createSession()
+  const [rare] = tiny.counterfactualActionValues(0, 'profile').hands
+  near(rare.compatibleOpponentMass, 1e-15, 1e-28)
+  near(rare.conditionalActionEVs[0], 50)
 })
 
 test('adaptive checks certify EV-loss bounds and respect cooperative cancellation and budgets', () => {
