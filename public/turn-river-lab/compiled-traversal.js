@@ -12,7 +12,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
       new WebAssembly.Module(Uint8Array.from(atob(source),c=>c.charCodeAt(0)));
     const supported=game.equilibrium==='gto'&&!['optimistic','dcfr-predictive'].includes(game.gtoAlgorithm);
     if(!supported)return null;
-    const decisions=game.nodes.filter(n=>n.compact?.map&&!n.locked);
+    const decisions=game.decisionNodes.filter(n=>n.compact?.map&&!n.locked);
     const maps=new Map(),implicitRows=new Map();
     let used=65536;
     function reserve(bytes,align){used=Math.ceil(used/align)*align;const offset=used;used+=bytes;return offset;}
@@ -40,7 +40,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
     const storage=new Float64Array(buffer,stateOffset,game.stateStorage.length);
     storage.set(game.stateStorage);
     const migrate=arr=>new Float64Array(buffer,stateOffset+arr.byteOffset,arr.length);
-    for(const node of game.nodes)if(node.compact){
+    for(const node of game.decisionNodes)if(node.compact){
       for(const key of ['regret','averageSum','current','previousDelta','qreLog','qreEntropy'])
         if(node[key])node[key]=migrate(node[key]);
     }
@@ -81,7 +81,8 @@ function createCompiledTraversal(game, base64, limitBytes) {
     const seen=new Set();let generation=0,found=false;
     function visit(id,reachKey){
       if(found)return;
-      const node=game.nodes[id];
+      const node=game.nodeAt?game.nodeAt(id):game.nodes[id];
+      if(node.allInSpan)return;
       if(node.terminal){
         if(node.type==='showdown'){
           const key=reachKey+':'+(node.turn??52)+':'+(node.river??52);
@@ -120,7 +121,9 @@ function createCompiledTraversal(game, base64, limitBytes) {
   const memo=new Map();
   function maxDepth(id,p){
     const key=id*2+p;if(memo.has(key))return memo.get(key);
-    const node=game.nodes[id];if(node.terminal)return 0;
+    const node=game.nodeAt?game.nodeAt(id):game.nodes[id];
+    if(node.terminal)return 0;
+    if(node.allInSpan)return (node.street==='deal-turn'?6:3)*maxN*8;
     const children=node.chance?(node.isoGroups?node.isoGroups.map(g=>g.representative.child):node.runouts.map(r=>r.child)):
       node.actions.map(a=>a.child);
     const own=node.chance?3*maxN*8:node.actions.length===1?0:
@@ -129,11 +132,62 @@ function createCompiledTraversal(game, base64, limitBytes) {
     const result=own+rest;memo.set(key,result);return result;
   }
   const scratchBudget=Math.max(2*1024*1024,maxDepth(game.root,0)+maxDepth(game.root,1)+1024*1024);
+  // Native kernels use compact physical indices. Intern only terminal and
+  // chance-only continuations. Every decision keeps a distinct native row.
+  const packed=game.treeStorage.mode==='packed';
+  const nativeNodes=[],indices=new Map(),terminals=new Map(),terminalIndices=new WeakMap(),allInRiver=new Map();
+  let allInFlop;
+  function append(node){
+    const index=nativeNodes.length;nativeNodes.push(node);return index;
+  }
+  function terminalIndex(node){
+    if(terminalIndices.has(node))return terminalIndices.get(node);
+    const key=[node.type,node.winner,node.turn,node.river,...node.c].join('/');
+    if(!terminals.has(key))terminals.set(key,append(node));
+    const index=terminals.get(key);
+    terminalIndices.set(node,index);
+    return index;
+  }
+  function allInRiverIndex(turn,table){
+    if(!allInRiver.has(turn)){
+      const runouts=Array.from(table.cards,card=>({card,weight:table.weight,child:terminalIndex(game.boardTerminal(turn,card))}));
+      allInRiver.set(turn,append({chance:true,runouts,turn,c:[game.stack,game.stack],nativeChildren:true}));
+    }
+    return allInRiver.get(turn);
+  }
+  function nativeIndex(id){
+    if(!packed)return id;
+    const index=indices.get(id);
+    if(index!==undefined)return index;
+    const node=game.nodeAt(id);
+    if(node.terminal){
+      return terminalIndex(node.riverPayoff||node.type==='fold'?node:game.boardTerminal(node.turn,node.river));
+    }
+    if(node.allInSpan){
+      const span=node.allInSpan;
+      if(node.street==='deal-river')return allInRiverIndex(span.turn,span.table);
+      if(allInFlop===undefined){
+        const runouts=Array.from(span.table.cards,card=>({card,weight:span.table.weight,
+          child:allInRiverIndex(card,span.rivers.get(card))}));
+        allInFlop=append({chance:true,runouts,c:span.c,nativeChildren:true});
+      }
+      return allInFlop;
+    }
+    // Virtual river chance nodes below a flop all-in can still be addressed
+    // for subtree evaluation. They share the matching immutable continuation.
+    if(node.chance&&node.treeSlot===undefined)return allInRiverIndex(node.turn,game.riverTables.get(node.turn));
+    const next=append(node);indices.set(id,next);return next;
+  }
+  if(packed){
+    for(const node of game.staticNodes)nativeIndex(node.id);
+    for(const node of game.terminalRecords)terminalIndex(node);
+  }
+  const nativeTree=packed?nativeNodes:game.nodes;
   let layouts=0,runouts=0;
-  for(const pair of game.riverPayoffLayouts.values())for(const l of pair)
+  for(const pair of new Set(game.riverPayoffLayouts.values()))for(const l of pair)
     for(const key of ['mineOrder','oppOrder','groupStart','weakEnd','tieEnd'])layouts+=l[key].byteLength+16;
-  for(const node of game.nodes)if(node.chance)runouts+=node.runouts.length;
-  const staticBudget=1048576+game.nodes.length*160+runouts*64+layouts+maxN*24;
+  for(const node of nativeTree)if(node.chance)runouts+=node.chanceChildren?.length??node.runouts.length;
+  const staticBudget=1048576+nativeTree.length*160+runouts*64+layouts+maxN*24;
   // Bounded v15 caches live in the worker's existing WASM linear memory.
   // No SharedArrayBuffer, threads, dynamic WASM memory growth or backend.
   const cacheBudget=(extendedCache?256*1024:0)+(extendedCache&&reuseShowdowns?16*3*maxN*8:0)+512;
@@ -172,7 +226,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
   const storage=new Float64Array(memory.buffer,131072,stateSize);
   storage.set(game.stateStorage);
   function migrate(arr){return new Float64Array(memory.buffer,131072+arr.byteOffset,arr.length);}
-  for(const node of game.nodes)if(!node.terminal&&!node.chance&&!node.isoAlias){
+  for(const node of game.decisionNodes)if(!node.isoAlias){
     node.regret=migrate(node.regret);node.averageSum=migrate(node.averageSum);
     node.current=migrate(node.current);
     if(node.qreLog){node.qreLog=migrate(node.qreLog);node.qreEntropy=migrate(node.qreEntropy);}
@@ -187,7 +241,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
     if(used+bytes>memory.buffer.byteLength)return null;
     const addr=used;used+=bytes;return addr;
   }
-  const decisions=game.nodes.filter(n=>!n.terminal&&!n.chance&&!n.isoAlias);
+  const decisions=game.decisionNodes.filter(n=>!n.isoAlias);
   const metaAddr=allocate(decisions.length*6*4,4);
   if(metaAddr===null)return null;
   const meta=new Int32Array(memory.buffer,metaAddr,decisions.length*6);
@@ -195,7 +249,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
     const node=decisions[i],o=i*6;
     meta[o]=node.p;meta[o+1]=game.players[node.p].ids.length;
     meta[o+2]=node.actions.length;meta[o+3]=node.regret.byteOffset;
-    meta[o+4]=node.current.byteOffset;meta[o+5]=node.id;
+    meta[o+4]=node.current.byteOffset;meta[o+5]=nativeIndex(node.id);
   }
   let maxActions=1;
   for(const node of decisions)if(node.actions.length>maxActions)maxActions=node.actions.length;
@@ -238,10 +292,10 @@ function createCompiledTraversal(game, base64, limitBytes) {
     const maps=new WeakMap();
     function mapPtr(m){if(!m)return 0;if(!maps.has(m))maps.set(m,copyTyped(m));return maps.get(m);}
     const rows=[];
-    for(const node of game.nodes){
+    for(const node of nativeTree){
       const kind=node.terminal?0:node.chance?2:1;
       let childPtr=0,ng=0,groupPtr=0;
-      if(kind===1)childPtr=ints(node.actions.map(a=>a.child));
+      if(kind===1)childPtr=ints(node.actions.map(a=>nativeIndex(a.child)));
       if(kind===2){
         const groups=node.isoGroups||node.runouts.map(o=>({representative:o,members:[{outcome:o,maps:null}]}));
         const values=[];
@@ -249,7 +303,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
           const members=[];
           for(const m of group.members)members.push(mapPtr(m.maps?.[0]),mapPtr(m.maps?.[1]));
           const rep=group.representative;
-          values.push(rep.child,rep.card??rep.river,ints(members),group.members.length,double(rep.weight??1/44));
+          values.push(node.nativeChildren?rep.child:nativeIndex(rep.child),rep.card??rep.river,ints(members),group.members.length,double(rep.weight??1/44));
         }
         ng=groups.length;groupPtr=ints(values);
       }
@@ -283,10 +337,15 @@ function createCompiledTraversal(game, base64, limitBytes) {
     // Parent paths are structural metadata only; no second numerical game.
     // Follow full uncompressed runouts when computing the reach of a selected
     // canonical decision, even if solving used exact suit-isomorphic orbits.
-    const parents=new Array(game.nodes.length);
-    for(const node of game.nodes)if(!node.terminal){
+    const parents=[];
+    if(!game.parentOf)for(const node of game.staticNodes){
       const edges=node.chance?node.runouts:node.actions;
       for(let k=0;k<edges.length;k++)parents[edges[k].child]=[node.id,k];
+    }
+    function parentEdge(child){
+      if(!game.parentOf)return parents[child];
+      const [id]=game.parentOf(child),node=game.nodes[id],edges=node.chance?node.runouts:node.actions;
+      return [id,edges.findIndex(e=>e.child===child)];
     }
     const handIndices=game.players.map(p=>new Map(Array.from(p.ids,(id,i)=>[id,i])));
     function averageChancePolicy(node,hand,k){
@@ -323,7 +382,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
         exports.set_fused_dcfr_policy(fusedPolicy&&game.compiled?.fusesPolicy!==false?1:0,
           16*Number.EPSILON*Math.max(1,game.pot+game.stack));
       new Float64Array(memory.buffer,reachPtrs[target],reach.length).set(reach);
-      if(!exports.full_traverse(nodePtr,playerPtr,id,target,game.equilibrium==='qre'?1:0,
+      if(!exports.full_traverse(nodePtr,playerPtr,nativeIndex(id),target,game.equilibrium==='qre'?1:0,
           game.qreTemperature,game.pot,weight,reachPtrs[target],outPtrs[target],
           weight?ownPtrs[target]:0,workspaceStart,memory.buffer.byteLength,
           (['dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','dcfr-predictive','lcfr','dcfr-cubic','dcfr-2-0.5-2'].includes(game.gtoAlgorithm))? (game.gtoAlgorithm==='dcfr-predictive'?3:1):game.gtoAlgorithm==='optimistic'?2:0,
@@ -337,7 +396,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
       if(typeof exports.set_zero_reach_pruning==='function')exports.set_zero_reach_pruning(game.zeroReachPruning?1:0);
       const reach=game.players[1-target].priors;
       new Float64Array(memory.buffer,reachPtrs[target],reach.length).set(reach);
-      if(!exports.exact_best_response(nodePtr,playerPtr,game.root,target,regularizedBest?1:0,
+      if(!exports.exact_best_response(nodePtr,playerPtr,nativeIndex(game.root),target,regularizedBest?1:0,
           game.qreTargetTemperature||0,game.pot,reachPtrs[target],outPtrs[target],
           workspaceStart,memory.buffer.byteLength))throw Error('WASM best-response scratch overflow');
       const v=new Float64Array(memory.buffer,outPtrs[target],game.players[target].ids.length);
@@ -350,7 +409,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
       if(typeof exports.set_zero_reach_pruning==='function')exports.set_zero_reach_pruning(game.zeroReachPruning?1:0);
       if(typeof exports.profile_evaluate!=='function')throw Error('Native profile evaluator unavailable');
       new Float64Array(memory.buffer,reachPtrs[target],reach.length).set(reach);
-      if(!exports.profile_evaluate(nodePtr,playerPtr,id,target,game.pot,
+      if(!exports.profile_evaluate(nodePtr,playerPtr,nativeIndex(id),target,game.pot,
           reachPtrs[target],outPtrs[target],workspaceStart,memory.buffer.byteLength))
         throw Error('WASM profile EV scratch overflow');
       return Float64Array.from(new Float64Array(memory.buffer,outPtrs[target],game.players[target].ids.length));
@@ -374,7 +433,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
       }
       const path=[];let cursor=id;
       while(cursor!==game.root){
-        const item=parents[cursor];if(!item)throw Error('Selected node has no root path');
+        const item=parentEdge(cursor);if(!item)throw Error('Selected node has no root path');
         path.push(item);cursor=item[0];
       }
       let oppReach=Float64Array.from(opp.priors),ownReach=new Float64Array(mine.ids.length).fill(1);
@@ -427,7 +486,7 @@ function createCompiledTraversal(game, base64, limitBytes) {
   // evaluators use the same increment-constrained policy as the reports.
   const evaluateNative=full&&!game.hasFrequencyIncrements;
   return {
-    memory,fusesPolicy:!!(full&&fusedPolicy),mode:full?'wasm-full-tree-f64':'wasm-f64',simd:simdEnabled&&typeof exports.kernel_features==='function'&&exports.kernel_features()===1,fullTraversal:!!full,
+    memory,treeRecords:nativeTree.length,fusesPolicy:!!(full&&fusedPolicy),mode:full?'wasm-full-tree-f64':'wasm-f64',simd:simdEnabled&&typeof exports.kernel_features==='function'&&exports.kernel_features()===1,fullTraversal:!!full,
     traverse:full?(id,target,reach,weight)=>full.run(id,target,reach,weight):null,
     profileEV:evaluateNative&&typeof exports.profile_evaluate==='function'?(target)=>full.profileEV(target):null,
     nodeDetail:evaluateNative&&typeof exports.profile_evaluate==='function'?(id)=>full.nodeDetail(id):null,

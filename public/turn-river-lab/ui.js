@@ -628,14 +628,17 @@ function updateSolverMethod(){
  nodeLockStatus();
  $('chart').setAttribute('aria-label','Exploitability versus iterations');
 }
+function treeParents(game){
+ if(game.parentOf)return new Proxy({}, {get:(_,id)=>typeof id==='string'?game.parentOf(Number(id)):undefined});
+ const parents=[];
+ for(const node of game.staticNodes)for(const edge of node.chance?node.runouts:node.actions)
+  parents[edge.child]=[node.id,edge.label];
+ return parents;
+}
 function makeLocalGame(solveConfig=null){
  renderSetupSummaries();
  try{
-  view.game=C.makeGame(solveConfig||config(),{preview:true});view.parents=new Array(view.game.nodes.length).fill(null);
-  for(const node of view.game.nodes)if(!node.terminal){
-   if(node.chance){for(const outcome of node.runouts)view.parents[outcome.child]=[node.id,outcome.label];}
-   else for(const a of node.actions)view.parents[a.child]=[node.id,a.label];
-  }
+  view.game=C.makeGame(solveConfig||config(),{preview:true});view.parents=treeParents(view.game);
   if(view.mode==='flop')$('stat-exploit').title=view.game.sampledChance?'Exploitability is calculated for the sampled chance tree, not the complete flop game.':'';
   $('stat-memory').textContent='≈'+fmt(view.game.memory/1048576,2)+' MiB (estimated)';
   renderPreSolveQuality();
@@ -995,7 +998,7 @@ function renderPreSolveQuality(){
  const el=$('pre-solve-quality');if(!el)return;
  if(!view.game){el.textContent='Game preview unavailable. Check ranges, betting settings, and node budget.';return;}
  const game=view.game,mb=game.memory/1048576,cap=Number($('memory-limit').value),locks=view.nodeLocks.length;
- const parts=[game.nodes.length.toLocaleString()+' tree nodes', (game.numericStorage?.mode??'dense')+' Float64 storage',fmt(mb,1)+' MiB estimated solver state',
+ const parts=[game.nodes.length.toLocaleString()+' logical tree nodes', (game.numericStorage?.mode??'dense')+' Float64 storage',fmt(mb,1)+' MiB estimated solver state',
   (game.isFlop?(game.sampledChance?'Sampled flop, not full-game exact':'Fully enumerated flop'):
    game.isTurn?'All legal river runouts':'Fixed river board'),
   locks?locks+' locked nodes; target is constrained':'No locks; unrestricted Nash target'];
@@ -1528,7 +1531,7 @@ function solutionData(){
    ranges:[cfg.weights0,cfg.weights1].map(w=>Array.from(w,(v,id)=>v>0?{hand:C.ALL_COMBOS[id].map(C.cardText),weight:v}:null).filter(Boolean))},
   results:view.report,tree:view.game.nodes.map(n=>n.terminal?{id:n.id,terminal:n.type,winner:n.winner,pot:n.pot,turn:n.turn,river:n.river,history:n.history}:
     n.chance?{id:n.id,chance:true,pot:n.pot,history:n.history,runouts:n.runouts}:
-   {id:n.id,street:n.street,turn:n.turn,river:n.river,player:n.p,pot:n.pot,toCall:n.toCall,contributions:n.c,history:n.history,actions:n.actions})};
+   {id:n.id,street:n.street,turn:n.turn,river:n.river,player:n.p,pot:n.pot,toCall:n.toCall,contributions:n.c,history:n.history,actions:n.actions.map(a=>({type:a.type,label:a.label,total:a.total,increment:a.increment,child:a.child}))})};
  return data;
 }
 async function exportJSON(){
@@ -1658,8 +1661,8 @@ function restoreSolution(data){
  $('action-prune-recheck').value=cfg.actionPruneRecheckIterations??100;
  view.fixedActionWarmup=cfg.useActionFrequencyPruning?cfg.actionPruneWarmupIterations??null:null;
  view.fixedPrunePlanned=cfg.useActionFrequencyPruning?cfg.actionPrunePlannedIterations??null:null;
- $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled; $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;$('max-nodes').value=Math.max(18000,g.nodes.length);$('iterations').value=r.iteration;view.limit=r.iteration;
- view.fullReportReady=true;view.game=g;view.parents=new Array(g.nodes.length).fill(null);for(const n of g.nodes)if(!n.terminal){for(const a of n.chance?n.runouts:n.actions)view.parents[a.child]=[n.id,a.label];}
+ $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled; $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;$('max-nodes').value=Math.max(18000,g.treeStorage.budgetRecords);$('iterations').value=r.iteration;view.limit=r.iteration;
+ view.fullReportReady=true;view.game=g;view.parents=treeParents(g);
  setSolverTab('tree');showSource();renderBoard();renderRangeTab();renderSetupSummaries();updateReport(r,'finished');$('save-local').disabled=false;setStatus('SAVED SOLUTION','complete');$('progress-text').textContent='Saved result loaded';notify(d.gtoAlgorithm==='dcfr-2-0.5-2'&&d.algorithmRevision!=='dcfr-2-0.5-2-quadratic-v2'?
  'Legacy DCFR 2/0.5/2 solution loaded: before v16.2 this method used linear averaging. Displayed results remain historical; re-solve for corrected quadratic averaging.':
  'Saved solution loaded. Browse strategy or continue from a new street.',
