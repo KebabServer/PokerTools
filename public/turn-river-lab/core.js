@@ -322,10 +322,14 @@ function createSolverCore() {
       return out;}
     return permutations([0,1,2,3]);
   }
-  function exactSuitAutomorphisms(board,players){
-    const out=[];
-    for(const suits of suitPermutations()){
-      if(board.some(c=>suits[c&3] !== (c&3)))continue;
+  const SUIT_PERMUTATIONS=suitPermutations();
+  function exactSuitAutomorphisms(board,players,setwise=false){
+    const out=[],flop=board.slice(0,3),later=board.slice(3);
+    for(const suits of SUIT_PERMUTATIONS){
+      const mapCard=c=>(c&~3)+suits[c&3];
+      if(setwise){
+        if(flop.some(c=>!flop.includes(mapCard(c)))||later.some(c=>mapCard(c)!==c))continue;
+      }else if(board.some(c=>mapCard(c)!==c))continue;
       const maps=[];let ok=true;
       for(const player of players){
         const indices=new Uint16Array(player.ids.length);
@@ -343,17 +347,52 @@ function createSolverCore() {
     }
     return out;
   }
-  function installSuitIsomorphism(tree,board,players,enabled,turnSamples=49,riverSamples=48){
+  // A transform must preserve every physical restriction, including exact
+  // locked mixes at the transformed betting/chance history.
+  function lockPreservingTransforms(tree,transforms){
+    const locked=tree.nodes.filter(node=>node.locked);
+    if(!locked.length||transforms.length<2)return transforms;
+    const parents=new Array(tree.nodes.length);
+    for(const node of tree.nodes)if(!node.terminal){
+      if(node.chance)for(const outcome of node.runouts)parents[outcome.child]=[node.id,outcome.card];
+      else node.actions.forEach((action,k)=>{parents[action.child]=[node.id,k];});
+    }
+    const paths=locked.map(node=>{
+      const path=[];
+      for(let id=node.id;id!==tree.root;){const [parent,edge]=parents[id];path.push(edge);id=parent;}
+      return path.reverse();
+    });
+    return transforms.filter(t=>locked.every((node,i)=>{
+      let destination=tree.nodes[tree.root];
+      for(const edge of paths[i]){
+        const child=destination.chance?destination.runouts.find(o=>o.card===((edge&~3)+t.suits[edge&3]))?.child:
+          destination.actions?.[edge]?.child;
+        if(child===undefined)return false;
+        destination=tree.nodes[child];
+      }
+      if(!destination.locked)return false;
+      const a=node.actions.length,map=t.maps[node.p];
+      if(node.p!==destination.p||a!==destination.actions.length)return false;
+      for(let h=0;h<map.length;h++){
+        if(!!node.lockedMask[h]!==!!destination.lockedMask[map[h]])return false;
+        if(node.lockedMask[h])for(let k=0;k<a;k++)
+          if(lockedProbability(node,h,k)!==lockedProbability(destination,map[h],k))return false;
+      }
+      return true;
+    }));
+  }
+
+  function installSuitIsomorphism(tree,board,players,enabled,turnSamples=49,riverSamples=48,seed=0,automorphisms=null){
     const info={enabled:false,street:board.length===3?'flop':board.length===4?'turn':'river',
       groupSize:1,runouts:board.length===3?49:48,representatives:board.length===3?49:48,
       turnRepresentatives:null,riverRepresentatives:null,savedRunouts:0,aliasedDecisions:0,reason:'not-applicable'};
     if(!enabled){info.reason='disabled';return info;}
     if(board.length!==3&&board.length!==4)return info;
-    const base=exactSuitAutomorphisms(board,players);
+    const base=automorphisms??exactSuitAutomorphisms(board,players);
     const mapCard=(c,t)=>(c&~3)+t.suits[c&3];
-    const selected=board.length===3?selectRunouts(board,turnSamples):[];
+    const selected=board.length===3?selectRunouts(board,turnSamples,seed):[];
     const selectedSet=new Set(selected),riverSets=new Map();
-    if(board.length===3)for(const t of selected)riverSets.set(t,new Set(selectRunouts([...board,t],riverSamples)));
+    if(board.length===3)for(const t of selected)riverSets.set(t,new Set(selectRunouts([...board,t],riverSamples,seed)));
     const transforms=board.length===3?base.filter(t=>{
       // Sampling is only exact under permutations of the complete chance tree,
       // including every conditional river sample for every sampled turn.
@@ -366,6 +405,7 @@ function createSolverCore() {
       return true;
     }):base;
     info.groupSize=transforms.length;
+    if(automorphisms)Object.defineProperty(info,'transforms',{value:transforms});
     if(transforms.length<=1){info.reason=board.length===3&&base.length>1?'sampled-runouts-break-symmetry':'no-exact-symmetry';return info;}
     // The alias tree remains structurally complete. Match chance outcomes by
     // transformed card rather than by runout array index.
@@ -375,10 +415,10 @@ function createSolverCore() {
       if(master.chance||alias.chance){
         if(!master.chance||!alias.chance||master.street!==alias.street||master.runouts.length!==alias.runouts.length)
           throw Error('Isomorphic chance mismatch');
-        const dest=new Map(alias.runouts.map(o=>[o.card,o.child]));
-        for(const item of master.runouts){const child=dest.get(mapCard(item.card,t));
-          if(child===undefined)throw Error('Isomorphic sampled runout mismatch');
-          markPair(item.child,child,t);
+        const dest=new Map(alias.runouts.map(o=>[o.card,o]));
+        for(const item of master.runouts){const other=dest.get(mapCard(item.card,t));
+          if(!other||other.weight!==item.weight)throw Error('Isomorphic chance weight or runout mismatch');
+          markPair(item.child,other.child,t);
         }
         return;
       }
@@ -502,6 +542,102 @@ function createSolverCore() {
       }
       return [street,pair.slice()];
     }));
+  }
+
+  function lockedProbability(node,hand,action){
+    const a=node.actions.length;
+    return node.lockedRows[(node.sharedLock?0:node.lockOffsets?node.lockOffsets[hand]:hand)*a+action];
+  }
+
+  function storagePlan(tree,players,config,equilibrium,gtoAlgorithm,transforms){
+    const requested=config.storageLayout??'auto';
+    if(!['auto','dense','compact'].includes(requested))throw Error('Unknown numerical storage layout.');
+    const qre=equilibrium==='qre',predictive=['optimistic','dcfr-predictive'].includes(gtoAlgorithm);
+    const decisions=tree.nodes.filter(node=>!node.terminal&&!node.chance&&!node.isoAlias);
+    const dense=(node,n=players[node.p].ids.length)=>n*node.actions.length*(3+Number(predictive)+(qre?1:0))+(qre?n:0);
+    const denseSlots=decisions.reduce((sum,node)=>sum+dense(node),0);
+    if(requested==='dense')return {mode:'dense',denseBytes:denseSlots*8};
+    const supports=new Map(),orbits=new Map(),sharedRows=new Map();
+    function boardSupport(turn,river){
+      const key=(turn??52)*53+(river??52);
+      if(supports.has(key))return supports.get(key);
+      const publicLegal=players.map(p=>Uint8Array.from(p.card0,(_,h)=>Number((turn==null||p.cardAllowed[turn][h])&&(river==null||p.cardAllowed[river][h]))));
+      const available=players.map((p,i)=>{
+        const counts=new Uint16Array(52);let total=0;
+        for(let h=0;h<p.ids.length;h++)if(publicLegal[i][h]){total++;counts[p.card0[h]]++;counts[p.card1[h]]++;}
+        return {counts,total};
+      });
+      const support=players.map((p,i)=>publicLegal[i].map((legal,h)=>{
+        if(!legal)return 0;
+        const {counts,total}=available[1-i],other=p.opponentIndex[h];
+        return Number(total-counts[p.card0[h]]-counts[p.card1[h]]+(other>=0?publicLegal[1-i][other]:0)>0);
+      }));
+      supports.set(key,support);return support;
+    }
+    function stabilizer(turn,river){
+      const key=(turn??52)*53+(river??52);
+      if(!orbits.has(key))orbits.set(key,transforms.filter(t=>
+        (turn==null||t.suits[turn&3]===(turn&3))&&(river==null||t.suits[river&3]===(river&3))));
+      return orbits.get(key);
+    }
+    let slots=0,metadata=0,omittedRows=0,orbitRows=0;
+    const layouts=[],noRows={map:null,reps:new Uint16Array(0)};
+    for(const node of decisions){
+      const p=node.p,n=players[p].ids.length,a=node.actions.length;
+      const turn=node.turn,river=node.river,cacheKey=[p,turn??52,river??52].join(':');
+      let layout=!node.locked&&a>1?sharedRows.get(cacheKey):null;
+      if(!layout){
+        if(a===1||node.allLocked)layout=noRows;
+        else{
+          const map=new Int16Array(n).fill(-1),reps=[];
+          const group=stabilizer(turn,river),support=boardSupport(turn,river)[p];
+          for(let h=0;h<n;h++){
+            if(map[h]>=0||!support[h]||node.lockedMask?.[h])continue;
+            const row=reps.length;reps.push(h);map[h]=row;
+            for(const t of group)map[t.maps[p][h]]=row;
+          }
+          layout={map,reps:Uint16Array.from(reps)};
+          metadata+=map.byteLength+layout.reps.byteLength;
+          if(!node.locked)sharedRows.set(cacheKey,layout);
+        }
+      }
+      if(!layout.map)omittedRows+=n;
+      else for(const row of layout.map)if(row<0)omittedRows++;
+      if(layout.map)orbitRows+=n-layout.reps.length-layout.map.reduce((sum,row)=>sum+Number(row<0),0);
+      slots+=dense(node,layout.reps.length);
+      layouts.push(layout);
+    }
+    const saving=denseSlots*8-slots*8-metadata;
+    // Favor the full native dense traversal on small games; use compact rows
+    // when they save substantial space or the dense arena will not fit.
+    if(requested==='auto'&&!(saving>=8*1024*1024&&saving>=denseSlots*8*.25)&&
+        !(config.memoryLimitBytes>0&&denseSlots*8>config.memoryLimitBytes&&saving>0))
+      return {mode:'dense',denseBytes:denseSlots*8};
+    if(requested==='auto')return {mode:'compact'};
+    const implicitShapes=new Set();
+    for(let i=0;i<decisions.length;i++){
+      const node=decisions[i],a=node.actions.length,key=a+':'+(node.frequencyUnits??0);
+      node.compact=layouts[i];
+      if(config.useActionFrequencyPruning||!implicitShapes.has(key))metadata+=a*8;
+      implicitShapes.add(key);
+    }
+    for(const node of tree.nodes)if(node.locked)metadata+=node.lockedRows.byteLength+
+      (node.lockOffsets?.byteLength??0)+node.lockedMask.byteLength;
+    return {mode:'compact',denseBytes:denseSlots*8,slots,metadata,omittedRows,orbitRows};
+  }
+
+  function learnedRow(node,h){
+    if(node.compact)return node.compact.map?.[h]??-1;
+    return node.symmetry?node.symmetry.ordinals[h]:h;
+  }
+  function currentProbability(node,h,k){
+    if(!node.compact)return node.current[h*node.actions.length+k];
+    if(node.lockedMask?.[h])return lockedProbability(node,h,k);
+    const row=learnedRow(node,h);
+    return row<0?node.implicitPolicy[k]:node.current[row*node.actions.length+k];
+  }
+  function learnRepresentative(node,h,row){
+    return node.compact?row>=0&&node.compact.reps[row]===h:!node.symmetry||node.symmetry.master[h]===h;
   }
 
   function makeGame(config, options={}) {
@@ -662,18 +798,23 @@ function createSolverCore() {
           return Math.abs(units-Math.round(units))>1e-8;
         }))throw Error(`Node ${node.id} lock percentages must match the ${frequencyIncrements[node.street??'river'][node.p]}% frequency increment.`);
       };
-      const mask=new Uint8Array(n),rows=new Float64Array(n*a),combos={};
+      const compact=config.storageLayout==='compact',mask=new Uint8Array(n),combos={};
+      let rows;
       if(whole){
         validateMix(entry.percentages);
-        for(let i=0;i<n;i++){
-          mask[i]=1;
-          for(let k=0;k<a;k++)rows[i*a+k]=entry.percentages[k]/100;
-        }
+        mask.fill(1);
+        const count=compact?1:n;
+        rows=new Float64Array(count*a);
+        for(let i=0;i<count;i++)for(let k=0;k<a;k++)rows[i*a+k]=entry.percentages[k]/100;
+        if(compact)node.sharedLock=true;
       }else{
         if(!entry.comboPercentages||typeof entry.comboPercentages!=='object'||Array.isArray(entry.comboPercentages))
           throw Error('Combo locks must be an object keyed by exact combination ID.');
         const ids=Object.keys(entry.comboPercentages);
         if(!ids.length||ids.length>n)throw Error('A combo lock must specify 1 to '+n+' available combinations.');
+        rows=new Float64Array((compact?ids.length:n)*a);
+        if(compact)node.lockOffsets=new Int16Array(n).fill(-1);
+        let nextRow=0;
         for(const idText of ids){
           if(!/^(0|[1-9][0-9]*)$/.test(idText))throw Error('Combo lock ID must be a canonical integer combination ID.');
           const id=Number(idText),index=players[node.p].index[id];
@@ -685,7 +826,9 @@ function createSolverCore() {
             throw Error('Combo lock references a hand blocked by this decision’s public cards.');
           const values=entry.comboPercentages[idText];validateMix(values);
           mask[index]=1;combos[idText]=values.slice();
-          for(let k=0;k<a;k++)rows[index*a+k]=values[k]/100;
+          const row=compact?nextRow++:index;
+          if(compact)node.lockOffsets[index]=row;
+          for(let k=0;k<a;k++)rows[row*a+k]=values[k]/100;
         }
       }
       seenLocks.add(entry.nodeId);
@@ -718,10 +861,19 @@ function createSolverCore() {
     const sparseTraversal=config.useSparseTraversal===undefined
       ? ((!isTurn&&!isFlop)||Math.max(players[0].ids.length,players[1].ids.length)<=64)
       : !!config.useSparseTraversal;
+    const explicitCompact=config.storageLayout==='compact';
+    const allowPublic=config.useSuitIsomorphism!==false&&(isTurn||isFlop);
+    const allowPrivate=isTurn||isFlop?allowPublic:config.useRiverHandSymmetry!==false;
+    const group=allowPrivate&&(explicitCompact||!isTurn&&!isFlop&&config.storageLayout!=='dense')?
+      lockPreservingTransforms(tree,exactSuitAutomorphisms(board,players,true)):[];
+    // Compact uses the same chance-tree automorphisms for public and private rows.
     const suitIsomorphism=installSuitIsomorphism(tree,board,players,
-      !nodeLocks.length&&config.useSuitIsomorphism!==false&&(isTurn||isFlop),turnSamples??49,riverSamples??48);
+      allowPublic&&(explicitCompact||!nodeLocks.length),turnSamples??49,riverSamples??48,flopSamplingSeed,
+      explicitCompact?group:null);
+    const numericStorage=storagePlan(tree,players,config,equilibrium,gtoAlgorithm,suitIsomorphism.transforms??group);
+    if(numericStorage.mode==='compact'&&!explicitCompact)return makeGame({...config,storageLayout:'compact'},options);
     const riverPrivateSymmetry=installRiverPrivateSymmetry(board,players,
-      !!config.useRiverHandSymmetry&&!isTurn&&!isFlop);
+      numericStorage.mode==='dense'&&!!config.useRiverHandSymmetry&&!isTurn&&!isFlop);
     if(riverPrivateSymmetry.enabled&&nodeLocks.length){
       const invariant=tree.nodes.every(node=>{
         if(!node.locked||node.terminal||node.chance)return true;
@@ -730,7 +882,7 @@ function createSolverCore() {
           const m=map.master[h];
           if(node.lockedMask[h]!==node.lockedMask[m])return false;
           if(node.lockedMask[h])for(let k=0;k<a;k++)
-            if(Math.abs(node.lockedRows[h*a+k]-node.lockedRows[m*a+k])>1e-12)return false;
+            if(lockedProbability(node,h,k)!==lockedProbability(node,m,k))return false;
         }
         return true;
       });
@@ -745,12 +897,13 @@ function createSolverCore() {
         const m=riverPrivateSymmetry.enabled?riverPrivateSymmetry.representatives[node.p]:n;
         stateBytes+=(m*2+n)*a*8+(equilibrium==='qre'?(n*a+n)*8:0)+(['optimistic','dcfr-predictive'].includes(gtoAlgorithm)?m*a*8:0);
       }
+      if(numericStorage.mode==='compact')stateBytes=numericStorage.slots*8+numericStorage.metadata;
       const distinctBoards=isFlop?new Set(tree.nodes.filter(n=>n.terminal&&n.type==='showdown')
         .map(n=>n.turn*52+n.river)).size:isTurn?tree.rivers.length:1;
       const approxBoardBytes=distinctBoards*(1326*4+(players[0].ids.length+players[1].ids.length)*12+3000);
       const memory=stateBytes+approxBoardBytes+players.reduce((t,p)=>t+p.ids.length*66,0);
       return {board,isFlop,isTurn,pot,stack,equilibrium,qreTemperaturePercent,gtoAlgorithm,hybridSchedule,zeroReachPruning:!!config.useZeroReachPruning,regretPruning:!!config.useRegretPruning,sparseTraversal,
-        sampledChance:isFlop&&(turnSamples<49||riverSamples<48),
+        sampledChance:isFlop&&(turnSamples<49||riverSamples<48),numericStorage,
         players,...tree,memory,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks,frequencyIncrements,hasFrequencyIncrements,preview:true};
     }
     const scoresByRiver=isTurn?new Array(52).fill(null):null;
@@ -842,27 +995,45 @@ function createSolverCore() {
       const m=riverPrivateSymmetry.enabled?riverPrivateSymmetry.representatives[node.p]:n;
       slots+=m*a*2+n*a+(equilibrium==='qre'?n*a+n:0)+(['optimistic','dcfr-predictive'].includes(gtoAlgorithm)?m*a:0);
     }
+    if(numericStorage.mode==='compact'){slots=numericStorage.slots;memory+=numericStorage.metadata;}
+    else memory+=tree.nodes.reduce((sum,node)=>sum+(node.lockedRows?.byteLength??0)+(node.lockedMask?.byteLength??0),0);
     const projectedMemory=memory+slots*8;
-    if(Number(config.memoryLimitBytes)>0&&projectedMemory>Number(config.memoryLimitBytes))
+    if(Number(config.memoryLimitBytes)>0&&projectedMemory>Number(config.memoryLimitBytes)){
+      if((config.storageLayout??'auto')==='auto')return makeGame({...config,storageLayout:'compact'},options);
       throw Error('Estimated strategy state exceeds the memory budget. Reduce runouts, ranges, bet sizes or raises.');
+    }
     const stateStorage=new Float64Array(slots);
     let nextSlot=0;
+    const implicitRows=new Map();
     function take(count){const view=stateStorage.subarray(nextSlot,nextSlot+count);nextSlot+=count;return view;}
     for(const node of tree.nodes)if(!node.terminal&&!node.chance&&!node.isoAlias){
       const n=players[node.p].ids.length,a=node.actions.length;
-      const m=riverPrivateSymmetry.enabled?riverPrivateSymmetry.representatives[node.p]:n;
+      const m=node.compact?node.compact.reps.length:riverPrivateSymmetry.enabled?riverPrivateSymmetry.representatives[node.p]:n;
+      const currentRows=node.compact?m:n;
       if(riverPrivateSymmetry.enabled)node.symmetry=riverPrivateSymmetry.maps[node.p];
       node.regret=take(m*a);
       node.averageSum=take(m*a);
-      node.current=take(n*a);
+      node.current=take(currentRows*a);
       if(['optimistic','dcfr-predictive'].includes(gtoAlgorithm))node.previousDelta=take(m*a);
-      for(let h=0;h<n;h++)for(let k=0;k<a;k++)node.current[h*a+k]=
-        node.lockedMask?.[h]?node.lockedRows[h*a+k]:1/a;
-      projectFrequencyRows(node,node.current);
+      if(node.compact){
+        const key=a+':'+(node.frequencyUnits??0);
+        if(actionPruning.enabled||!implicitRows.has(key)){
+          const row=new Float64Array(a).fill(1/a);
+          projectFrequencyRows(node,row,false);
+          implicitRows.set(key,row);
+        }
+        node.implicitPolicy=implicitRows.get(key);
+        if(currentRows)node.current.set(node.implicitPolicy,0);
+        for(let off=a;off<node.current.length;off+=a)node.current.copyWithin(off,0,a);
+      }else{
+        for(let h=0;h<n;h++)for(let k=0;k<a;k++)node.current[h*a+k]=
+          node.lockedMask?.[h]?lockedProbability(node,h,k):1/a;
+        projectFrequencyRows(node,node.current);
+      }
       if(equilibrium==='qre'){
-        node.qreLog=take(n*a);
-        node.qreEntropy=take(n);
-        refreshQreNodeCache(node,n);
+        node.qreLog=take(currentRows*a);
+        node.qreEntropy=take(currentRows);
+        refreshQreNodeCache(node,currentRows);
       }
     }
     // Aliased river nodes have no independent numerical state: the report
@@ -880,19 +1051,19 @@ function createSolverCore() {
       qreWarmupIterations:0,
       sizes,turnSizes,turnDonkSizes0,turnEntryMode,flopSizes,flopDonkSizes0,flopEntryMode,riverDonkSizes0,riverEntryMode,raisesByStreet,turnSamples,riverSamples,
       sampledChance:isFlop&&(turnSamples<49||riverSamples<48),maxRaises,allIn,scores,scoresByRiver,scoresByRunout,riverPayoffLayouts,
-      players,...tree,jointZ,memory,stateStorage,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks,frequencyIncrements,hasFrequencyIncrements};
+      players,...tree,jointZ,memory,stateStorage,numericStorage,suitIsomorphism,riverPrivateSymmetry,actionPruning,nodeLocks,frequencyIncrements,hasFrequencyIncrements};
   }
 
   // Convert each hand's normalized action mix to integer units. Whole units
   // are assigned first, then the largest remainders get the remaining units.
   // Equal remainders use action order, so equivalent suit rows stay identical.
   let frequencyRemainders=new Float64Array(0);
-  function projectFrequencyRows(node,policy){
+  function projectFrequencyRows(node,policy,physical=true){
     const units=node.frequencyUnits,a=node.actions.length;
-    if(!units||a===1||node.allLocked)return;
+    if(!units||a===1||(physical&&node.allLocked))return;
     if(frequencyRemainders.length<a)frequencyRemainders=new Float64Array(a);
     for(let h=0,off=0;off<policy.length;h++,off+=a){
-      if(node.lockedMask?.[h])continue;
+      if(physical&&node.lockedMask?.[h])continue;
       let remaining=units;
       for(let k=0;k<a;k++){
         const target=policy[off+k]*units,whole=Math.floor(target);
@@ -998,7 +1169,7 @@ function createSolverCore() {
         return;
       }
       const a=node.actions.length,p=node.p,own=p===0?reach0:reach1,
-        opp=p===0?reach1:reach0,n=own.length,policy=node.current;
+        opp=p===0?reach1:reach0,n=own.length;
       let hasCandidate=false;
       for(let k=0;k<a;k++)if(['bet','raise'].includes(node.actions[k].type)&&
         !node.actions[k].label.startsWith('All-in')){hasCandidate=true;break;}
@@ -1008,15 +1179,15 @@ function createSolverCore() {
         const sums=new Float64Array(a);let denom=0;
         for(let i=0;i<n;i++){
           const w=own[i]*mass[i];if(!(w>0))continue;
-          denom+=w;const off=i*a;
-          for(let k=0;k<a;k++)sums[k]+=w*policy[off+k];
+          denom+=w;
+          for(let k=0;k<a;k++)sums[k]+=w*currentProbability(node,i,k);
         }
         // Unreached nodes cannot provide evidence that an action is rare.
         if(denom>1e-14)frequencies[id]=Array.from(sums,x=>x/denom);
       }
       for(let k=0;k<a;k++){
         const next=new Float64Array(n);
-        for(let i=0;i<n;i++)next[i]=own[i]*policy[i*a+k];
+        for(let i=0;i<n;i++)next[i]=own[i]*currentProbability(node,i,k);
         if(p===0)visit(node.actions[k].child,next,reach1);
         else visit(node.actions[k].child,reach0,next);
       }
@@ -1040,18 +1211,28 @@ function createSolverCore() {
     }
   }
   function enforceActionMask(node,handCount){
-    maskRangeWidePolicy(node,node.current,handCount);
-    projectFrequencyRows(node,node.current);
+    if(node.compact){
+      maskRangeWidePolicy(node,node.current,node.compact.reps.length);
+      projectFrequencyRows(node,node.current,false);
+      if(node.pruned){
+        node.implicitPolicy.fill(1/node.actions.length);
+        maskRangeWidePolicy(node,node.implicitPolicy,1);
+        projectFrequencyRows(node,node.implicitPolicy,false);
+      }
+    }else{
+      maskRangeWidePolicy(node,node.current,handCount);
+      projectFrequencyRows(node,node.current);
+    }
   }
   function restoreLockedPolicy(game,p) {
-    for(const node of game.nodes)if(node.locked&&node.p===p){
+    for(const node of game.nodes)if(node.locked&&!node.compact&&!node.isoAlias&&node.p===p){
       const a=node.actions.length,s=node.current,mask=node.lockedMask,rows=node.lockedRows;
       for(let h=0;h<mask.length;h++)if(mask[h])
         for(let k=0;k<a;k++)s[h*a+k]=rows[h*a+k];
     }
   }
   function currentPolicy(game,p) {
-    if(game.compiled){
+    if(game.compiled&&!game.compiled.compact){
       const nativeRefreshed=game.compiled.updatePolicy(p,game.equilibrium==='qre');
       if(game.hasFrequencyIncrements)for(const node of game.nodes)
         if(node.frequencyUnits&&!node.isoAlias&&node.p===p)enforceActionMask(node,game.players[p].ids.length);
@@ -1065,7 +1246,7 @@ function createSolverCore() {
     }
     for(const node of game.nodes) if(!node.terminal && !node.chance && !node.isoAlias && node.p===p) {
       if(node.allLocked)continue;
-      const a=node.actions.length, n=game.players[p].ids.length, r=node.regret, s=node.current;
+      const a=node.actions.length, n=node.compact?node.compact.reps.length:game.players[p].ids.length, r=node.regret, s=node.current;
       const floor=game.equilibrium==='qre'?QRE_PROBABILITY_FLOOR:0,scale=1-a*floor;
       const tieFloor=game.equilibrium==='qre'?0:16*Number.EPSILON*Math.max(1,game.pot+game.stack);
       // Deterministic regret matching at Float64 noise scale, not a relaxed stopping criterion.
@@ -1082,8 +1263,8 @@ function createSolverCore() {
         }
       }
       enforceActionMask(node,n);
-      if(node.locked){for(let h=0;h<n;h++)if(node.lockedMask[h])
-        for(let k=0;k<a;k++)s[h*a+k]=node.lockedRows[h*a+k];}
+      if(node.locked&&!node.compact){for(let h=0;h<n;h++)if(node.lockedMask[h])
+        for(let k=0;k<a;k++)s[h*a+k]=lockedProbability(node,h,k);}
       if(game.equilibrium==='qre')refreshQreNodeCache(node,n);
     }
   }
@@ -1414,7 +1595,7 @@ function createSolverCore() {
     for(let p=0;p<2;p++) {
       const own=game.players[p], initial=new Float64Array(own.ids.length).fill(1);
       function visit(id,reach) {
-        const node=game.nodes[id];if(node.terminal)return;
+        const node=game.nodes[id];if(node.terminal||node.isoAlias)return;
         if(node.chance){
           for(const outcome of node.runouts){
             const {child}=outcome,card=outcome.card??outcome.river,weight=outcome.weight??(1/44);
@@ -1426,14 +1607,15 @@ function createSolverCore() {
           return;
         }
         if(node.p!==p) { for(const act of node.actions) visit(act.child,reach);return; }
-        const n=own.ids.length,a=node.actions.length,s=node.current,avg=node.averageSum;
+        const n=own.ids.length,a=node.actions.length,avg=node.averageSum;
         for(let i=0;i<n;i++){
-          if(node.symmetry&&node.symmetry.master[i]!==i)continue;
-          for(let j=0;j<a;j++)avg[(node.symmetry?node.symmetry.ordinals[i]:i)*a+j]+=weight*reach[i]*s[i*a+j];
+          const row=learnedRow(node,i);
+          if(!learnRepresentative(node,i,row))continue;
+          for(let j=0;j<a;j++)avg[row*a+j]+=weight*reach[i]*currentProbability(node,i,j);
         }
         for(let j=0;j<a;j++) {
           const next=new Float64Array(n);
-          for(let i=0;i<n;i++) next[i]=reach[i]*s[i*a+j];
+          for(let i=0;i<n;i++) next[i]=reach[i]*currentProbability(node,i,j);
           visit(node.actions[j].child,next);
         }
       }
@@ -1515,7 +1697,7 @@ function createSolverCore() {
       // Algebraic identity: a one-action information set has probability 1,
       // zero entropy, and zero regret. Its reach/CFV need no new branch arrays.
       if(nActions===1){
-        if(node.p===target && ownReach){
+        if(!node.compact&&node.p===target && ownReach){
           const avg=node.averageSum,cur=node.current;
           for(let i=0;i<myN;i++)if(!node.symmetry||node.symmetry.master[i]===i)
             avg[node.symmetry?node.symmetry.ordinals[i]:i]+=averageWeight*ownReach[i]*cur[i];
@@ -1528,7 +1710,7 @@ function createSolverCore() {
         for(let a=0;a<nActions;a++){
           if(node.pruned?.[a])continue;
           const branch=acquire(oppN);
-          for(let i=0;i<oppN;i++)branch[i]=reach[i]*node.current[i*nActions+a];
+          for(let i=0;i<oppN;i++)branch[i]=reach[i]*currentProbability(node,i,a);
           visit(node.actions[a].child,branch,value,ownReach);
           for(let i=0;i<myN;i++){output[i]+=value[i];value[i]=0;}
           release(branch);
@@ -1536,14 +1718,17 @@ function createSolverCore() {
         release(value);
         if(game.equilibrium==='qre'){
           const weighted=kernel.entropyReach,entropy=node.qreEntropy;
-          for(let i=0;i<oppN;i++)weighted[i]=reach[i]*entropy[i];
+          for(let i=0;i<oppN;i++){
+            const row=node.compact?learnedRow(node,i):i;
+            weighted[i]=row<0?0:reach[i]*entropy[row];
+          }
           const mass=compatibilityMassInto(game,target,weighted,node,kernel.mass,kernel.massCards);
           for(let i=0;i<myN;i++)output[i]-=game.qreTemperature*mass[i];
         }
         return;
       }
       const actionVals=new Array(nActions);
-      const current=node.current;
+
       for(let a=0;a<nActions;a++){
         const values=acquire(myN);
         if(node.pruned?.[a]){actionVals[a]=values;continue;}
@@ -1552,10 +1737,9 @@ function createSolverCore() {
           ownNext=acquire(myN);
           const avg=node.averageSum;
           for(let i=0;i<myN;i++){
-            const off=i*nActions+a;
-            if(!node.symmetry||node.symmetry.master[i]===i)
-              avg[(node.symmetry?node.symmetry.ordinals[i]:i)*nActions+a]+=averageWeight*ownReach[i]*current[off];
-            ownNext[i]=ownReach[i]*current[off];
+            const row=learnedRow(node,i),probability=currentProbability(node,i,a);
+            if(learnRepresentative(node,i,row))avg[row*nActions+a]+=averageWeight*ownReach[i]*probability;
+            ownNext[i]=ownReach[i]*probability;
           }
         }
         visit(node.actions[a].child,reach,values,ownNext);
@@ -1571,29 +1755,31 @@ function createSolverCore() {
       // only unlocked hands, preserving fixed combos in the same decision.
       if(node.allLocked){
         for(let i=0;i<myN;i++)for(let a=0;a<nActions;a++)
-          output[i]+=current[i*nActions+a]*actionVals[a][i];
+          output[i]+=currentProbability(node,i,a)*actionVals[a][i];
         for(const arr of actionVals)release(arr);
         return;
       }
-      const r=node.regret,strat=node.current,isQre=game.equilibrium==='qre';
+      const r=node.regret,isQre=game.equilibrium==='qre';
       const mass=isQre?cachedCompatibilityMass(game,target,reach,node,kernel):null;
       // Fused compiled Float64 regret/CFV update. All live vectors and node
       // state reside in WASM memory; fall back without changing the algorithm
       // whenever a scratch buffer is outside the fixed mobile-sized arena.
       const done=!!(game.compiled&&game.compiled.regret(node,actionVals,output,mass,game.qreTemperature));
       if(!done)for(let i=0;i<myN;i++){
-        const off=i*nActions,ro=(node.symmetry?node.symmetry.ordinals[i]:i)*nActions;
+        const row=learnedRow(node,i),ro=row*nActions;
         let v=0;
-        for(let a=0;a<nActions;a++)v+=strat[off+a]*actionVals[a][i];
+        for(let a=0;a<nActions;a++)v+=currentProbability(node,i,a)*actionVals[a][i];
         output[i]=v;
         if(node.lockedMask?.[i])continue;
-        if(node.symmetry&&node.symmetry.master[i]!==i)continue;
+        if(isQre&&node.compact&&row>=0)output[i]+=game.qreTemperature*mass[i]*node.qreEntropy[row];
+        if(!learnRepresentative(node,i,row))continue;
         if(isQre){
           const t=game.qreTemperature*mass[i],floor=QRE_PROBABILITY_FLOOR,scale=1-nActions*floor;
-          output[i]+=t*node.qreEntropy[i];
+          const off=(node.compact?row:i)*nActions;
+          if(!node.compact)output[i]+=t*node.qreEntropy[i];
           let mean=0;
           const logs=node.qreLog;
-          for(let a=0;a<nActions;a++)mean+=(strat[off+a]-floor)/scale*(actionVals[a][i]-t*logs[off+a]);
+          for(let a=0;a<nActions;a++)mean+=(node.current[off+a]-floor)/scale*(actionVals[a][i]-t*logs[off+a]);
           for(let a=0;a<nActions;a++)r[ro+a]=Math.max(0,r[ro+a]+scale*(actionVals[a][i]-t*logs[off+a]-mean));
         }else for(let a=0;a<nActions;a++){
           if(node.pruned?.[a])continue;
@@ -1625,25 +1811,78 @@ function createSolverCore() {
       const n=game.players[node.p].ids.length,a=node.actions.length,arr=new Float64Array(n*a);
       for(let i=0;i<n;i++) {
         let sum=0,off=i*a;
-        const ro=(node.symmetry?node.symmetry.ordinals[i]:i)*a;
-        for(let j=0;j<a;j++)sum+=node.averageSum[ro+j];
-        for(let j=0;j<a;j++)arr[off+j]=sum>0?node.averageSum[ro+j]/sum:node.current[off+j];
+        const ro=learnedRow(node,i)*a;
+        if(ro>=0)for(let j=0;j<a;j++)sum+=node.averageSum[ro+j];
+        for(let j=0;j<a;j++)arr[off+j]=sum>0?node.averageSum[ro+j]/sum:currentProbability(node,i,j);
       }
       maskRangeWidePolicy(node,arr,n);
       projectFrequencyRows(node,arr);
       if(node.locked){for(let i=0;i<n;i++)if(node.lockedMask[i])
-        for(let k=0;k<a;k++)arr[i*a+k]=node.lockedRows[i*a+k];}
+        for(let k=0;k<a;k++)arr[i*a+k]=lockedProbability(node,i,k);}
       result[node.id]=arr;
     }
-    if(includeAliases)for(const node of game.nodes)if(node.isoAlias){
-      const src=result[node.isoAlias.source],map=node.isoAlias.map,a=node.actions.length;
-      if(!src)throw Error('Missing canonical suit-isomorphic strategy');
-      const arr=new Float64Array(src.length);
-      for(let i=0;i<map.length;i++)for(let k=0;k<a;k++)arr[map[i]*a+k]=src[i*a+k];
-      result[node.id]=arr;
+    if(includeAliases){
+      function expand(id){
+        if(result[id])return result[id];
+        const node=game.nodes[id],{source,map}=node.isoAlias,a=node.actions.length;
+        const src=expand(source),arr=new Float64Array(src.length);
+        for(let i=0;i<map.length;i++)for(let k=0;k<a;k++)arr[map[i]*a+k]=src[i*a+k];
+        return result[id]=arr;
+      }
+      for(const node of game.nodes)if(node.isoAlias)expand(node.id);
     }
     return result;
   }
+  // Summary and stopping checks read compact average rows directly. Physical
+  // policy tables are only built for consumers requesting detailed reports.
+  function evaluationPolicy(game){
+    if(game.numericStorage.mode!=='compact')return averagePolicy(game,false);
+    const policy=new Array(game.nodes.length);
+    policy.compact=true;policy.suitIsomorphic=!!game.suitIsomorphism.enabled;
+    for(const node of game.nodes)if(node.compact){
+      const a=node.actions.length,n=node.compact.reps.length,rows=new Float64Array(n*a);
+      for(let r=0;r<n;r++){
+        const off=r*a;let sum=0;
+        for(let k=0;k<a;k++)sum+=node.averageSum[off+k];
+        for(let k=0;k<a;k++)rows[off+k]=sum>0?node.averageSum[off+k]/sum:node.current[off+k];
+      }
+      maskRangeWidePolicy(node,rows,n);
+      projectFrequencyRows(node,rows,false);
+      policy[node.id]=rows;
+    }
+    return policy;
+  }
+
+  const inverseSuitMaps=new WeakMap();
+  function policyAccessor(game,policy,node){
+    const a=node.actions.length;
+    if(!policy.compact){
+      const strat=policy[node.id];
+      return (hand,k)=>strat[hand*a+k];
+    }
+    const inverse=[];
+    while(node.isoAlias){
+      const map=node.isoAlias.map;
+      if(!inverseSuitMaps.has(map)){
+        const backward=new Uint16Array(map.length);
+        for(let h=0;h<map.length;h++)backward[map[h]]=h;
+        inverseSuitMaps.set(map,backward);
+      }
+      inverse.push(inverseSuitMaps.get(map));
+      node=game.nodes[node.isoAlias.source];
+    }
+    const strat=policy[node.id];
+    const read=(hand,k)=>{
+      if(node.lockedMask?.[hand])return lockedProbability(node,hand,k);
+      const row=learnedRow(node,hand);
+      return row<0?node.implicitPolicy[k]:strat[row*a+k];
+    };
+    return inverse.length?(hand,k)=>{
+      for(const map of inverse)hand=map[hand];
+      return read(hand,k);
+    }:read;
+  }
+
   function evaluatePolicy(game,policy,target,mode='profile',records=null,selectedNodeId=null) {
     const mine=game.players[target],opp=game.players[1-target],n=mine.ids.length;
     const evCutoff=game.equilibrium==='qre'?1e-200:1e-14;
@@ -1678,18 +1917,23 @@ function createSolverCore() {
         }
         return out;
       }
-      const a=node.actions.length,strat=policy[id],regularized=mode==='regularizedBest';
+      const a=node.actions.length,regularized=mode==='regularizedBest';
+      const probability=policyAccessor(game,policy,node);
       const capture=!!records&&(selectedNodeId===null||selectedNodeId===id);
       if(node.p!==target) {
         const out=new Float64Array(n), on=opp.ids.length;
         for(let k=0;k<a;k++) {
           const next=new Float64Array(on);
-          for(let j=0;j<on;j++) next[j]=oppReach[j]*strat[j*a+k];
+          for(let j=0;j<on;j++) next[j]=oppReach[j]*probability(j,k);
           const v=visit(node.actions[k].child,next,ownReach);
           for(let i=0;i<n;i++)out[i]+=v[i];
         }
         if(regularized){
-          for(let i=0;i<opp.ids.length;i++)weightedScratch[i]=oppReach[i]*entropyAt(strat,i*a,a);
+          for(let i=0;i<opp.ids.length;i++){
+            let entropy=0;
+            for(let k=0;k<a;k++){const p=probability(i,k);if(p>0)entropy-=p*Math.log(p);}
+            weightedScratch[i]=oppReach[i]*entropy;
+          }
           const m=compatibilityMassInto(game,target,weightedScratch,node,massScratch,massCards);
           for(let i=0;i<n;i++)out[i]-=game.qreTargetTemperature*m[i];
         }
@@ -1700,7 +1944,7 @@ function createSolverCore() {
         let nextOwn=null;
         if(records) {
           nextOwn=new Float64Array(n);
-          for(let i=0;i<n;i++) nextOwn[i]=ownReach[i]*strat[i*a+k];
+          for(let i=0;i<n;i++) nextOwn[i]=ownReach[i]*probability(i,k);
         }
         acts.push(visit(node.actions[k].child,oppReach,nextOwn));
       }
@@ -1713,7 +1957,7 @@ function createSolverCore() {
         let val=freeToDeviate ? -Infinity : 0;
         for(let k=0;k<a;k++) {
           if(freeToDeviate) val=Math.max(val,acts[k][i]);
-          else val+=strat[i*a+k]*acts[k][i];
+          else val+=probability(i,k)*acts[k][i];
         }
         if(regularized&&mass[i]>0){
           const m=mass[i],p=logitResponseActionsInto(acts,i,m,game.qreTargetTemperature,a,qreScratch);
@@ -1725,9 +1969,9 @@ function createSolverCore() {
           const m=mass[i], w=mine.priors[i]*ownReach[i]*m;
           numerator+=mine.priors[i]*ownReach[i]*val;
           denom+=w;
-          for(let k=0;k<a;k++)agg[k]+=w*strat[i*a+k];
+          for(let k=0;k<a;k++)agg[k]+=w*probability(i,k);
           handEntries.push([mine.ids[i],w,m>evCutoff?val/m:null,
-            Array.from({length:a},(_,k)=>strat[i*a+k]),
+            Array.from({length:a},(_,k)=>probability(i,k)),
             Array.from({length:a},(_,k)=>m>evCutoff?acts[k][i]/m:null)]);
         }
       }
@@ -1764,12 +2008,12 @@ function createSolverCore() {
         }
         return {profile:out,best};
       }
-      const a=node.actions.length,strat=policy[id];
+      const a=node.actions.length,probability=policyAccessor(game,policy,node);
       if(node.p!==target){
         const out=new Float64Array(n),best=new Float64Array(n),on=opp.ids.length;
         for(let k=0;k<a;k++){
           const next=new Float64Array(on);
-          for(let j=0;j<on;j++)next[j]=oppReach[j]*strat[j*a+k];
+          for(let j=0;j<on;j++)next[j]=oppReach[j]*probability(j,k);
           const v=visit(node.actions[k].child,next,ownReach);
           for(let i=0;i<n;i++){out[i]+=v.profile[i];best[i]+=v.best[i];}
         }
@@ -1778,7 +2022,7 @@ function createSolverCore() {
       const acts=new Array(a),bestActs=new Array(a);
       for(let k=0;k<a;k++){
         const nextOwn=new Float64Array(n);
-        for(let i=0;i<n;i++)nextOwn[i]=ownReach[i]*strat[i*a+k];
+        for(let i=0;i<n;i++)nextOwn[i]=ownReach[i]*probability(i,k);
         const v=visit(node.actions[k].child,oppReach,nextOwn);
         acts[k]=v.profile;bestActs[k]=v.best;
       }
@@ -1790,17 +2034,17 @@ function createSolverCore() {
         const fixed=!!node.lockedMask?.[i];
         let val=0,br=fixed?0:-Infinity;
         for(let k=0;k<a;k++){
-          val+=strat[i*a+k]*acts[k][i];
-          if(fixed)br+=strat[i*a+k]*bestActs[k][i];
+          val+=probability(i,k)*acts[k][i];
+          if(fixed)br+=probability(i,k)*bestActs[k][i];
           else br=Math.max(br,bestActs[k][i]);
         }
         out[i]=val;best[i]=br;
         const m=mass[i],w=mine.priors[i]*ownReach[i]*m;
         numerator+=mine.priors[i]*ownReach[i]*val;
         denom+=w;
-        for(let k=0;k<a;k++)agg[k]+=w*strat[i*a+k];
+        for(let k=0;k<a;k++)agg[k]+=w*probability(i,k);
         handEntries.push([mine.ids[i],w,m>evCutoff?val/m:null,
-          Array.from({length:a},(_,k)=>strat[i*a+k]),
+          Array.from({length:a},(_,k)=>probability(i,k)),
           Array.from({length:a},(_,k)=>m>evCutoff?acts[k][i]/m:null)]);
       }
       records[id]={id,player:target,rangeEV:denom>evCutoff?numerator/denom:null,
@@ -1816,7 +2060,7 @@ function createSolverCore() {
     return result/game.jointZ;
   }
   function makeReport(game,iteration,elapsedMs,history) {
-    const policy=averagePolicy(game),records=new Array(game.nodes.length);
+    const policy=game.numericStorage.mode==='compact'?evaluationPolicy(game):averagePolicy(game),records=new Array(game.nodes.length);
     const both0=evaluatePolicyWithBest(game,policy,0,records);
     const both1=evaluatePolicyWithBest(game,policy,1,records);
     const value0=rangeValue(game,0,both0.profile),value1=rangeValue(game,1,both1.profile);
@@ -1887,7 +2131,7 @@ function createSolverCore() {
       evBasis:'fold-zero',
       // The reported root EVs sum to the starting pot; this measures any
       // violation of that conservation identity (zero-sum centered internally).
-      zeroSumError:Math.abs(value0+value1),jointZ:game.jointZ,memoryBytes:game.memory,
+      zeroSumError:Math.abs(value0+value1),jointZ:game.jointZ,memoryBytes:game.memory,numericStorage:game.numericStorage,
       history:history||[],nodes:records};
   }
   // A single decision's report, without allocating hand/action records for
@@ -1896,7 +2140,7 @@ function createSolverCore() {
   function makeNodeReport(game,id){
     const node=game.nodes[id];if(!node||node.terminal||node.chance)return null;
     const records=[];
-    evaluatePolicy(game,averagePolicy(game),node.p,'profile',records,id);
+    evaluatePolicy(game,game.numericStorage.mode==='compact'?evaluationPolicy(game):averagePolicy(game),node.p,'profile',records,id);
     const record=records[id];if(!record)return null;
     const offset=game.pot/2+node.c[node.p];
     const shifted=value=>value===null?null:(Math.abs(value+offset)<1e-9?0:value+offset);
@@ -1912,10 +2156,10 @@ function createSolverCore() {
   // tests, plus a compiled average-policy root value.  No detailed nodes,
   // TPWL computation or full report allocation is required.
   function makeSummary(game,iteration,elapsedMs,history){
-    const policy=game.hasFrequencyIncrements?averagePolicy(game,false):null;
+    const policy=!game.compiled?.profileEV||game.hasFrequencyIncrements?evaluationPolicy(game):null;
     const check=makeConvergenceCheck(game,iteration,elapsedMs,history,policy);
     const profile=target=>game.compiled?.profileEV?
-      game.compiled.profileEV(target):rangeValue(game,target,evaluatePolicy(game,policy??averagePolicy(game,false),target));
+      game.compiled.profileEV(target):rangeValue(game,target,evaluatePolicy(game,policy??evaluationPolicy(game),target));
     const value0=profile(0),value1=profile(1),rootOffset=game.pot/2;
     // Individual BR values are optional for this compact summary.  Full
     // reports retain the original detailed accounting and TPWL diagnostics.
@@ -1929,7 +2173,7 @@ function createSolverCore() {
       qreResidualUnits:game.equilibrium==='qre'?'chips-per-player':null,
       qreCompared:0,tpwl:null,tpwlNodes:0,
       br0:null,br1:null,value0:value0+rootOffset,value1:value1+rootOffset,
-      zeroSumError:Math.abs(value0+value1),jointZ:game.jointZ,memoryBytes:game.memory,
+      zeroSumError:Math.abs(value0+value1),jointZ:game.jointZ,memoryBytes:game.memory,numericStorage:game.numericStorage,
       evBasis:'fold-zero',reportLevel:'summary',nodes:[]};
   }
   // Exact, allocation-light Nash/QRE stopping diagnostic. This never builds
@@ -1958,7 +2202,7 @@ function createSolverCore() {
     }
     // Pure actions remain valid on any grid, so an exact best response is
     // still obtained by maximizing over legal actions against this policy.
-    policy??=averagePolicy(game,false);
+    policy??=evaluationPolicy(game);
     const br0=rangeValue(game,0,evaluatePolicy(game,policy,0,locked?'constrainedBest':'best'));
     const br1=rangeValue(game,1,evaluatePolicy(game,policy,1,locked?'constrainedBest':'best'));
     const nashConv=Math.max(0,br0+br1);
@@ -1991,43 +2235,45 @@ function createSolverCore() {
   // configured game, including exact priors, chance structure and algorithm.
   // A pair of independent 32-bit hashes is a corruption/mismatch guard, not a
   // security or authentication primitive. Never load checkpoints from strangers.
-  function gameSignature(game){
+  function gameSignature(game,physicalOnly=false){
     let h1=2166136261>>>0,h2=0x9e3779b9>>>0;
     function feed(x){x=x>>>0;h1=Math.imul(h1^x,16777619)>>>0;h2=(Math.imul((h2+x)>>>0,2246822519)^h2>>>13)>>>0;}
     const dv=new DataView(new ArrayBuffer(8));
     function number(x){dv.setFloat64(0,x,true);feed(dv.getUint32(0,true));feed(dv.getUint32(4,true));}
     function str(s){s=String(s);feed(s.length);for(let i=0;i<s.length;i++)feed(s.charCodeAt(i));}
     str('TurnRiverLab-v12-checkpoint-v1');number(game.pot);number(game.stack);
-    str(game.equilibrium);str(game.gtoAlgorithm);
-    // Reject pre-v16.2 checkpoints for this one variant: their saved averageSum
-    // used linear rather than the advertised quadratic weighting. All other
-    // algorithm signatures remain unchanged for checkpoint compatibility.
-    if(game.gtoAlgorithm==='dcfr-2-0.5-2')str('quadratic-average-v2');
-    if(game.gtoAlgorithm==='dcfr-scheduled-cubic'){
-      str('scheduled-cubic-schedule-v1');
-      number(game.hybridSchedule.alphaStart);number(game.hybridSchedule.alphaGain);
-      number(game.hybridSchedule.rampLength);number(game.hybridSchedule.averagingPower);
-    }
-    number(game.qreTemperaturePercent);feed(game.zeroReachPruning?1:0);feed(game.regretPruning?1:0);
-    if(game.hasFrequencyIncrements){
-      str('action-frequency-increments-v1');
-      for(const street of frequencyStreets.slice(game.board.length-3))
-        for(const step of game.frequencyIncrements[street])number(step);
-    }
-    if(game.riverPrivateSymmetry?.enabled){str('river-private-orbits-v1');feed(game.riverPrivateSymmetry.groupSize);}
-    if(game.nodeLocks?.length){
-      const legacy=game.nodeLocks.every(lock=>lock.percentages);
-      str(legacy?'fixed-node-action-mixtures-v1':'fixed-combo-action-mixtures-v2');feed(game.nodeLocks.length);
-      for(const lock of game.nodeLocks){
-        feed(lock.nodeId);
-        if(lock.percentages){if(!legacy)str('whole');for(const pct of lock.percentages)number(pct);}
-        else {str('combos');const entries=Object.entries(lock.comboPercentages).sort((a,b)=>Number(a[0])-Number(b[0]));
-          feed(entries.length);for(const [id,mix] of entries){feed(Number(id));for(const pct of mix)number(pct);}}
+    if(!physicalOnly){
+      str(game.equilibrium);str(game.gtoAlgorithm);
+      // Reject pre-v16.2 checkpoints for this one variant: their saved averageSum
+      // used linear rather than the advertised quadratic weighting. All other
+      // algorithm signatures remain unchanged for checkpoint compatibility.
+      if(game.gtoAlgorithm==='dcfr-2-0.5-2')str('quadratic-average-v2');
+      if(game.gtoAlgorithm==='dcfr-scheduled-cubic'){
+        str('scheduled-cubic-schedule-v1');
+        number(game.hybridSchedule.alphaStart);number(game.hybridSchedule.alphaGain);
+        number(game.hybridSchedule.rampLength);number(game.hybridSchedule.averagingPower);
       }
+      number(game.qreTemperaturePercent);feed(game.zeroReachPruning?1:0);feed(game.regretPruning?1:0);
+      if(game.hasFrequencyIncrements){
+        str('action-frequency-increments-v1');
+        for(const street of frequencyStreets.slice(game.board.length-3))
+          for(const step of game.frequencyIncrements[street])number(step);
+      }
+      if(game.riverPrivateSymmetry?.enabled){str('river-private-orbits-v1');feed(game.riverPrivateSymmetry.groupSize);}
+      if(game.nodeLocks?.length){
+        const legacy=game.nodeLocks.every(lock=>lock.percentages);
+        str(legacy?'fixed-node-action-mixtures-v1':'fixed-combo-action-mixtures-v2');feed(game.nodeLocks.length);
+        for(const lock of game.nodeLocks){
+          feed(lock.nodeId);
+          if(lock.percentages){if(!legacy)str('whole');for(const pct of lock.percentages)number(pct);}
+          else {str('combos');const entries=Object.entries(lock.comboPercentages).sort((a,b)=>Number(a[0])-Number(b[0]));
+            feed(entries.length);for(const [id,mix] of entries){feed(Number(id));for(const pct of mix)number(pct);}}
+        }
+      }
+      if(game.actionPruning?.enabled){str('range-wide-action-culling-v2');
+        number(game.actionPruning.thresholdPercent);feed(game.actionPruning.warmupIterations);
+        feed(game.actionPruning.recheckIterations);feed(game.actionPruning.plannedIterations);}
     }
-    if(game.actionPruning?.enabled){str('range-wide-action-culling-v2');
-      number(game.actionPruning.thresholdPercent);feed(game.actionPruning.warmupIterations);
-      feed(game.actionPruning.recheckIterations);feed(game.actionPruning.plannedIterations);}
     feed(game.board.length);for(const id of game.board)feed(id);
     feed(game.nodes.length);feed(game.root);
     for(const node of game.nodes){
@@ -2037,7 +2283,13 @@ function createSolverCore() {
       else {feed(node.p);feed(node.actions.length);for(const action of node.actions){feed(action.child);str(action.type);number(action.total??0);}}
     }
     for(const player of game.players){feed(player.ids.length);for(let i=0;i<player.ids.length;i++){feed(player.ids[i]);number(player.priors[i]);}}
-    feed(game.stateStorage.length);
+    if(!physicalOnly&&game.numericStorage?.mode==='compact'){
+      str('compact-f64-v1');
+      for(const node of game.nodes)if(node.isoAlias){
+        feed(node.isoAlias.source);for(const hand of node.isoAlias.map)feed(hand);
+      }else if(node.compact?.map)for(const row of node.compact.map)feed(row+1);
+    }
+    if(!physicalOnly)feed(game.stateStorage.length);
     return h1.toString(16).padStart(8,'0')+h2.toString(16).padStart(8,'0');
   }
   class CFRSolver {
@@ -2117,15 +2369,40 @@ function createSolverCore() {
       this.timings.steps++;
     }
     getProfile(){return {...this.timings,iterations:this.iteration,elapsedMs:Date.now()-this.startTime,
-      memoryBytes:this.game.memory,compiled:this.game.compiled?.mode||'javascript',
+      memoryBytes:this.game.memory,numericStorage:this.game.numericStorage,stateBytes:this.game.stateStorage.byteLength,compiled:this.game.compiled?.mode||'javascript',
       fusedPolicy:!!this.game.compiled?.fusesPolicy,
       nodes:this.game.nodes.length,equilibrium:this.game.equilibrium,algorithm:this.game.gtoAlgorithm};}
     saveCheckpoint(){
       if(!this.game.stateStorage)throw Error('Checkpoint requires a complete numerical game');
       return {format:'TurnRiverLab-checkpoint-v1',fingerprint:gameSignature(this.game),iteration:this.iteration,
-        elapsedMs:Math.max(0,Date.now()-this.startTime),history:this.history.map(pair=>pair.slice()),
+        storageLayout:this.game.numericStorage.mode,elapsedMs:Math.max(0,Date.now()-this.startTime),history:this.history.map(pair=>pair.slice()),
         prunedMasks:this.game.actionPruning?.enabled?this.game.nodes.map(n=>n.pruned?Array.from(n.pruned):null):null,
         storage:Float64Array.from(this.game.stateStorage)};
+    }
+    // Seed a fresh session from a solved policy, never from stale offsets or
+    // averages. Rebuilding the game first revalidates locks and symmetry.
+    static warmStart(game,previous){
+      if(!game.stateStorage||!previous?.game?.stateStorage||game===previous.game||
+         gameSignature(game,true)!==gameSignature(previous.game,true))
+        throw Error('Warm start requires a fresh solver for the same physical tree and weighted ranges.');
+      const previousGame=previous.game;
+      const policy=previousGame.numericStorage.mode==='compact'?evaluationPolicy(previousGame):averagePolicy(previousGame);
+      const solver=new CFRSolver(game);
+      game.currentIteration=0;
+      for(const node of game.nodes)if(!node.terminal&&!node.chance&&!node.isoAlias){
+        node.regret.fill(0);node.averageSum.fill(0);node.previousDelta?.fill(0);
+        if(node.pruned)node.pruned.fill(0);
+        const seed=policyAccessor(previousGame,policy,previousGame.nodes[node.id]);
+        const a=node.actions.length,floor=game.equilibrium==='qre'?QRE_PROBABILITY_FLOOR:0;
+        const n=game.players[node.p].ids.length;
+        for(let h=0;h<n;h++){
+          const row=learnedRow(node,h);
+          if(node.lockedMask?.[h]||!learnRepresentative(node,h,row))continue;
+          for(let k=0;k<a;k++)node.regret[row*a+k]=Math.max(0,seed(h,k)-floor);
+        }
+      }
+      currentPolicy(game,0);currentPolicy(game,1);
+      return solver;
     }
     static resume(game,checkpoint){
       if(!checkpoint||checkpoint.format!=='TurnRiverLab-checkpoint-v1')throw Error('Unsupported checkpoint format');

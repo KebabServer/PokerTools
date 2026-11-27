@@ -2,6 +2,69 @@
 function createCompiledTraversal(game, base64, limitBytes) {
   'use strict';
   limitBytes=Number(limitBytes)||0;
+  if(game.numericStorage?.mode==='compact')return compactTraversal();
+
+  function compactTraversal(){
+    if(typeof WebAssembly==='undefined'||typeof atob!=='function')return null;
+    // Generated from scripts/solver/compact-f64.wat by the documented build command.
+    const source='AGFzbQEAAAABFwJgDH9/f39/f39/f398fABgA39/fwF8Ag8BA2VudgZtZW1vcnkCAAEDAwIAAQcKAQZ1cGRhdGUAAAqgAgKGAgIHfwJ8AkADQCAMIABPDQEgAiAMQQF0ai4BACEOIA4gAWxBA3QhESAGIAQgEWogDkEASBshD0QAAAAAAAAAACETQQAhDQNAIBMgDyANQQN0aisDACAHIA0gDBABoqAhEyANQQFqIQ0gDSABSQ0ACyAIIAxBA3RqIBM5AwACQCAOQQBIDQAgDCADIA5BAXRqLwEARw0AIAUgEWohEEEAIQ0DQCAQIA1BA3RqIRIgEisDACAHIA0gDBABIBOhoCEUIBIgCQR8IBQgCiALIBREAAAAAAAAAABkG6IFRAAAAAAAAAAAIBSlCzkDACANQQFqIQ0gDSABSQ0ACwsgDEEBaiEMDAALCwsWACAAIAFBAnRqKAIAIAJBA3RqKwMACw==';
+    const module=createCompiledTraversal._compactModule??=
+      new WebAssembly.Module(Uint8Array.from(atob(source),c=>c.charCodeAt(0)));
+    const supported=game.equilibrium==='gto'&&!['optimistic','dcfr-predictive'].includes(game.gtoAlgorithm);
+    if(!supported)return null;
+    const decisions=game.nodes.filter(n=>n.compact?.map&&!n.locked);
+    const maps=new Map(),implicitRows=new Map();
+    let used=65536;
+    function reserve(bytes,align){used=Math.ceil(used/align)*align;const offset=used;used+=bytes;return offset;}
+    const stateOffset=reserve(game.stateStorage.byteLength,8);
+    const maxActions=decisions.reduce((max,n)=>Math.max(max,n.actions.length),1);
+    const actionTable=reserve(maxActions*4,4);
+    const descriptors=new Map();
+    for(const node of decisions){
+      const {map,reps}=node.compact;
+      if(!maps.has(map))maps.set(map,[reserve(map.byteLength,2),reserve(reps.byteLength,2),reps]);
+      if(!implicitRows.has(node.implicitPolicy))implicitRows.set(node.implicitPolicy,reserve(node.implicitPolicy.byteLength,8));
+      descriptors.set(node,[...maps.get(map),implicitRows.get(node.implicitPolicy)]);
+    }
+    const pages=Math.ceil((used+2*1024*1024)/65536);
+    const extra=pages*65536-game.stateStorage.byteLength;
+    if(!decisions.length||(limitBytes>0&&game.memory+extra>limitBytes))return null;
+    const memory=new WebAssembly.Memory({initial:pages,maximum:pages});
+    const update=new WebAssembly.Instance(module,{env:{memory}}).exports.update;
+    const buffer=memory.buffer;
+    for(const [map,[mapPtr,repsPtr,reps]] of maps){
+      new Int16Array(buffer,mapPtr,map.length).set(map);
+      new Uint16Array(buffer,repsPtr,reps.length).set(reps);
+    }
+    for(const [row,ptr] of implicitRows)new Float64Array(buffer,ptr,row.length).set(row);
+    const storage=new Float64Array(buffer,stateOffset,game.stateStorage.length);
+    storage.set(game.stateStorage);
+    const migrate=arr=>new Float64Array(buffer,stateOffset+arr.byteOffset,arr.length);
+    for(const node of game.nodes)if(node.compact){
+      for(const key of ['regret','averageSum','current','previousDelta','qreLog','qreEntropy'])
+        if(node[key])node[key]=migrate(node[key]);
+    }
+    game.stateStorage=storage;
+    game.memory+=extra;
+    const actionPtrs=new Uint32Array(buffer,actionTable,maxActions);
+    const dcfr=['dcfr','dcfr-scheduled','dcfr-scheduled-cubic','dcfr-adaptive','lcfr','dcfr-cubic','dcfr-2-0.5-2'].includes(game.gtoAlgorithm);
+    return {
+      memory,compact:true,mode:'wasm-compact-f64',fullTraversal:false,fusesPolicy:false,
+      allocateVector(n){
+        if(used+n*8+8>buffer.byteLength)return new Float64Array(n);
+        return new Float64Array(buffer,reserve(n*8,8),n);
+      },
+      regret(node,values,output,mass){
+        if(mass||(!dcfr&&game.gtoAlgorithm!=='cfrplus')||node.pruned?.some(x=>x)||
+           !descriptors.has(node)||output.buffer!==buffer||values.some(v=>v.buffer!==buffer))return false;
+        const [map,reps,,implicit]=descriptors.get(node);
+        for(let a=0;a<values.length;a++)actionPtrs[a]=values[a].byteOffset;
+        update(output.length,values.length,map,reps,node.current.byteOffset,node.regret.byteOffset,
+          implicit,actionTable,output.byteOffset,Number(dcfr),game._positiveDiscount??0,game._negativeDiscount??0);
+        return true;
+      }
+    };
+  }
   // River-only private-hand orbit compression remains a reference-JS layout.
   // Whole-action culling uses native action masks and can stay compiled.
   if(game.riverPrivateSymmetry?.enabled)return null;

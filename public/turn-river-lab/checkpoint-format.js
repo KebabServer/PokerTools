@@ -7,7 +7,7 @@ function createCheckpointFormat(){
  function checksum(bytes){let h=2166136261>>>0;for(let i=0;i<bytes.length;i++)h=Math.imul(h^bytes[i],16777619)>>>0;return h.toString(16).padStart(8,'0');}
  function encode(checkpoint,config){
   if(checkpoint.format!=='TurnRiverLab-checkpoint-v1'||(!ArrayBuffer.isView(checkpoint.storage)||checkpoint.storage.BYTES_PER_ELEMENT!==8))throw Error('Invalid checkpoint');
-  const safeConfig={...config,weights0:Array.from(config.weights0),weights1:Array.from(config.weights1)};
+  const safeConfig={...config,storageLayout:checkpoint.storageLayout??config.storageLayout??'dense',weights0:Array.from(config.weights0),weights1:Array.from(config.weights1)};
   const header={format:checkpoint.format,fingerprint:checkpoint.fingerprint,iteration:checkpoint.iteration,
     elapsedMs:checkpoint.elapsedMs,history:checkpoint.history,prunedMasks:checkpoint.prunedMasks??null,config:safeConfig,storageLength:checkpoint.storage.length,
     stateChecksum:checksum(new Uint8Array(checkpoint.storage.buffer,checkpoint.storage.byteOffset,checkpoint.storage.byteLength))};
@@ -32,7 +32,7 @@ function createCheckpointFormat(){
   if(checksum(bytes.subarray(headBytes+length))!==header.stateChecksum)throw Error('Checkpoint state checksum mismatch (damaged file)');
   const state=new Float64Array(n),offset=headBytes+length;
   for(let i=0;i<n;i++)state[i]=v.getFloat64(offset+i*8,true);
-  return {config:{...header.config,weights0:Float64Array.from(header.config.weights0),weights1:Float64Array.from(header.config.weights1)},
+  return {config:{...header.config,storageLayout:header.config.storageLayout??'dense',weights0:Float64Array.from(header.config.weights0),weights1:Float64Array.from(header.config.weights1)},
     checkpoint:{format:header.format,fingerprint:header.fingerprint,iteration:header.iteration,
       elapsedMs:header.elapsedMs,history:header.history,prunedMasks:header.prunedMasks??null,storage:state}};
  }
