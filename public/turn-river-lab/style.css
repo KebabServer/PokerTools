@@ -95,7 +95,7 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .control-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:16px 0}
 .progress-track{height:6px;background:#343434;border-radius:10px;overflow:hidden}
 .progress-track>div{height:100%;width:0%;background:var(--accent);transition:width .25s}
-.diagnostics{margin-top:15px}.diagnostic-metrics{display:flex;gap:25px;font-size:11px;color:var(--muted);margin-top:13px}
+.diagnostics{margin-top:15px}.diagnostic-metrics{display:flex;flex-wrap:wrap;gap:5px 25px;font-size:11px;color:var(--muted);margin-top:13px}
 .diagnostic-metrics strong{color:var(--text)}
 .diagnostics canvas{width:100%;height:160px;display:block;margin-top:12px}
 .chart-foot{border-top:1px solid var(--border);padding-top:10px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:7px;font-size:11px;color:var(--muted)}

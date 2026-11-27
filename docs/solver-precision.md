@@ -14,7 +14,7 @@ The table assumes equal regret and policy row counts, as in Compact. Dense river
 
 ## Numerical behavior
 
-- The mixed modes use JavaScript. The existing native WASM kernels still use the original Float64 arena and layouts. Packed tree indices, payoff programs and all-in operators are shared independently of the precision selection.
+- The [source-backed WebAssembly kernel](solver-simd.md) supports mixed storage in standard DCFR. Other mixed solves can use JavaScript. The measurements below were taken with the original backends and identify the backend in each comparison.
 - Reach vectors, blocker-adjusted normalization, terminal and chance calculations, counterfactual deltas, profile EVs, best responses and EV bounds all use Float64. The mixed arena rounds values when storing them in a narrower persistent plane.
 - Float32 regrets are stored in a power-of-two chip unit based on the largest starting stake. Discounting and additions follow the same CFR recurrence in that unit. Regret matching scales the tie threshold by the same factor. This gives large pots headroom and keeps the normalization free of a decimal scale. Cancellation between nearly equal values still loses the bits already rounded away in Float32.
 - From the browser's maximum ten million iterations and the largest supported averaging power of four, cumulative weights are on the order of 10³⁴ even before the usual reach attenuation. This fits normal Float32 output. Relative precision can still discard a small increment to a much larger sum. In the scaled-average mode every learned row has one signed binary exponent, changed in exact powers of two. All action sums in that row share the scale, which cancels when computing the strategy. The scaled mode protects very small common realization weights and large absolute sums, with the same Float32 significand precision for unequal contributions.
@@ -111,7 +111,7 @@ Unscaled Float32 averages dropped test contributions at 2⁻¹⁰⁰⁰ and fell
 
 ## Recommendations
 
-- **Float64** is the default and the reference for studying thin EV differences. Its dense WASM backend remains the best choice for throughput when it fits.
+- **Float64** is the default and the reference for studying thin EV differences. The throughput measurements on this page describe the original backends. Current throughput comparisons are in the [SIMD benchmarks](solver-simd.md).
 - **Float32 regrets** is the first memory-saving option. It keeps averaging and policy storage in Float64. On the exact flop it saved 17.42 MiB of accounted memory in Compact.
 - **Float32 regrets + averages** saves more working memory. Use **scaled averages** for unusual realization-weight ranges where ordinary Float32 would underflow.
 - **Float32 regrets + averages + strategy** saved 50% of the strategy arena and 42% of accounted solver memory on the exact flop. It had the lowest throughput in the sampled flop. Choose it when capacity matters and verify the resulting EV interval on the game you are comparing.

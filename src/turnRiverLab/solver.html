@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#212121">
   <meta name="description" content="A local heads-up Texas Hold'em flop, turn and river solver.">
   <title>TurnRiverLab — Poker Solver</title>
-  <link rel="stylesheet" href="style.css?v=solver-layout">
+  <link rel="stylesheet" href="style.css?v=simd128">
 </head>
 <body>
   <div class="solver-shell">
@@ -172,7 +172,7 @@
                     <option value="f32-all">Float32 regrets + averages + strategy</option>
                     <option value="f32-scaled-averages">Float32 regrets + scaled averages</option>
                   </select></label>
-                  <p class="subtle-note">Float32 modes use JavaScript and keep payoff and best-response calculations in Float64.</p>
+                  <p class="subtle-note">All modes keep payoff and best-response calculations in Float64.</p>
                   <div class="field-row" id="flop-runout-row" hidden><label><span class="inline-field-label">Turn cards sampled <span class="field-unit">of 49</span></span><input id="flop-turn-samples" type="number" min="1" max="49" step="1" value="8"></label><label><span class="inline-field-label">River cards sampled <span class="field-unit">of 48 per turn</span></span><input id="flop-river-samples" type="number" min="1" max="48" step="1" value="6"></label></div>
                   <div class="field-row" id="flop-seed-row" hidden><label>Sampling seed <span class="field-unit">0–2147483647</span><input id="flop-sampling-seed" type="number" min="0" max="2147483647" step="1" value="0"></label><button type="button" id="sample-study-start" class="secondary small">Compare 3 seeds</button></div><div class="study-results" id="sample-study-results" hidden aria-live="polite"></div>
                   <label class="toggle-row"><input id="suit-isomorphism" type="checkbox" checked> Exact flop and turn suit isomorphism</label>
@@ -258,7 +258,7 @@
             <span id="node-lock-count"></span><button id="clear-all-node-locks" type="button" class="secondary small">Clear all locks</button>
           </div>
           <details class="advanced diagnostics section-disclosure" id="diagnostics-toggle"><summary><span>Diagnostics</span></summary><div class="disclosure-body">
-            <div class="diagnostic-metrics"><span>Speed: <strong id="stat-speed">—</strong> iter/s</span><span>Memory: <strong id="stat-memory">—</strong></span></div>
+            <div class="diagnostic-metrics"><span>Speed: <strong id="stat-speed">—</strong> iter/s</span><span>Memory: <strong id="stat-memory">—</strong></span><span>Backend: <strong id="stat-backend">—</strong></span></div>
             <p id="phase-profile" class="subtle-note" hidden></p><canvas id="chart" height="160" aria-label="Exploitability versus iterations"></canvas>
             <div class="chart-foot"><span id="stat-qre-gap" hidden>Regularized QRE gap: —</span><span id="stat-tpwl">Tree PWL: —</span><span id="stat-nash">NashConv: —</span><span id="stat-ev">OOP EV: —</span><span id="stat-zero">Pot accounting error: —</span></div>
             <details class="solve-console" id="solve-console" aria-label="Completed solve console" hidden>
@@ -317,6 +317,6 @@
   </div>
   <script src="pokertools-host.js?v=solver-layout"></script>
   <script src="flop-combo-order.js"></script>
-  <script src="core.js?v=auto-dense"></script><script src="checkpoint-format.js?v=compact-f64"></script><script src="wasm-kernel-data.js"></script><script src="compiled-traversal.js?v=compact-f64"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js?v=compact-f64"></script>
+  <script src="core.js?v=simd128"></script><script src="checkpoint-format.js?v=compact-f64"></script><script src="wasm-kernel-data.js"></script><script src="source-kernel-data.js?v=simd128"></script><script src="compiled-traversal.js?v=simd128"></script><script src="flop-library.js"></script><script src="strategy-view.js"></script><script src="ui.js?v=simd128"></script>
 </body>
 </html>

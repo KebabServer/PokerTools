@@ -89,6 +89,7 @@ function solveCompletionText({kind,report,config:cfg,game,mode,run,targetPercent
  out('Tree PWL',Number.isFinite(report.tpwl)?numeric(100*report.tpwl,4)+'%':'—');
  out('OOP EV',numeric(report.value0,4)+' chips');
  out('Pot accounting error',numeric(report.zeroSumError,8)+' chips');
+ out('Execution backend',report.backend??'—');
  out('Numerical storage',report.numericStorage?.mode||'dense');
  out('Storage precision',C.storagePrecisions[report.numericStorage?.precision??cfg.storagePrecision??'float64']);
  if(report.oopEvBounds)out(cfg.nodeLocks?.length?'OOP constrained EV interval':'OOP Nash EV interval',numeric(report.oopEvBounds.lower,6)+' to '+numeric(report.oopEvBounds.upper,6)+' chips');
@@ -1254,6 +1255,7 @@ function createReportScheduler(startMs){
  };
 }
 function updateProgress(progress,kind='running'){
+ if(progress.backend)$('stat-backend').textContent=progress.backend;
  $('stat-iterations').textContent=progress.iteration.toLocaleString();
  $('stat-speed').textContent=fmt(progress.ips,1);
  $('stat-time').textContent=fmt(progress.elapsedMs/1000,1)+'s';
@@ -1263,13 +1265,14 @@ function updateProgress(progress,kind='running'){
 }
 function solverProgress(solver){
  const elapsedMs=Date.now()-solver.startTime;
- return {iteration:solver.iteration,elapsedMs,ips:elapsedMs>0?1000*solver.iteration/elapsedMs:0};
+ return {iteration:solver.iteration,elapsedMs,ips:elapsedMs>0?1000*solver.iteration/elapsedMs:0,backend:solver.game.compiled?.backend??'JavaScript'};
 }
 function updateReport(report,kind){
  view.report=report;
  if(report.reportLevel!=='summary')view.fullReportReady=true;
  updateProgress(report,kind);
  $('stat-memory').textContent=fmt(report.memoryBytes/1048576,2)+' MiB';
+ $('stat-backend').textContent=report.backend??'—';
  if($('phase-profile')){const p=report.performance; $('phase-profile').hidden=!p;
   if(p)$('phase-profile').textContent='Solver phases — P0 traversal '+fmt(p.traversal0Ms,1)+' ms; P1 traversal '+fmt(p.traversal1Ms,1)+' ms; policy '+(p.fusedPolicy?'fused into traversal':fmt(p.policy0Ms+p.policy1Ms,1)+' ms')+'; exact checks '+fmt(p.checkMs,1)+' ms; checks '+p.checks+'.';}
  const isQre=report.equilibrium==='qre';
@@ -1450,7 +1453,7 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
  if(!Number.isFinite(budget)||budget<2||budget>4096){notify('Set a memory budget between 2 and 4,096 MiB.','error');return false;}
  if(view.game.memory/1048576>budget){notify(`The preview estimates ${fmt(view.game.memory/1048576,2)} MiB; the worker will check the exact ${budget} MiB limit before solving.`,'warn');}
  cancel();clearOutput();view.active=true;view.limit=max;view.solveTargetPercent=percent;
- $('solve').disabled=true;$('stop').disabled=false;$('save-checkpoint').disabled=false;setStatus('SOLVING','running');
+ $('solve').disabled=true;$('stop').disabled=false;$('save-checkpoint').disabled=false;$('stat-backend').textContent='—';setStatus('SOLVING','running');
  renderTree();renderExplorer();
  const cfg=benchmarkConfig||config(),generation=view.generation;view.activeConfig=cfg;
  view.solveRun={startedMs:Date.now(),startedIteration:checkpoint?.iteration??0,limit:max};
@@ -1460,7 +1463,7 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
  if(typeof Worker!=='undefined'&&typeof Blob!=='undefined'&&typeof URL.createObjectURL==='function'){
   try{
    if(!view.worker){
-   const script=`const createSolverCore=${createSolverCore.toString()};\nconst createCompiledTraversal=${createCompiledTraversal.toString()};\nconst WASM_TRAVERSAL_BYTES=${JSON.stringify(WASM_TRAVERSAL_BYTES)};\nconst WASM_TRAVERSAL_BYTES_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_SCALAR)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR)};\nconst createAdaptiveBatchController=${createAdaptiveBatchController.toString()};\nconst createReportScheduler=${createReportScheduler.toString()};\nconst solverProgress=${solverProgress.toString()};\nconst solutionConverged=${solutionConverged.toString()};\n(${workerMain.toString()})();`;
+   const script=`const createSolverCore=${createSolverCore.toString()};\nconst createCompiledTraversal=${createCompiledTraversal.toString()};\nconst WASM_SOURCE_SIMD=${JSON.stringify(WASM_SOURCE_SIMD)};\nconst WASM_SOURCE_SCALAR=${JSON.stringify(WASM_SOURCE_SCALAR)};\nconst WASM_TRAVERSAL_BYTES=${JSON.stringify(WASM_TRAVERSAL_BYTES)};\nconst WASM_TRAVERSAL_BYTES_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_SCALAR)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC)};\nconst WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR=${JSON.stringify(WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR)};\nconst createAdaptiveBatchController=${createAdaptiveBatchController.toString()};\nconst createReportScheduler=${createReportScheduler.toString()};\nconst solverProgress=${solverProgress.toString()};\nconst solutionConverged=${solutionConverged.toString()};\n(${workerMain.toString()})();`;
    const blobUrl=URL.createObjectURL(new Blob([script],{type:'text/javascript'}));
    const worker=new Worker(blobUrl);setTimeout(()=>URL.revokeObjectURL(blobUrl),2000);view.worker=worker;
    }

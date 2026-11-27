@@ -1645,6 +1645,7 @@ function createSolverCore() {
     if(compact)enforceImplicitMask(node);
   }
   function restoreLockedPolicy(game,p) {
+    if(!game.nodeLocks?.length)return;
     for(const node of game.decisionNodes)if(node.locked&&!node.compact&&!node.isoAlias&&node.p===p){
       const a=node.actionCount,s=node.current,mask=node.lockedMask,rows=node.lockedRows;
       for(let h=0;h<mask.length;h++)if(mask[h])
@@ -1652,7 +1653,7 @@ function createSolverCore() {
     }
   }
   function currentPolicy(game,p) {
-    if(game.compiled&&!game.compiled.compact){
+    if(game.compiled?.updatePolicy){
       const nativeRefreshed=game.compiled.updatePolicy(p,game.equilibrium==='qre');
       if(game.hasFrequencyIncrements)for(const node of game.decisionNodes)
         if(node.frequencyUnits&&!node.isoAlias&&node.p===p)enforceActionMask(node,game.players[p].ids.length);
@@ -2060,8 +2061,8 @@ function createSolverCore() {
   // every CFR branch. The exact chance tree, regrets, update order and terminal
   // arithmetic remain unchanged; buffers are local to a traversal call.
   const traversalWorkspaces=new WeakMap();
-  function traverseCfr(game,id,target,oppReach,averageWeight=0) {
-    if(game.compiled?.fullTraversal)return game.compiled.traverse(id,target,oppReach,averageWeight);
+  function traverseCfr(game,id,target,oppReach,averageWeight=0,copyResult=true) {
+    if(game.compiled?.fullTraversal)return game.compiled.traverse(id,target,oppReach,averageWeight,copyResult);
     const myN=game.players[target].ids.length,regretScale=game.regretScale;
     const oppN=game.players[1-target].ids.length;
     // Retain scratch buffers across iterations, but discard reach-dependent
@@ -2572,7 +2573,7 @@ function createSolverCore() {
       evBasis:'fold-zero',
       // The reported root EVs sum to the starting pot; this measures any
       // violation of that conservation identity (zero-sum centered internally).
-      zeroSumError:Math.abs(value0+value1),jointZ:game.jointZ,memoryBytes:game.memory,numericStorage:game.numericStorage,
+      zeroSumError:Math.abs(value0+value1),jointZ:game.jointZ,memoryBytes:game.memory,numericStorage:game.numericStorage,backend:game.compiled?.backend??'JavaScript',
       history:history||[],nodes:records};
   }
   // A single decision's report, without allocating hand/action records for
@@ -2630,19 +2631,25 @@ function createSolverCore() {
     const locked=game.nodeLocks?.length>0;
     // A native check reads averageSum/current directly and never needs a JS
     // averaged-policy table or hand-level report allocations.
-    if(nativeBest&&!locked)try{
-      const br0=nativeBest(0,false),br1=nativeBest(1,false);
+    const constrained=locked?game.compiled?.constrainedBest:null;
+    if(nativeBest&&(!locked||constrained))try{
+      const br0=constrained?constrained(0):nativeBest(0,false);
+      const br1=constrained?constrained(1):nativeBest(1,false);
       const r0=game.equilibrium==='qre'?nativeBest(0,true):null;
       const r1=game.equilibrium==='qre'?nativeBest(1,true):null;
       const nashConv=Math.max(0,br0+br1);
+      const unrestricted=locked?Math.max(0,
+        (game.nodeLocks.some(lock=>lock.player===0)?nativeBest(0,false):br0)+
+        (game.nodeLocks.some(lock=>lock.player===1)?nativeBest(1,false):br1))/2:nashConv/2;
       return {iteration,elapsedMs,ips:elapsedMs>0?1000*iteration/elapsedMs:0,
         equilibrium:game.equilibrium,gtoAlgorithm:game.gtoAlgorithm,nashConv,
         exploitability:nashConv/2,oopEvBounds:oopEvBounds(game,br0,br1),qreResidual:r0===null?null:Math.max(0,r0+r1)/2,
-        history:history||[]};
+        lockedNodes:game.nodeLocks.length,unrestrictedExploitability:unrestricted,
+        convergenceMetric:locked?'locked-game':'unrestricted-nash',
+        backend:game.compiled.backend,history:history||[]};
     }catch(_){
-      // A constrained mobile scratch arena may reject the native evaluator;
-      // retain the mathematically identical JS reference as a safe fallback.
-      if(game.compiled)game.compiled.exactBest=null;
+      // Retry in Float64 JavaScript if the native workspace is exhausted.
+      game.compiled.exactBest=null;game.compiled.constrainedBest=null;
       nativeBest=null;
     }
     // Pure actions remain valid on any grid, so an exact best response is
@@ -2667,7 +2674,7 @@ function createSolverCore() {
     return {iteration,elapsedMs,ips:elapsedMs>0?1000*iteration/elapsedMs:0,
       equilibrium:game.equilibrium,gtoAlgorithm:game.gtoAlgorithm,nashConv,exploitability:nashConv/2,oopEvBounds:oopEvBounds(game,br0,br1),qreResidual,
       lockedNodes:game.nodeLocks?.length||0,unrestrictedExploitability:unrestrictedNashConv/2,
-      convergenceMetric:locked?'locked-game':'unrestricted-nash',history:history||[]};
+      convergenceMetric:locked?'locked-game':'unrestricted-nash',backend:game.compiled?.backend??'JavaScript',history:history||[]};
   }
   function appendConvergenceHistory(history,iteration,exploitability){
     if(iteration<=0)return;
@@ -2751,14 +2758,14 @@ function createSolverCore() {
       for(const field of fields){
         const plane=node[field],width=plane.BYTES_PER_ELEMENT,readValue=read[width];
         for(let i=0;i<plane.length;i++){
-          const v=readValue(plane.byteOffset+i*width);
+          const v=readValue(plane.byteOffset-game.stateStorage.byteOffset+i*width);
           if(!Number.isFinite(v))throw Error('Checkpoint has non-finite solver state');
           if(field==='averageExponent'&&Math.abs(v)>averageScaleLimit)throw Error('Invalid checkpoint average exponent');
           if(field==='averageSum'&&v<0)throw Error('Invalid checkpoint strategy average');
         }
       }
       if(node.current32){
-        const a=node.actionCount,units=node.frequencyUnits,offset=node.current.byteOffset;
+        const a=node.actionCount,units=node.frequencyUnits,offset=node.current.byteOffset-game.stateStorage.byteOffset;
         for(let i=0;i<node.current.length;i+=a){
           let total=0,residuals=0;
           for(let k=0;k<a;k++){
@@ -2822,14 +2829,14 @@ function createSolverCore() {
         throw Error('Float32 averaging exceeds its weight range. Use scaled averages or Float64 for this length.');
       const p=this.profileEnabled?()=>typeof performance!=='undefined'?performance.now():Date.now():null;
       let mark=p?p():0;
-      traverseCfr(this.game,this.game.root,0,this.game.players[1].priors,averagingWeight);
+      traverseCfr(this.game,this.game.root,0,this.game.players[1].priors,averagingWeight,false);
       if(p){const now=p();this.timings.traversal0Ms+=now-mark;mark=now;}
-      if(this.game.compiled?.fusesPolicy)restoreLockedPolicy(this.game,0);
+      if(this.game.compiled?.fusesPolicy){if(!this.game.compiled.handlesLocks)restoreLockedPolicy(this.game,0);}
       else currentPolicy(this.game,0);
       if(p){const now=p();this.timings.policy0Ms+=now-mark;mark=now;}
-      traverseCfr(this.game,this.game.root,1,this.game.players[0].priors,averagingWeight);
+      traverseCfr(this.game,this.game.root,1,this.game.players[0].priors,averagingWeight,false);
       if(p){const now=p();this.timings.traversal1Ms+=now-mark;mark=now;}
-      if(this.game.compiled?.fusesPolicy)restoreLockedPolicy(this.game,1);
+      if(this.game.compiled?.fusesPolicy){if(!this.game.compiled.handlesLocks)restoreLockedPolicy(this.game,1);}
       else currentPolicy(this.game,1);
       if(p)this.timings.policy1Ms+=p()-mark;
       if(pruning?.enabled&&t>=pruning.warmupIterations&&probe){

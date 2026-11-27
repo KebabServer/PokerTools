@@ -25,6 +25,8 @@ Public orbits share a canonical subtree. Private orbits share numerical rows und
 
 ## Solver backends and session state
 
+Standard DCFR now uses the [source-backed scalar or SIMD WebAssembly traversal](solver-simd.md) when it fits. The paths below describe the existing compatibility backends and the original benchmark conditions.
+
 * Dense keeps the legacy full-tree Float64 WASM backend and the JavaScript reference backend.
 * Compact supports the JavaScript reference path and a Float64 WASM decision kernel for CFR+ and the supported DCFR variants. Chance, terminal evaluation, averaging, and policy refresh use JavaScript in Compact, and locked or culled decisions use the exact JavaScript row update. Compact QRE and variants with predictive corrections use JavaScript. The legacy native regret-pruning optimization is available through Dense. The compact kernel uses the same ordered f64 operations as the reference row update.
 * Checkpoints record the actual arena layout and hash the compact mappings, full betting tree, ranges, algorithm, and locks. The old binary container still reads legacy dense checkpoints. Resume preserves iteration, regrets, averages, policy, and history. A checkpoint with an incompatible layout or lock revision is rejected.
