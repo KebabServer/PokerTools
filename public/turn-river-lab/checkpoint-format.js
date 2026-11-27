@@ -17,6 +17,7 @@ function createCheckpointFormat(){
   const stateBytes=new Uint8Array(state.buffer,state.byteOffset,state.byteLength);
   const header={format:checkpoint.format,fingerprint:checkpoint.fingerprint,iteration:checkpoint.iteration,
     elapsedMs:checkpoint.elapsedMs,history:checkpoint.history,prunedMasks:checkpoint.prunedMasks??null,config:safeConfig,
+    ...(checkpoint.publicChance?{publicChance:checkpoint.publicChance}:{}),
     storageLength:state.length,stateChecksum:checksum(stateBytes)};
   const json=new TextEncoder().encode(JSON.stringify(header));
   if(json.length>16000000||state.length>0xffffffff)throw Error('Checkpoint is too large');
@@ -50,7 +51,7 @@ function createCheckpointFormat(){
   return {config:{...header.config,storageLayout,storagePrecision,weights0:Float64Array.from(header.config.weights0),weights1:Float64Array.from(header.config.weights1)},
     checkpoint:{format,fingerprint:header.fingerprint,iteration:header.iteration,
       elapsedMs:header.elapsedMs,history:header.history,prunedMasks:header.prunedMasks??null,
-      storageLayout,storagePrecision,storage:state}};
+      storageLayout,storagePrecision,storage:state,...(header.publicChance?{publicChance:header.publicChance}:{})}};
  }
  return {encode,decode};
 }

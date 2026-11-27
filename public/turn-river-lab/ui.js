@@ -81,6 +81,7 @@ function solveCompletionText({kind,report,config:cfg,game,mode,run,targetPercent
  out('Wall time this run',duration(wall));
  out('Throughput this run',wall>0?numeric(worked*1000/wall,2)+' iter/s':'—');
  out('Cumulative solver time',duration(report.elapsedMs)+(first?' (including checkpoint history)':''));
+ if(kind==='converged'&&report.trainingChance)out('Time to verified convergence',duration(report.verifiedAtMs));
  out(cfg.nodeLocks?.length?'Target locked-game gap':'Target exploitability',Number.isFinite(targetChips)?numeric(targetPercent,4)+'% of pot = '+numeric(targetChips,4)+' chips/player':'not set');
   out(cfg.nodeLocks?.length?'Locked-game exploitability':'Nash exploitability',numeric(e,4)+' chips/player'+(Number.isFinite(e)&&pot>0?' ('+numeric(e/pot*100,4)+'% of pot)':''));
  if(cfg.nodeLocks?.length)out('Unrestricted exploitability',numeric(report.unrestrictedExploitability,4)+' chips/player (locks can be violated in BR)');
@@ -99,7 +100,13 @@ function solveCompletionText({kind,report,config:cfg,game,mode,run,targetPercent
  out('Board',cfg.board.map(id=>createSolverCoreCardText(id)).join(' '));
  out('Pot / effective stack',integer(cfg.pot)+' / '+integer(cfg.stack)+' chips');
  out('Tree nodes',integer(game?.nodes?.length));
- if(mode==='flop')out('Runouts',game?.sampledChance?'sampled (approximate full game), '+integer(cfg.flopTurnSamples)+' turns x '+integer(cfg.flopRiverSamples)+' rivers, seed '+integer(cfg.flopSamplingSeed??0):'all legal turn and river cards');
+ if(mode==='flop')out('Evaluation runouts',game?.sampledChance?'fixed sampled game, '+integer(cfg.flopTurnSamples)+' turns x '+integer(cfg.flopRiverSamples)+' rivers, seed '+integer(cfg.flopSamplingSeed??0):'full flop game');
+ const chance=report.trainingChance;
+ if(chance){
+  out('Public chance training',chance.method+' · '+chance.turnBudget+' turns × '+chance.riverBudget+' rivers per prefix · seed '+integer(chance.seed));
+  out('Training branches / iter',numeric(chance.branchesPerIteration,1));
+  out('Training nodes visited',integer(chance.visitedNodes));
+ }
  out('Maximum raises per street',integer(cfg.maxRaises));
  out('All-in actions',boolean(cfg.allIn));
  out('River OOP / IP bets',sizes(cfg.sizes0)+' / '+sizes(cfg.sizes1));
@@ -162,7 +169,7 @@ function clearSolveCompletion(){
 
 function renderSampleStudy(){
  const study=view.sampleStudy,el=$('sample-study-results');if(!el)return;
- el.hidden=!study;if(!study)return;
+ el.hidden=!study||dynamicFlop();if(el.hidden)return;
  const rows=study.results.map(r=>`<tr><td>${r.seed}</td><td>${fmt(r.iterations,0)}</td><td>${fmt(r.wallMs/1000,3)} s</td><td>${fmt(r.ev,4)}</td><td>${fmt(r.exploitPercent,4)}%</td></tr>`).join('');
  const evs=study.results.map(r=>r.ev).filter(Number.isFinite),min=Math.min(...evs),max=Math.max(...evs);
  el.innerHTML='<strong>Three independent deterministic flop runout samples</strong> · '+(study.running?'RUNNING':'COMPLETE')+
@@ -209,6 +216,7 @@ function sampleStudyFinished(kind,report){
 function startSampleStudy(){
  if(view.active||view.benchmark?.running||view.sampleStudy?.running){notify('Stop the current solve or benchmark before starting a study.','warn');return;}
  if(view.mode!=='flop'){notify('Runout sampling studies require a flop starting board.','warn');return;}
+ if(dynamicFlop())return;
  let cfg;try{cfg=config();C.makeGame(cfg,{preview:true});}catch(e){notify(e.message,'error');return;}
  if(cfg.flopTurnSamples===49&&cfg.flopRiverSamples===48){notify('All runouts are enumerated; changing the seed cannot change the game.','warn');return;}
  if(cfg.nodeLocks?.length){notify('Remove node locks before comparing sampled trees: their decision IDs can change between seeds.','warn');return;}
@@ -402,6 +410,7 @@ function benchmarkNext(){
   benchmarkRunFailed('Could not start this algorithm with the configured game.');
 }
 function startBenchmark(){
+ if(dynamicFlop())return;
  if(view.active||view.benchmark?.running){notify('Finish or stop the current solver run before benchmarking.','warn');return;}
  let cfg;try{cfg=config();}catch(e){notify(e.message,'error');return;}
  if(view.nodeLocks.length&&cfg.equilibrium!=='gto'){notify('Node-lock benchmarks require GTO. Choose a GTO algorithm or clear the locks.','error');return;}
@@ -472,12 +481,18 @@ function profile(name,p){
  }
  return value;
 }
+function dynamicFlop(){return view.mode==='flop'&&$('flop-chance-mode').value==='dynamic';}
 function renderBoard(){
+ const flop=view.mode==='flop',dynamic=dynamicFlop();
  $('turn-entry-row').hidden=view.mode!=='turn';
  $('flop-entry-row').hidden=view.mode!=='flop';
  $('river-entry-row').hidden=view.mode!=='river';
- $('flop-runout-row').hidden=view.mode!=='flop';
- $('flop-seed-row').hidden=view.mode!=='flop';
+ $('flop-chance-mode-field').hidden=!flop;$('flop-dynamic-settings').hidden=!dynamic;
+ $('flop-runout-row').hidden=!flop;$('flop-seed-row').hidden=!flop;
+ $('flop-turn-label').textContent=dynamic?'Turn budget':'Turn cards sampled';
+ $('flop-river-label').textContent=dynamic?'River budget':'River cards sampled';
+ $('sample-study-start').hidden=dynamic;$('benchmark-all').hidden=dynamic;
+ renderSampleStudy();
  const pickerOpen=!$('card-picker').hidden;
  $('board-cards').innerHTML=view.board.map((id,i)=>{
   const card=C.cardText(id),open=pickerOpen&&view.slot===i;
@@ -562,7 +577,7 @@ function renderSetupSummaries(){
  const algorithm=$('gto-algorithm').selectedOptions[0]?.textContent.split(' · ')[0]||'GTO';
  $('advanced-summary').textContent=(isQre?'QRE':algorithm)+' · '+Number($('iterations').value).toLocaleString()+' iter';
  const fullyEnumerated=Number($('flop-turn-samples').value)===49&&Number($('flop-river-samples').value)===48;
- const scope=view.mode==='flop'?(fullyEnumerated?'Full flop':'Sampled flop'):view.mode==='turn'?'Turn + river':'River';
+ const scope=view.mode==='flop'?(dynamicFlop()?'Dynamic flop':fullyEnumerated?'Full flop':'Sampled flop'):view.mode==='turn'?'Turn + river':'River';
  $('street-chip').textContent=scope;
  $('run-scope').textContent=scope;
 }
@@ -584,6 +599,7 @@ function config(){
   turnRaiseSizes0:parse($('turn-raise-sizes0').value),turnRaiseSizes1:parse($('turn-raise-sizes1').value),
   flopRaiseSizes0:parse($('flop-raise-sizes0').value),flopRaiseSizes1:parse($('flop-raise-sizes1').value),
   flopTurnSamples:positive('flop-turn-samples'),flopRiverSamples:positive('flop-river-samples'),
+  flopChanceMode:dynamicFlop()?'dynamic':'fixed',flopSamplingMethod:$('flop-sampling-method').value,
   flopSamplingSeed:Number($('flop-sampling-seed').value),
   maxRaises:parseInt($('raises').value,10),allIn:$('allin').checked,maxNodes:positive('max-nodes',20),
   equilibrium,frequencyIncrements,gtoAlgorithm:$('gto-algorithm').value,qreTemperaturePercent:Number($('qre-temperature').value),
@@ -681,6 +697,7 @@ function setStatus(text,kind='ready'){
 function clearOutput(){
  clearSolveCompletion();view.activeConfig=null;
  view.report=null;view.node=0;view.viewCat=null;view.filter=newFilter();view.solveTargetPercent=null;view.fullReportReady=false;view.detailPending.clear();
+ $('chance-profile').hidden=true;
  $('stat-iterations').textContent='0';$('stat-speed').textContent='—';$('stat-time').textContent='—';
  $('stat-exploit').textContent='—';$('stat-exploit').title=view.game?.sampledChance?'Exploitability is computed for the sampled chance tree, not the complete flop game.':'';$('stat-qre-gap').textContent='Regularized QRE gap: —';$('stat-tpwl').textContent='Tree PWL: —';$('stat-nash').textContent='NashConv: —';$('stat-ev').textContent='OOP EV: —';$('stat-zero').textContent='Pot accounting error: —';
  $('progress-bar').style.width='0%';$('progress-percent').textContent='0%';$('progress-text').textContent='Waiting for solver';
@@ -917,7 +934,9 @@ function studyFingerprint(cfg){
   'flopSizes0','flopSizes1','flopDonkSizes0','flopRaiseSizes0','flopRaiseSizes1',
   'turnSizes0','turnSizes1','turnDonkSizes0','turnRaiseSizes0','turnRaiseSizes1',
   'sizes0','sizes1','riverDonkSizes0','raiseSizes0','raiseSizes1'];
- const parts=fields.map(k=>[k,cfg[k]??null]),increments=activeFrequencyIncrements(cfg);
+ const fullRunouts=cfg.flopChanceMode==='dynamic'||(cfg.flopTurnSamples===49&&cfg.flopRiverSamples===48);
+ const physicalRunouts=fullRunouts?{flopTurnSamples:49,flopRiverSamples:48,flopSamplingSeed:0}:{};
+ const parts=fields.map(k=>[k,physicalRunouts[k]??cfg[k]??null]),increments=activeFrequencyIncrements(cfg);
  if(increments.length)parts.push(['frequencyIncrements',increments]);
  return JSON.stringify(parts.concat([Array.from(cfg.weights0||[]),Array.from(cfg.weights1||[])]));
 }
@@ -1002,7 +1021,7 @@ function renderPreSolveQuality(){
  if(!view.game){el.textContent='Game preview unavailable. Check ranges, betting settings, and node budget.';return;}
  const game=view.game,mb=game.memory/1048576,cap=Number($('memory-limit').value),locks=view.nodeLocks.length;
  const parts=[game.nodes.length.toLocaleString()+' logical tree nodes', (game.numericStorage?.mode??'dense')+' · '+C.storagePrecisions[game.numericStorage?.precision??'float64'],fmt(mb,1)+' MiB estimated solver state',
-  (game.isFlop?(game.sampledChance?'Sampled flop, not full-game exact':'Fully enumerated flop'):
+  (game.isFlop?(game.publicChance?'Dynamic training · full-game evaluation':game.sampledChance?'Fixed sampled flop':'Fully enumerated flop'):
    game.isTurn?'All legal river runouts':'Fixed river board'),
   locks?locks+' locked nodes; target is constrained':'No locks; unrestricted Nash target'];
  const notes=[];
@@ -1281,7 +1300,7 @@ function updateReport(report,kind){
  $('stat-qre-gap').hidden=!isQre;
  nodeLockStatus();
  $('stat-qre-gap').textContent='Regularized QRE gap: '+fmt(report.qreResidual,4)+' chips / player';
- $('stat-exploit').title=`Best-response exploitability last checked at iteration ${report.iteration.toLocaleString()}. It updates less often than the iteration counter.`;
+ renderChanceDiagnostics(report);
  $('stat-nash').textContent=(report.lockedNodes?'Constrained NashConv: ':'NashConv: ')+fmt(report.nashConv,4)+' chips'+(report.actionPruning?.enabled?' · '+report.actionPruning.prunedActions+' culled bet/raise sizes':'');
  $('stat-tpwl').textContent='Tree PWL: '+(report.tpwl===null?'—':fmt(100*report.tpwl,4)+'%')+' · '+report.tpwlNodes+' assessed nodes';
  $('stat-ev').textContent='OOP EV: '+evText(report.value0)+' chips';
@@ -1289,11 +1308,23 @@ function updateReport(report,kind){
  $('export').disabled=false;drawChart(report.history);
  renderPreSolveQuality();renderExplorer();renderTree();
 }
+function renderChanceDiagnostics(report){
+ const scope=report.evaluationGame==='fixed-sampled-flop'||view.game?.sampledChance?'Fixed sampled game':report.evaluationGame==='full-flop'?'Full flop game':'Configured game';
+ $('stat-exploit').title=`${scope} · exact best-response exploitability checked at iteration ${report.iteration.toLocaleString()}.`;
+ const stats=report.trainingChance,el=$('chance-profile');
+ el.hidden=!stats;
+ if(stats){
+  const bounds=report.oopEvBounds;
+  el.textContent='Exact full-game evaluation · OOP EV interval '+fmt(bounds.lower,4)+' to '+fmt(bounds.upper,4)+
+   ' chips · '+fmt(report.unrestrictedExploitability,4)+' unrestricted exploitability · '+
+   fmt(stats.branchesPerIteration,1)+' training branches / iteration · '+fmt(stats.visitedNodes,0)+' nodes visited';
+ }
+}
 // Lightweight updates do not overwrite the latest full hand/strategy report.
 function updateConvergence(check){
  updateProgress(check);
  $('stat-exploit').textContent=fmt(check.exploitability,4);
- $('stat-exploit').title=`Exact ${check.lockedNodes?'locked-game':'unrestricted Nash'} exploitability checked at iteration ${check.iteration.toLocaleString()}. Detailed hand EVs update less frequently.`;
+ renderChanceDiagnostics(check);
  if(check.lockedNodes)$('stat-nash').title='Unrestricted exploitability: '+fmt(check.unrestrictedExploitability,4)+' chips/player. Locked nodes cannot deviate in the constrained target.';
  $('stat-nash').textContent=(check.lockedNodes?'Constrained NashConv: ':'NashConv: ')+fmt(check.nashConv,4)+' chips'+(check.actionPruning?.enabled?' · '+check.actionPruning.prunedActions+' culled bet/raise sizes':'');
  const isQre=check.equilibrium==='qre';
@@ -1519,7 +1550,8 @@ function solutionData(){
    qreResidual:'Half the sum of entropy-regularized best-response values, in chips per player; separate from ordinary Nash exploitability. Both must meet the target for QRE convergence.',
    averaging:cfg.gtoAlgorithm==='dcfr-scheduled-cubic'?'Scheduled DCFR hybrid discount with t^'+cfg.scheduledAveragingPower+' averaging':cfg.equilibrium==='gto'&&cfg.gtoAlgorithm==='lcfr'?'Linear CFR with t/(t+1) signed regret discount and linear averaging t':cfg.gtoAlgorithm==='dcfr-cubic'?'DCFR signed regret discounts and cubic averaging t³':cfg.gtoAlgorithm==='dcfr-2-0.5-2'?'DCFR α=2 β=0.5 γ=2 signed regrets and quadratic averaging':cfg.gtoAlgorithm==='dcfr-predictive'?'Predictive DCFR signed regret discounts with one-step prediction and quadratic averaging t²':cfg.gtoAlgorithm==='dcfr-adaptive'?'Adaptive DCFR smooth discount schedule and quadratic averaging t²':cfg.gtoAlgorithm==='dcfr-scheduled'?'Scheduled DCFR positive-regret discounts and quadratic averaging t²':cfg.gtoAlgorithm==='dcfr'?'DCFR signed regret discounting and quadratic averaging t²':cfg.equilibrium==='gto'&&cfg.gtoAlgorithm==='optimistic'?'CFR+ with one-step optimistic regret prediction, linear averaging t':'Linear CFR+ weighting t with own realization reach (delay 0)',
    riverChance:'For a complete turn, 44 cards are legal for each disjoint private hand pair. For a flop, 45 turns then 44 rivers remain; sampled branches use inverse-probability weights.',
-   sampledChance:view.game.sampledChance,flopTurnSamples:cfg.flopTurnSamples,flopRiverSamples:cfg.flopRiverSamples,flopSamplingSeed:cfg.flopSamplingSeed,exactSuitIsomorphism:cfg.useSuitIsomorphism,suitOrbitInfo:view.game.suitIsomorphism,riverPrivateSymmetry:{enabled:view.game.riverPrivateSymmetry?.enabled,groupSize:view.game.riverPrivateSymmetry?.groupSize,representatives:view.game.riverPrivateSymmetry?.representatives,savedRows:view.game.riverPrivateSymmetry?.savedRows,reason:view.game.riverPrivateSymmetry?.reason},
+   sampledChance:view.game.sampledChance,evaluationGame:view.report.evaluationGame,trainingChance:view.report.trainingChance,
+   flopTurnSamples:cfg.flopTurnSamples,flopRiverSamples:cfg.flopRiverSamples,flopSamplingSeed:cfg.flopSamplingSeed,exactSuitIsomorphism:cfg.useSuitIsomorphism,suitOrbitInfo:view.game.suitIsomorphism,riverPrivateSymmetry:{enabled:view.game.riverPrivateSymmetry?.enabled,groupSize:view.game.riverPrivateSymmetry?.groupSize,representatives:view.game.riverPrivateSymmetry?.representatives,savedRows:view.game.riverPrivateSymmetry?.savedRows,reason:view.game.riverPrivateSymmetry?.reason},
    actionPruning:view.report?.actionPruning??view.game.actionPruning,
    nodeLocks:cfg.nodeLocks||[],unrestrictedExploitability:view.report?.unrestrictedExploitability??null},
   source:view.source,
@@ -1527,6 +1559,7 @@ function solutionData(){
    scheduledAlphaStart:cfg.scheduledAlphaStart,scheduledAlphaGain:cfg.scheduledAlphaGain,
    scheduledRampLength:cfg.scheduledRampLength,scheduledAveragingPower:cfg.scheduledAveragingPower,
    useAdaptiveConvergence:cfg.useAdaptiveConvergence,frequencyIncrements:cfg.frequencyIncrements,storageLayout:view.report?.numericStorage?.mode??cfg.storageLayout,storagePrecision:view.report?.numericStorage?.precision??cfg.storagePrecision,
+   flopChanceMode:cfg.flopChanceMode,flopSamplingMethod:cfg.flopSamplingMethod,
    algorithmRevision:cfg.gtoAlgorithm==='dcfr-2-0.5-2'?'dcfr-2-0.5-2-quadratic-v2':null,
    qreTemperaturePercent:cfg.qreTemperaturePercent,targetExploitabilityPercent:view.solveTargetPercent,
    board:cfg.board.map(C.cardText),pot:cfg.pot,stack:cfg.stack,oopBetSizesPercent:cfg.sizes0,
@@ -1629,7 +1662,7 @@ function restoreSolution(data){
     r.history.some(row=>!Array.isArray(row)||row.length!==2||!Number.isFinite(row[0])||!Number.isFinite(row[1])))
     throw Error('Not a TurnRiverLab solution file.');
  const board=d.board.map(C.cardId),w=d.ranges.map(range=>{const a=new Float64Array(1326);for(const h of range){const [x,y]=h.hand.map(C.cardId);if(x<0||y<0||x===y||!Number.isFinite(h.weight)||h.weight<0||h.weight>1)throw Error('Invalid saved range.');a[C.comboId(x,y)]=h.weight;}return a;});
- const cfg={board,pot:d.pot,stack:d.stack,storageLayout:d.storageLayout??'dense',storagePrecision:d.storagePrecision??'float64',frequencyIncrements:d.frequencyIncrements,flopSamplingSeed:d.flopSamplingSeed,nodeLocks:d.nodeLocks||[],useSuitIsomorphism:d.useSuitIsomorphism!==false,useRiverHandSymmetry:!!d.useRiverHandSymmetry,
+ const cfg={board,pot:d.pot,stack:d.stack,storageLayout:d.storageLayout??'dense',storagePrecision:d.storagePrecision??'float64',frequencyIncrements:d.frequencyIncrements,flopSamplingSeed:d.flopSamplingSeed,flopChanceMode:d.flopChanceMode,flopSamplingMethod:d.flopSamplingMethod,nodeLocks:d.nodeLocks||[],useSuitIsomorphism:d.useSuitIsomorphism!==false,useRiverHandSymmetry:!!d.useRiverHandSymmetry,
   useActionFrequencyPruning:!!d.useActionFrequencyPruning,actionPruneThresholdPercent:d.actionPruneThresholdPercent,actionPruneWarmupPercent:d.actionPruneWarmupPercent,actionPruneWarmupIterations:d.actionPruneWarmupIterations,actionPruneRecheckIterations:d.actionPruneRecheckIterations,actionPrunePlannedIterations:d.actionPrunePlannedIterations,useRegretPruning:!!d.useRegretPruning,sizes0:d.oopBetSizesPercent,sizes1:d.ipBetSizesPercent,turnSizes0:d.oopTurnBetSizesPercent,turnSizes1:d.ipTurnBetSizesPercent,
   turnDonkSizes0:d.oopTurnDonkBetSizesPercent,turnEntryMode:d.turnEntryMode,flopDonkSizes0:d.oopFlopDonkBetSizesPercent,flopEntryMode:d.flopEntryMode,riverDonkSizes0:d.oopRiverDonkBetSizesPercent,riverEntryMode:d.riverEntryMode,flopSizes0:d.oopFlopBetSizesPercent,flopSizes1:d.ipFlopBetSizesPercent,raiseSizes0:d.oopRaiseSizesPercent,raiseSizes1:d.ipRaiseSizesPercent,turnRaiseSizes0:d.oopTurnRaiseSizesPercent,turnRaiseSizes1:d.ipTurnRaiseSizesPercent,flopRaiseSizes0:d.oopFlopRaiseSizesPercent,flopRaiseSizes1:d.ipFlopRaiseSizesPercent,flopTurnSamples:d.flopTurnSamples,flopRiverSamples:d.flopRiverSamples,maxRaises:d.maxRaises,allIn:d.allIn,equilibrium:d.equilibrium||'gto',gtoAlgorithm:d.gtoAlgorithm||'cfrplus',qreTemperaturePercent:d.qreTemperaturePercent||0.05,
   scheduledAlphaStart:d.scheduledAlphaStart??1,scheduledAlphaGain:d.scheduledAlphaGain??0.5,
@@ -1667,6 +1700,7 @@ function restoreSolution(data){
  $('action-prune-recheck').value=cfg.actionPruneRecheckIterations??100;
  view.fixedActionWarmup=cfg.useActionFrequencyPruning?cfg.actionPruneWarmupIterations??null:null;
  view.fixedPrunePlanned=cfg.useActionFrequencyPruning?cfg.actionPrunePlannedIterations??null:null;
+ setChanceConfig(cfg);
  $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled; $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;$('max-nodes').value=Math.max(18000,g.treeStorage.budgetRecords);$('iterations').value=r.iteration;view.limit=r.iteration;
  view.fullReportReady=true;view.game=g;view.parents=treeParents(g);
  setSolverTab('tree');showSource();renderBoard();renderRangeTab();renderSetupSummaries();updateReport(r,'finished');$('save-local').disabled=false;setStatus('SAVED SOLUTION','complete');$('progress-text').textContent='Saved result loaded';notify(d.gtoAlgorithm==='dcfr-2-0.5-2'&&d.algorithmRevision!=='dcfr-2-0.5-2-quadratic-v2'?
@@ -1683,6 +1717,10 @@ function downloadCheckpoint(snapshot){
   document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
   notify('Checkpoint saved. This contains the complete numerical state, not just the displayed solution.');
  }catch(e){notify('Checkpoint download failed: '+e.message,'error');}
+}
+function setChanceConfig(cfg){
+ $('flop-chance-mode').value=cfg.flopChanceMode??'fixed';
+ $('flop-sampling-method').value=cfg.flopSamplingMethod??'stratified';
 }
 function applyCheckpointConfig(cfg){
  if(!Array.isArray(cfg.board)||![3,4,5].includes(cfg.board.length))throw Error('Checkpoint has an invalid board');
@@ -1703,6 +1741,7 @@ function applyCheckpointConfig(cfg){
  'turn-raise-sizes0':cfg.turnRaiseSizes0,'turn-raise-sizes1':cfg.turnRaiseSizes1,
  'flop-raise-sizes0':cfg.flopRaiseSizes0,'flop-raise-sizes1':cfg.flopRaiseSizes1};
  for(const [id,v] of Object.entries(fields))if(Array.isArray(v))$(id).value=v.join(', ');
+ setChanceConfig(cfg);
  $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;
  $('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;
  $('max-nodes').value=cfg.maxNodes;$('memory-limit').value=Math.min(4096,Math.max(2,Math.ceil(cfg.memoryLimitBytes/1048576)||128));
@@ -1816,7 +1855,7 @@ function wire(){
      notify('This solve uses an experimental algorithm. Choose a recommended method before hiding the others.','warn');
    }else setExperimentalAlgorithmVisibility(e.target.checked);
  });
- for(const id of ['qre-temperature','pot','stack','sizes0','sizes1','turn-sizes0','turn-sizes1','turn-donk-sizes0','turn-entry-mode','flop-donk-sizes0','flop-entry-mode','river-donk-sizes0','river-entry-mode','flop-sizes0','flop-sizes1','raise-sizes0','raise-sizes1','turn-raise-sizes0','turn-raise-sizes1','flop-raise-sizes0','flop-raise-sizes1','flop-turn-samples','flop-river-samples','flop-sampling-seed','raises','max-nodes','allin','memory-limit','storage-layout','storage-precision','suit-isomorphism','river-hand-symmetry','action-frequency-pruning','action-prune-threshold','action-prune-warmup','action-prune-recheck','scheduled-alpha-start','scheduled-alpha-gain','scheduled-ramp-length','scheduled-averaging-power','adaptive-convergence','zero-reach-pruning','enable-profile'])$(id).addEventListener('change',()=>{if(id==='pot'||id==='stack'){view.source=null;showSource();}if(id.startsWith('action-prune')){view.fixedActionWarmup=null;view.fixedPrunePlanned=null;}renderBoard();invalidate();});
+ for(const id of ['qre-temperature','pot','stack','sizes0','sizes1','turn-sizes0','turn-sizes1','turn-donk-sizes0','turn-entry-mode','flop-donk-sizes0','flop-entry-mode','river-donk-sizes0','river-entry-mode','flop-sizes0','flop-sizes1','raise-sizes0','raise-sizes1','turn-raise-sizes0','turn-raise-sizes1','flop-raise-sizes0','flop-raise-sizes1','flop-chance-mode','flop-sampling-method','flop-turn-samples','flop-river-samples','flop-sampling-seed','raises','max-nodes','allin','memory-limit','storage-layout','storage-precision','suit-isomorphism','river-hand-symmetry','action-frequency-pruning','action-prune-threshold','action-prune-warmup','action-prune-recheck','scheduled-alpha-start','scheduled-alpha-gain','scheduled-ramp-length','scheduled-averaging-power','adaptive-convergence','zero-reach-pruning','enable-profile'])$(id).addEventListener('change',()=>{if(id==='pot'||id==='stack'){view.source=null;showSource();}if(id.startsWith('action-prune')){view.fixedActionWarmup=null;view.fixedPrunePlanned=null;}renderBoard();invalidate();});
  $('solve-console-copy').addEventListener('click',async()=>{
   const text=view.solveLog;if(!text)return;
   try{

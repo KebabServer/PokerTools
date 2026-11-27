@@ -52,16 +52,23 @@ typedef struct {
     int8_t *exponent;
 } Strategy;
 typedef struct {
+    uint32_t stamp;
+    uint8_t indices[49], widths[49];
+} PublicDraw;
+typedef struct { double positive, negative; } Discount;
+typedef struct {
     const Node *nodes;
     const Player *mine, *opp;
     const Strategy *strategies;
     double half_pot, regret_unit, tie_floor, averaging, positive, negative;
     int target, mode, conditioned, failed;
     double *end;
+    uint32_t iteration, visited, branches;
 } Solver;
 
 _Static_assert(sizeof(Node)==88 && sizeof(Deal)==20 && sizeof(Player)==16 &&
-               sizeof(Payoff)==24 && sizeof(Strategy)==36, "WebAssembly bridge ABI");
+               sizeof(Payoff)==24 && sizeof(Strategy)==36 && sizeof(PublicDraw)==104,
+               "WebAssembly bridge ABI");
 
 typedef struct {
     const uint8_t *valid;
@@ -75,12 +82,73 @@ typedef struct {
 
 static const Strategy *strategies;
 static double regret_unit, tie_floor;
+static int turn_budget, river_budget, stratified;
+static uint32_t public_seed, public_iteration, *public_last, *public_counts;
+static double public_before, public_after, *public_factors;
 
 EXPORT("configure_strategy")
 void configure_strategy(const Strategy *table, double unit, double floor) {
     strategies=table;
     regret_unit=unit;
     tie_floor=floor;
+}
+
+EXPORT("configure_public_chance")
+void configure_public_chance(int turns,int rivers,int bands,uint32_t seed,
+                             uint32_t *last,double *factors,uint32_t *counts) {
+    turn_budget=turns; river_budget=rivers; stratified=bands; public_seed=seed;
+    public_last=last; public_factors=factors; public_counts=counts;
+}
+
+EXPORT("begin_public_pass")
+void begin_public_pass(uint32_t iteration,double before,double after) {
+    public_iteration=iteration; public_before=before; public_after=after;
+}
+
+INLINE uint32_t chance_mix(uint32_t x) {
+    x=(x^(x>>16))*UINT32_C(0x21f0aaad);
+    x=(x^(x>>15))*UINT32_C(0x735a2d97);
+    return x^(x>>15);
+}
+
+static int uniform_index(uint32_t *state,uint32_t limit) {
+    const uint64_t space=UINT64_C(0x100000000),ceiling=space-space%limit;
+    uint32_t value;
+    do{*state+=UINT32_C(0x9e3779b9);value=chance_mix(*state);}while(value>=ceiling);
+    return value%limit;
+}
+
+// The bridge shares one draw across betting histories with the same public
+// prefix and orbit count. Keep this stream and order in sync with core.js.
+static void prepare_draw(PublicDraw *draw,int size,int count,int board,uint32_t stamp) {
+    if(draw->stamp==stamp)return;
+    draw->stamp=stamp;
+    uint32_t state=chance_mix(public_seed^chance_mix(stamp)^
+        (board+1)*UINT32_C(0x9e3779b9)^size*UINT32_C(0x85ebca6b));
+    if(stratified){
+        for(int i=0;i<count;i++){
+            const int start=i*size/count,width=(i+1)*size/count-start;
+            draw->indices[i]=start+uniform_index(&state,width);
+            draw->widths[i]=width;
+        }
+        return;
+    }
+    for(int i=0;i<size;i++)draw->indices[i]=i;
+    for(int i=0;i<count;i++){
+        const int j=i+uniform_index(&state,size-i);
+        const uint8_t value=draw->indices[i];
+        draw->indices[i]=draw->indices[j];draw->indices[j]=value;
+    }
+    for(int i=1;i<count;i++){
+        const uint8_t value=draw->indices[i];
+        int j=i;
+        while(j&&draw->indices[j-1]>value){draw->indices[j]=draw->indices[j-1];j--;}
+        draw->indices[j]=value;
+    }
+}
+
+INLINE double age_regret(double value,Discount age) {
+    return value*(value>0?age.positive:age.negative);
 }
 
 INLINE void clear(double *v, int n) {
@@ -214,6 +282,12 @@ INLINE v128_t action_zero(v128_t first,v128_t second) {
 INLINE v128_t action_one(v128_t first,v128_t second) {
     return wasm_i64x2_shuffle(first,second,1,3);
 }
+INLINE v128_t age_lanes(v128_t value,Discount age,v128_t zero) {
+    if(age.negative==1)return value;
+    const v128_t factor=wasm_v128_bitselect(wasm_f64x2_splat(age.positive),
+        wasm_f64x2_splat(age.negative),wasm_f64x2_gt(value,zero));
+    return wasm_f64x2_mul(value,factor);
+}
 INLINE v128_t discounted(v128_t regret,v128_t values,v128_t ev,v128_t pos,v128_t neg,v128_t zero) {
     const v128_t sum=wasm_f64x2_add(regret,wasm_f64x2_sub(values,ev));
     return wasm_f64x2_mul(sum,wasm_v128_bitselect(pos,neg,wasm_f64x2_gt(sum,zero)));
@@ -223,7 +297,7 @@ INLINE v128_t discounted(v128_t regret,v128_t values,v128_t ev,v128_t pos,v128_t
 // Binary dense decisions have no row mapping. Across two hands the action
 // dot product, regret update and average each retain their scalar order.
 static void train_binary(const Solver *s,const Node *node,const double *values,
-                         const double *own,double *out) {
+                         const double *own,double *out,Discount age) {
     const int n=s->mine->count;
     double *policy=node->current,*regret=node->regret,*average=node->average;
     const double *first=values,*second=values+n;
@@ -240,8 +314,8 @@ static void train_binary(const Solver *s,const Node *node,const double *values,
         const v128_t ev=wasm_f64x2_add(wasm_f64x2_mul(p0,v0),wasm_f64x2_mul(p1,v1));
         wasm_v128_store(out+i,ev);
         const v128_t r=wasm_v128_load(regret+off),t=wasm_v128_load(regret+off+2);
-        const v128_t r0=discounted(action_zero(r,t),v0,ev,pos,neg,zero);
-        const v128_t r1=discounted(action_one(r,t),v1,ev,pos,neg,zero);
+        const v128_t r0=discounted(age_lanes(action_zero(r,t),age,zero),v0,ev,pos,neg,zero);
+        const v128_t r1=discounted(age_lanes(action_one(r,t),age,zero),v1,ev,pos,neg,zero);
         wasm_v128_store(regret+off,action_zero(r0,r1));
         wasm_v128_store(regret+off+2,action_one(r0,r1));
         const v128_t positive0=wasm_f64x2_max(r0,zero),positive1=wasm_f64x2_max(r1,zero);
@@ -262,7 +336,7 @@ static void train_binary(const Solver *s,const Node *node,const double *values,
         const int off=i*2;
         const double p=policy[off],q=policy[off+1],x=first[i],y=second[i],ev=p*x+q*y;
         out[i]=ev;
-        const double r=regret[off]+(x-ev),t=regret[off+1]+(y-ev);
+        const double r=age_regret(regret[off],age)+(x-ev),t=age_regret(regret[off+1],age)+(y-ev);
         const double r0=r*(r>0?s->positive:s->negative),r1=t*(t>0?s->positive:s->negative);
         regret[off]=r0;regret[off+1]=r1;
         const double u=r0>0?r0:0,v=r1>0?r1:0,sum=u+v;
@@ -329,7 +403,7 @@ static void average_scaled(const Node *node, const Strategy *st, int row, int ac
 }
 
 static void update_row(const Solver *s, const Node *node, const Strategy *st, int row,
-                       const double *values, const double *policy, double ev, double weight) {
+                       const double *values, const double *policy, double ev, double weight,Discount age) {
     const int a=node->actions,off=row*a;
     const int flags=st->flags;
     double r[MAX_ACTIONS],next[MAX_ACTIONS];
@@ -343,7 +417,7 @@ static void update_row(const Solver *s, const Node *node, const Strategy *st, in
             wasm_f64x2_promote_low_f32x4(wasm_v128_load64_zero((const float *)node->regret+off+k)):
             wasm_v128_load((const double *)node->regret+off+k);
         const v128_t diff=wasm_f64x2_mul(wasm_f64x2_sub(wasm_v128_load(values+k),baseline),scale);
-        const v128_t sum=wasm_f64x2_add(past,diff);
+        const v128_t sum=wasm_f64x2_add(age_lanes(past,age,zero),diff);
         const v128_t rate=wasm_v128_bitselect(pos,neg,wasm_f64x2_gt(sum,zero));
         const v128_t updated=wasm_f64x2_mul(sum,rate);
         if(flags&REGRET32){
@@ -360,12 +434,12 @@ static void update_row(const Solver *s, const Node *node, const Strategy *st, in
         const double delta=(values[k]-ev)*s->regret_unit;
         if(flags&REGRET32){
             float *slot=(float *)node->regret+off+k;
-            const double x=*slot+delta;
+            const double x=age_regret(*slot,age)+delta;
             *slot=(float)(x*(x>0?s->positive:s->negative));
             r[k]=*slot;
         }else{
             double *slot=(double *)node->regret+off+k;
-            const double x=*slot+delta;
+            const double x=age_regret(*slot,age)+delta;
             *slot=x*(x>0?s->positive:s->negative);
             r[k]=*slot;
         }
@@ -388,6 +462,7 @@ static void update_row(const Solver *s, const Node *node, const Strategy *st, in
 
 static void visit(Solver *s, int id, Reach opp, const double *own, double *out, double *scratch) {
     if(s->failed)return;
+    if(s->iteration)s->visited++;
     const Node *node=s->nodes+id;
     const int n=s->mine->count,on=s->opp->count,a=node->actions;
     if(node->kind==TERMINAL){terminal(s,node,opp,out);return;}
@@ -396,9 +471,24 @@ static void visit(Solver *s, int id, Reach opp, const double *own, double *out, 
         if(end>s->end){s->failed=1;return;}
         Basis basis;
         clear(out,n);
-        for(int j=0;j<node->deal_count;j++){
-            const Deal *deal=node->deals+j;
-            const double w=*deal->weight;
+        const int size=node->deal_count,board=node->turn<0?CARDS:node->turn;
+        int count=size;
+        double scale=1;
+        const PublicDraw *sample=NULL;
+        if(s->iteration){
+            const int budget=board==CARDS?turn_budget:river_budget;
+            if(budget<size){
+                count=budget;
+                PublicDraw *draw=(PublicDraw *)(uintptr_t)node->previous;
+                prepare_draw(draw,size,count,board,2*s->iteration+s->target);
+                sample=draw;
+                if(!stratified)scale=(double)size/count;
+            }
+            s->branches+=count;
+        }
+        for(int j=0;j<count;j++){
+            const Deal *deal=node->deals+(sample?sample->indices[j]:j);
+            const double w=*deal->weight*(sample?(stratified?sample->widths[j]:scale):1);
             deal_reach(s->opp,opp.weights,next,deal->card,w);
             if(own)deal_reach(s->mine,own,next_own,deal->card,w);
             basis.ready=0;
@@ -449,8 +539,19 @@ static void visit(Solver *s, int id, Reach opp, const double *own, double *out, 
         visit(s,node->children[k],opp,next,values+k*n,end);
         if(s->failed)return;
     }
+    Discount age={1,1};
+    if(s->iteration&&node->previous){
+        const int clock=node->previous-1;
+        const uint32_t gap=s->iteration-public_last[clock]-1;
+        if(gap){
+            age.positive=public_before/public_factors[clock];
+            age.negative=gap>1074?0:power_of_two(-(int)gap);
+        }
+        public_last[clock]=s->iteration;
+        public_factors[clock]=public_after;
+    }
     if(s->mode==TRAIN&&a==2&&!st->flags&&!st->locked){
-        train_binary(s,node,values,own,out);
+        train_binary(s,node,values,own,out,age);
         return;
     }
     if(a==2&&(s->mode==BEST||(s->mode==CONSTRAINED&&!st->locked))){
@@ -483,7 +584,7 @@ static void visit(Solver *s, int id, Reach opp, const double *own, double *out, 
         }
         out[h]=ev;
         if(s->mode==TRAIN&&!fixed&&row>=0&&(!(st->flags&COMPACT)||st->reps[row]==h))
-            update_row(s,node,st,row,v,policy,ev,own?s->averaging*own[h]:0);
+            update_row(s,node,st,row,v,policy,ev,own?s->averaging*own[h]:0,age);
     }
 }
 
@@ -492,12 +593,15 @@ static int run(const Node *nodes, const Player *players, int id, int target, int
                double *own, double *scratch, double *end, double positive, double negative) {
     // Root priors already exclude the starting board. The chance path keeps
     // them conditioned, while selected subtrees can receive an arbitrary reach.
-    Solver solver={nodes,players+target,players+1-target,strategies,pot*0.5,regret_unit,tie_floor,
-                   averaging,positive,negative,target,mode,id==0,0,end};
+    Solver solver={.nodes=nodes,.mine=players+target,.opp=players+1-target,.strategies=strategies,
+        .half_pot=pot*0.5,.regret_unit=regret_unit,.tie_floor=tie_floor,.averaging=averaging,
+        .positive=positive,.negative=negative,.target=target,.mode=mode,.conditioned=id==0,.end=end,
+        .iteration=mode==TRAIN?public_iteration:0};
     if(own)for(int i=0;i<solver.mine->count;i++)own[i]=1;
     Basis basis;
     basis.ready=0;
     visit(&solver,id,(Reach){reach,&basis},own,out,scratch);
+    if(solver.iteration){public_counts[0]=solver.visited;public_counts[1]=solver.branches;}
     return !solver.failed;
 }
 
