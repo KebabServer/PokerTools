@@ -21,7 +21,9 @@ Open <http://localhost:5173/PokerTools/>. For a local production check, run `npm
 3. Ensure `public` is exposed to the Data API. The migrations use row-level security to make saved items and imported flop ranges visible to their owners and make shared study data available to signed-in accounts. The login migration copies and checksums the study files from an earlier GitHub revision.
 4. Copy `.env.example` to `.env.local`. Set `VITE_SUPABASE_URL` to the project URL and `VITE_SUPABASE_PUBLISHABLE_KEY` to its `sb_publishable_` key, then restart Vite. Use only the publishable key in those settings. Vite embeds these values in the public JavaScript bundle.
 
-Sign in at the site entrance. You can sign out from **Library**. Use **Save hand** in Replayer to save a completed hand and its notes. **Save notes** updates the notes on an open saved hand. In Equity, use **Save calculation** after a calculation to keep its inputs and exact or estimated results. Open or delete either kind of item in **Library**.
+Sign in at the site entrance and sign out from **Settings**. Use **Save hand** in Replayer to save a completed hand and its notes. **Save notes** updates the notes on an open saved hand. In Equity, use **Save calculation** after a calculation to keep its inputs and exact or estimated results. Open or delete either kind of item in **Library**.
+
+**Settings** reads database size and stored file bytes through the member-only `pokertools_project_usage` function. Database headroom is an estimate against the 500 MB Free Plan limit. Use **Open Supabase Usage** for organization-wide storage and billing-cycle quotas such as bandwidth and monthly active users.
 
 ## Deploy with GitHub Pages
 

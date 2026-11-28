@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BookOpen, Calculator, ChartColumn, Cpu, Grid3X3, Layers3, Network, NotebookPen, Spade } from 'lucide-react'
+import { BookOpen, Calculator, ChartColumn, Cpu, Grid3X3, Layers3, Network, NotebookPen, SlidersHorizontal, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
 import { Library } from './Library.tsx'
+import { Settings } from './Settings.tsx'
 import { SignIn } from './SignIn.tsx'
 import { calculationLibrary, handLibrary, supabase, type SavedCalculation, type SavedHand } from './library.ts'
 import { noteIdFromHref } from './noteMarkdown.ts'
@@ -27,6 +28,7 @@ const tabs = [
   { id: 'solver', label: 'Solver', name: 'Solver', Icon: Cpu },
   { id: 'notes', label: 'Notes', name: 'Notes', Icon: NotebookPen },
   { id: 'library', label: 'Library', name: 'Library', Icon: BookOpen },
+  { id: 'settings', label: 'Settings', name: 'Settings', Icon: SlidersHorizontal },
 ] as const
 
 function tabFromHash() {
@@ -134,8 +136,9 @@ function Workspace({ session }: { session: Session }) {
           <Notes userId={session.user.id} active={tool === 'notes'} locked={signingOut} flushRef={flushNotes} />
         </Suspense>
       </div>}
-      {tool === 'library' && <Library session={session} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand}
-        removeCalculation={removeCalculation} signOut={signOut} signingOut={signingOut} flushNotes={() => flushNotes.current?.()} />}
+      {tool === 'library' && <Library userId={session.user.id} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand}
+        removeCalculation={removeCalculation} signingOut={signingOut} flushNotes={() => flushNotes.current?.()} />}
+      {tool === 'settings' && <Settings email={session.user.email} signOut={signOut} signingOut={signingOut} />}
     </main>
   </>
 }

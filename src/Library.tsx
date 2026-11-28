@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Session } from '@supabase/supabase-js'
 import { Trash2 } from 'lucide-react'
 import { calculationLibrary, handLibrary, type SavedCalculation, type SavedHand } from './library.ts'
 import { prepareBackup } from './backup.ts'
@@ -109,28 +108,16 @@ function Backup({ userId, flushNotes, signingOut }: {
   </section>
 }
 
-export function Library({ session, openHand, openCalculation, removeHand, removeCalculation, signOut, signingOut, flushNotes }: {
-  session: Session; openHand: (hand: SavedHand) => void; openCalculation: (calculation: SavedCalculation) => void
+export function Library({ userId, openHand, openCalculation, removeHand, removeCalculation, signingOut, flushNotes }: {
+  userId: string; openHand: (hand: SavedHand) => void; openCalculation: (calculation: SavedCalculation) => void
   removeHand: (id: string) => Promise<void>; removeCalculation: (id: string) => Promise<void>
-  signOut: () => Promise<void>; signingOut: boolean; flushNotes: () => Promise<void> | undefined
+  signingOut: boolean; flushNotes: () => Promise<void> | undefined
 }) {
-  const [problem, setProblem] = useState('')
-
-  async function leave() {
-    setProblem('')
-    try {
-      await signOut()
-    } catch (error) {
-      setProblem((error as Error).message)
-    }
-  }
-
   return <div className="library-workspace">
-    <div className="tool-heading"><h1>Library</h1><button className="button small" disabled={signingOut} onClick={() => void leave()}>Sign out</button></div>
-    {problem && <p className="error" role="alert">{problem}</p>}
+    <div className="tool-heading"><h1>Library</h1></div>
     <div className="library-sections">
-      <Backup userId={session.user.id} flushNotes={flushNotes} signingOut={signingOut} />
-      <LibraryItems userId={session.user.id} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />
+      <Backup userId={userId} flushNotes={flushNotes} signingOut={signingOut} />
+      <LibraryItems userId={userId} openHand={openHand} openCalculation={openCalculation} removeHand={removeHand} removeCalculation={removeCalculation} />
     </div>
   </div>
 }
