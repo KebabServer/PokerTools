@@ -2,6 +2,7 @@
 (function () {
 'use strict';
 const C=createSolverCore(), S=createStrategyView(C), $=id=>document.getElementById(id);
+const {evLoss:studyEvLoss}=createHeuristicTester(C);
 const checkpointCodec=createCheckpointFormat();
 const MiB=1048576, maxWorkerMiB=8192, maxTreeRecords=1_000_000;
 let heuristicPanel;
@@ -15,7 +16,7 @@ const view={filter:newFilter(),
  weights:[new Float64Array(1326),new Float64Array(1326)],rangeP:0,rangeCat:'AKs',rangePresets:['example','example'],viewCat:null,
  game:null,capacityError:null,report:null,node:0,parents:[],worker:null,workerBytes:0,fallback:null,
  active:false,stopRequested:false,generation:0,limit:2000,origin:'',solverStatus:'ready',source:null,solveTargetPercent:null,
- fullReportReady:false,fullReportPromise:null,fullReportResolve:null,fullReportReject:null,detailPending:new Set(),fixedActionWarmup:null,fixedPrunePlanned:null,solveRun:null,solveLog:'',benchmark:null,nodeLocks:[],lockCat:'AKs',studyBaseline:null,selectedLockCombos:new Set(),sampleStudy:null
+ fullReportReady:false,fullReportPromise:null,fullReportResolve:null,fullReportReject:null,detailPending:new Set(),detailWaiters:new Map(),fixedActionWarmup:null,fixedPrunePlanned:null,solveRun:null,solveLog:'',benchmark:null,nodeLocks:[],lockCat:'AKs',studyBaseline:null,selectedLockCombos:new Set(),sampleStudy:null
 };
 function escapeHtml(x){return String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function cardHtml(id){const s=C.cardText(id),suit=s[1];return `<span class="mini-card s-${suit}" title="${s[0]} of ${suitNames[suit]}" aria-label="${s[0]} of ${suitNames[suit]}">${s[0]}</span>`;}
@@ -691,6 +692,8 @@ function cancel(){
  if($('save-checkpoint'))$('save-checkpoint').disabled=true;
  if(view.fullReportReject)view.fullReportReject(Error('Solve was replaced.'));
  view.fullReportPromise=null;view.fullReportResolve=null;view.fullReportReject=null;view.detailPending.clear();
+ for(const pending of view.detailWaiters.values())pending.reject(Error('Solve was replaced.'));
+ view.detailWaiters.clear();
  view.generation++;
  if(view.worker){
   // Release a large native arena with its worker before allocating a new one.
@@ -901,8 +904,27 @@ function requestNodeDetail(id){
   const generation=view.generation;
   setTimeout(()=>{if(generation!==view.generation)return;
    try{acceptNodeDetail(id,view.fallback.solver.nodeReport(id));}
-   catch(err){view.detailPending.delete(id);notify('Could not calculate selected-node EV: '+err.message,'warn');}},0);
- }
+   catch(error){rejectNodeDetail(id,error);}},0);
+ }else rejectNodeDetail(id,Error('The completed numerical state is unavailable.'));
+}
+function ensureNodeDetail(id){
+ const record=view.report?.nodes[id];
+ if(record)return Promise.resolve(record);
+ if(!view.report||view.fullReportReady||view.active)return Promise.reject(Error('Selected decision unavailable.'));
+ const pending=view.detailWaiters.get(id);
+ if(pending)return pending.promise;
+ let resolve,reject;
+ const promise=new Promise((done,failed)=>{resolve=done;reject=failed;});
+ view.detailWaiters.set(id,{promise,resolve,reject});
+ requestNodeDetail(id);
+ return promise;
+}
+function rejectNodeDetail(id,error){
+ view.detailPending.delete(id);
+ const pending=view.detailWaiters.get(id);
+ view.detailWaiters.delete(id);
+ if(pending)pending.reject(error);
+ else notify('Selected-node report failed. '+error.message,'warn');
 }
 function requestSelectedDetails(){
  if(!view.report||view.active)return;
@@ -910,8 +932,10 @@ function requestSelectedDetails(){
 }
 function acceptNodeDetail(id,record){
  view.detailPending.delete(id);
- if(!view.report||!record)return;
+ if(!view.report||!record){rejectNodeDetail(id,Error('Selected decision unavailable.'));return;}
  view.report.nodes[id]=record;
+ view.detailWaiters.get(id)?.resolve(record);
+ view.detailWaiters.delete(id);
  if(getPath(view.node).includes(id)){renderExplorer();renderTree();}
  requestSelectedDetails();
 }
@@ -934,6 +958,11 @@ async function ensureFullReport(){
 function acceptFullReport(report){
  const done=view.fullReportResolve;
  view.fullReportReady=true;view.fullReportPromise=null;view.fullReportResolve=null;view.fullReportReject=null;view.detailPending.clear();
+ for(const [id,pending] of view.detailWaiters){
+  if(report.nodes[id])pending.resolve(report.nodes[id]);
+  else pending.reject(Error('Selected decision unavailable.'));
+ }
+ view.detailWaiters.clear();
  updateReport(report,'finished');
  if(done)done(report);
 }
@@ -945,10 +974,10 @@ function rejectFullReport(error){
 // The worker owns the mutable betting tree, so its report carries the
 // authoritative culling masks. Match aliases to the canonical decision node.
 function culledAtNode(nodeId){
- const n=view.game?.nodes[nodeId];if(!n)return null;
- const id=n.isoAlias?.source??nodeId;
+ let node=view.game?.nodes[nodeId];if(!node)return null;
+ while(node.isoAlias)node=view.game.nodes[node.isoAlias.source];
  const rows=view.report?.actionPruning?.culledNodes;
- return rows?.find(row=>row[0]===id)?.[1]||null;
+ return rows?.find(row=>row[0]===node.id)?.[1]||null;
 }
 
 // v16.13: reusable exact-combo study workflows. A baseline is bound to the
@@ -977,8 +1006,7 @@ async function currentNodeReport(){
  if(view.active||view.benchmark?.running||view.sampleStudy?.running)throw Error('Finish the current solve first.');
  if(!view.report)throw Error('Solve a game before copying or comparing its strategy.');
  const node=getSelected();if(!node||node.terminal||node.chance)throw Error('Select a decision node.');
- await ensureFullReport();
- const record=view.report?.nodes?.[node.id];
+ const record=await ensureNodeDetail(node.id);
  if(!record||!Array.isArray(record.hands)||record.hands.length===0)
   throw Error('No complete hand-level strategy is available at this decision.');
  return {node,record};
@@ -989,9 +1017,14 @@ async function captureStudyBaseline(){
  view.studyBaseline={key:studyFingerprint(cfg),nodeId:node.id,history:node.history.slice(),player:node.p,
   actions:node.actions.map(a=>a.label),rangeEV:record.rangeEV??null,
   frequencies:record.actions.slice(),hands:record.hands.map(h=>[h[0],h[1],h[2],h[3].slice()]),
-  iteration:view.report.iteration,algorithm:cfg.gtoAlgorithm,captured:new Date().toISOString()};
+  iteration:view.report.iteration,algorithm:cfg.gtoAlgorithm,captured:new Date().toISOString(),
+  oopBounds:canCompareStudyBounds(cfg)&&!cfg.nodeLocks?.length?view.report.oopEvBounds:null};
+ $('study-save-baseline').disabled=false;
  renderStudyComparison();
  notify('Saved baseline for node #'+node.id+'. Re-solve with locks to compare changes.');
+}
+function canCompareStudyBounds(cfg){
+ return cfg.equilibrium==='gto'&&!activeFrequencyIncrements(cfg).length&&!cfg.useActionFrequencyPruning;
 }
 async function lockSolvedStrategy(){
  const {node,record}=await currentNodeReport();
@@ -1035,9 +1068,19 @@ function renderStudyComparison(){
  diffs.sort((a,b)=>b.delta-a.delta);
  const evOld=base.rangeEV,evNew=rec.rangeEV;
  const dEv=Number.isFinite(evOld)&&Number.isFinite(evNew)?' (Δ '+evText(evNew-evOld,3)+' chips)':'';
+ let bounds='';
+ if(base.oopBounds&&view.report.oopEvBounds&&canCompareStudyBounds(current)&&
+    current.nodeLocks?.length&&current.nodeLocks.every(lock=>lock.player===node.p)){
+  try{
+   const {chips,potPercent}=studyEvLoss(base.oopBounds,view.report.oopEvBounds,node.p,view.game.pot);
+   bounds='<div>'+ (node.p===0?'OOP':'IP') +' equilibrium EV loss · '+fmt(chips.lower,3)+' to '+fmt(chips.upper,3)+
+    ' chips ('+fmt(potPercent.lower,3)+'% to '+fmt(potPercent.upper,3)+'% of pot)</div>';
+  }catch(_){/* Imported baselines can lack comparable bounds. */}
+ }
  const rows=labels.map((label,k)=>`<tr><td>${escapeHtml(label)}</td><td>${fmt(100*(base.frequencies[k]||0),2)}%</td><td>${fmt(100*(rec.actions[k]||0),2)}%</td><td>${evText(100*((rec.actions[k]||0)-(base.frequencies[k]||0)),2)} pp</td></tr>`).join('');
  const top=diffs.slice(0,8).map(x=>C.ALL_COMBOS[x.id].map(C.cardText).join('')+' '+fmt(100*x.delta,1)+' pp').join(' · ');
  el.innerHTML=`<strong>Baseline vs. current solution · node #${base.nodeId}</strong><div>Range EV: ${evText(evOld,3)} → ${evText(evNew,3)} chips${dEv}</div>`+
+  bounds+
   `<table><thead><tr><th>Action</th><th>Baseline</th><th>Current</th><th>Δ frequency</th></tr></thead><tbody>${rows}</tbody></table>`+
   `<div><strong>Largest hand-mix changes:</strong> ${escapeHtml(top||'No overlapping hand data')}</div>`+
   '<p class="muted">Same configured game and weighted ranges. These differences do not by themselves indicate a better equilibrium.</p>';
@@ -1589,9 +1632,8 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
     if(m.type==='detail')acceptNodeDetail(m.id,m.record);
     if(m.type==='full-report')acceptFullReport(m.report);
     if(m.type==='detail-error'){
-     if(m.id!==undefined)view.detailPending.delete(m.id);
      if(m.id===undefined)rejectFullReport(Error(m.message));
-     else notify('Selected-node report failed: '+m.message,'warn');
+     else rejectNodeDetail(m.id,Error(m.message));
     }
     if(m.type==='finished')finished(m.kind,m.report);
    };
@@ -1748,7 +1790,7 @@ function restoreSolution(data){
   scheduledRampLength:d.scheduledRampLength??16,scheduledAveragingPower:d.scheduledAveragingPower??3,
   useAdaptiveConvergence:!!d.useAdaptiveConvergence,weights0:w[0],weights1:w[1],maxNodes:maxTreeRecords,
   ...localMemoryLimits(Number($('memory-limit').value)*MiB)};
- const g=C.makeGame(cfg);if(!Array.isArray(r.nodes)||r.nodes.length!==g.nodes.length||!Array.isArray(data.tree)||data.tree.length!==g.nodes.length)throw Error('Saved report does not match the game tree.');
+ const g=C.makeGame(cfg,{preview:true,lazyTree:true});if(!Array.isArray(r.nodes)||r.nodes.length!==g.nodes.length||!Array.isArray(data.tree)||data.tree.length!==g.nodes.length)throw Error('Saved report does not match the game tree.');
  for(const n of g.nodes){const rec=r.nodes[n.id],old=data.tree[n.id];if(!old||old.id!==n.id||old.pot!==n.pot||JSON.stringify(old.history)!==JSON.stringify(n.history))throw Error('Saved tree differs from this engine.');if(n.terminal||n.chance)continue;if(!rec||rec.player!==n.p||!Array.isArray(rec.actions)||rec.actions.length!==n.actions.length||
    rec.actions.some(v=>!Number.isFinite(v)||v<0||v>1+1e-9)||
    !Array.isArray(rec.hands)||rec.hands.length!==g.players[n.p].ids.length||
