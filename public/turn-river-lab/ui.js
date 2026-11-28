@@ -3,6 +3,7 @@
 'use strict';
 const C=createSolverCore(), S=createStrategyView(C), $=id=>document.getElementById(id);
 const checkpointCodec=createCheckpointFormat();
+const MiB=1048576, maxWorkerMiB=8192, maxTreeRecords=1_000_000;
 let heuristicPanel;
 const R='AKQJT98765432', suitNames={s:'spades',h:'hearts',d:'diamonds',c:'clubs'};
 // Action palette: passive actions remain green/blue; bet and raise sizes share a size bucket palette.
@@ -12,7 +13,7 @@ const newFilter=()=>({suits:[],both:false,handClass:null});
 const view={filter:newFilter(),
  mode:'turn',board:['As','8h','3d','2c'].map(C.cardId),slot:0,pickerSuit:'s',
  weights:[new Float64Array(1326),new Float64Array(1326)],rangeP:0,rangeCat:'AKs',rangePresets:['example','example'],viewCat:null,
- game:null,report:null,node:0,parents:[],worker:null,fallback:null,
+ game:null,capacityError:null,report:null,node:0,parents:[],worker:null,workerBytes:0,fallback:null,
  active:false,stopRequested:false,generation:0,limit:2000,origin:'',solverStatus:'ready',source:null,solveTargetPercent:null,
  fullReportReady:false,fullReportPromise:null,fullReportResolve:null,fullReportReject:null,detailPending:new Set(),fixedActionWarmup:null,fixedPrunePlanned:null,solveRun:null,solveLog:'',benchmark:null,nodeLocks:[],lockCat:'AKs',studyBaseline:null,selectedLockCombos:new Set(),sampleStudy:null
 };
@@ -101,6 +102,11 @@ function solveCompletionText({kind,report,config:cfg,game,mode,run,targetPercent
  out('Board',cfg.board.map(id=>createSolverCoreCardText(id)).join(' '));
  out('Pot / effective stack',integer(cfg.pot)+' / '+integer(cfg.stack)+' chips');
  out('Tree nodes',integer(game?.nodes?.length));
+ if(game?.capacity){
+  out('Materialized tree records',integer(game.capacity.materializedRecords));
+  out('Canonical decisions',integer(game.capacity.canonicalDecisions));
+  out('Estimated peak memory',numeric(game.capacity.peakBytes/MiB,1)+' MiB');
+ }
  if(mode==='flop')out('Evaluation runouts',game?.sampledChance?'fixed sampled game, '+integer(cfg.flopTurnSamples)+' turns x '+integer(cfg.flopRiverSamples)+' rivers, seed '+integer(cfg.flopSamplingSeed??0):'full flop game');
  const chance=report.trainingChance;
  if(chance){
@@ -219,7 +225,7 @@ function startSampleStudy(){
  if(view.active||view.benchmark?.running||view.sampleStudy?.running){notify('Stop the current solve or benchmark before starting a study.','warn');return;}
  if(view.mode!=='flop'){notify('Runout sampling studies require a flop starting board.','warn');return;}
  if(dynamicFlop())return;
- let cfg;try{cfg=config();C.makeGame(cfg,{preview:true});}catch(e){notify(e.message,'error');return;}
+ let cfg;try{cfg=config();C.makeGame(cfg,{preview:true,lazyTree:true});}catch(e){notify(e.message,'error');return;}
  if(cfg.flopTurnSamples===49&&cfg.flopRiverSamples===48){notify('All runouts are enumerated; changing the seed cannot change the game.','warn');return;}
  if(cfg.nodeLocks?.length){notify('Remove node locks before comparing sampled trees: their decision IDs can change between seeds.','warn');return;}
  const iterations=Number($('iterations').value),targetPercent=Number($('tolerance').value);
@@ -423,7 +429,7 @@ function startBenchmark(){
  const iterations=Number($('iterations').value),targetPercent=$('tolerance').value.trim()===''?NaN:Number($('tolerance').value);
  try{exploitabilityTargetChips(cfg.pot,targetPercent);}catch(e){notify(e.message,'error');return;}
  if(!Number.isSafeInteger(iterations)||iterations<1||iterations>10000000){notify('Enter a valid iteration cap before benchmarking.','error');return;}
- if(cfg.memoryLimitBytes<2*1048576||cfg.memoryLimitBytes>4096*1048576){notify('Enter a memory budget between 2 and 4,096 MiB.','error');return;}
+ if(cfg.memoryLimitBytes<2*MiB||cfg.memoryLimitBytes>maxWorkerMiB*MiB){notify('Enter a memory budget between 2 and 8,192 MiB.','error');return;}
  // The checkbox can be disabled while QRE is selected; preserve the intended GTO setting.
  cfg.useActionFrequencyPruning=$('action-frequency-pruning').checked;
  const runs=benchmarkCandidates(view.nodeLocks.length>0||activeFrequencyIncrements(cfg).length>0);
@@ -588,10 +594,17 @@ function renderSetupSummaries(){
  $('street-chip').textContent=scope;
  $('run-scope').textContent=scope;
 }
+function localMemoryLimits(memoryLimitBytes){
+ const deviceGiB=Number(navigator.deviceMemory),jsHeap=Number(performance.memory?.jsHeapSizeLimit);
+ const deviceBudget=deviceGiB>0?Math.max(128*MiB,deviceGiB*512*MiB):Infinity;
+ return {memoryLimitBytes,preparationLimitBytes:Math.min(memoryLimitBytes,deviceBudget),
+  treeHeapLimitBytes:jsHeap>0?Math.floor(jsHeap*0.65):undefined};
+}
 function config(){
  const parse=(v)=>{const pieces=v.split(/[;,\s]+/).map(x=>x.trim()).filter(Boolean).map(Number);if(pieces.some(x=>!Number.isFinite(x)||x<=0||x>1000))throw Error('Bet/raise percentages must be positive numbers up to 1,000%.');return pieces;};
  function positive(id,min=1){const x=Number($(id).value);if(!Number.isInteger(x)||x<min)throw Error(id+' must be a whole number ≥ '+min+'.');return x;}
- const equilibrium=$('solver-method').value;
+ const equilibrium=$('solver-method').value,memory=Number($('memory-limit').value);
+ if(!Number.isFinite(memory)||memory<2||memory>maxWorkerMiB)throw Error('Set a memory budget between 2 and 8,192 MiB.');
  const frequencyIncrements=equilibrium==='gto'?C.parseFrequencyIncrements(Object.fromEntries(C.frequencyStreets.map(street=>[street,[0,1].map(p=>{
   const field=frequencyIncrementField(street,p);
   return field.validity.badInput?NaN:Number(field.value);
@@ -613,7 +626,7 @@ function config(){
   scheduledAlphaStart:Number($('scheduled-alpha-start').value),scheduledAlphaGain:Number($('scheduled-alpha-gain').value),
   scheduledRampLength:Number($('scheduled-ramp-length').value),scheduledAveragingPower:Number($('scheduled-averaging-power').value),
   useAdaptiveConvergence:$('adaptive-convergence').checked,
-  memoryLimitBytes:Number($('memory-limit').value)*1048576,storageLayout:$('storage-layout').value,storagePrecision:$('storage-precision').value,
+  ...localMemoryLimits(memory*MiB),storageLayout:$('storage-layout').value,storagePrecision:$('storage-precision').value,
   useSuitIsomorphism:$('suit-isomorphism').checked,useRiverHandSymmetry:$('river-hand-symmetry').checked,
   useActionFrequencyPruning:$('action-frequency-pruning').checked&&$('solver-method').value==='gto',
   actionPruneThresholdPercent:Number($('action-prune-threshold').value),
@@ -663,13 +676,15 @@ function treeParents(game){
 }
 function makeLocalGame(solveConfig=null){
  renderSetupSummaries();
+ view.capacityError=null;
  try{
-  view.game=C.makeGame(solveConfig||config(),{preview:true});view.parents=treeParents(view.game);
+  const cfg=solveConfig?{...solveConfig,...localMemoryLimits(solveConfig.memoryLimitBytes)}:config();
+  view.game=C.makeGame(cfg,{preview:true,lazyTree:true});view.parents=treeParents(view.game);
   if(view.mode==='flop')$('stat-exploit').title=view.game.sampledChance?'Exploitability is calculated for the sampled chance tree, not the complete flop game.':'';
   $('stat-memory').textContent='≈'+fmt(view.game.memory/1048576,2)+' MiB (estimated)';
   renderPreSolveQuality();
   return true;
- }catch(e){view.game=null;view.parents=[];renderPreSolveQuality();notify(e.message,'warn');return false;}
+ }catch(e){view.game=null;view.parents=[];view.capacityError=e.capacity;renderPreSolveQuality();if(!e.capacity)notify(e.message,'warn');return false;}
  finally{heuristicPanel?.refresh();}
 }
 function cancel(){
@@ -678,7 +693,10 @@ function cancel(){
  view.fullReportPromise=null;view.fullReportResolve=null;view.fullReportReject=null;view.detailPending.clear();
  view.generation++;
  if(view.worker){
-  try{view.worker.postMessage({type:'reset'});}catch(_){view.worker.terminate();view.worker=null;}
+  // Release a large native arena with its worker before allocating a new one.
+  if(view.workerBytes>128*MiB){view.worker.terminate();view.worker=null;}
+  else try{view.worker.postMessage({type:'reset'});}catch(_){view.worker.terminate();view.worker=null;}
+  view.workerBytes=0;
  }
  if(view.fallback){clearTimeout(view.fallback.timer);view.fallback=null;}
  view.active=false;view.stopRequested=false;
@@ -1026,13 +1044,26 @@ function renderStudyComparison(){
 }
 function renderPreSolveQuality(){
  const el=$('pre-solve-quality');if(!el)return;
- if(!view.game){el.textContent='Game preview unavailable. Check ranges, betting settings, and node budget.';return;}
+ const capacity=view.capacityError??view.game?.capacity;
+ const capacityParts=capacity?.logicalNodes===undefined?[]:[
+  capacity.logicalNodes.toLocaleString()+' logical nodes',
+  capacity.materializedRecords.toLocaleString()+' tree records',
+  capacity.canonicalDecisions.toLocaleString()+' canonical decisions',
+  fmt(capacity.strategyBytes/MiB,1)+' MiB strategy',fmt(capacity.wasmBytes/MiB,1)+' MiB estimated WASM',
+  fmt(capacity.peakBytes/MiB,1)+' MiB estimated peak'];
+ if(!view.game||view.capacityError){
+  el.innerHTML='<strong>Pre-solve capacity</strong><div>'+escapeHtml(view.capacityError?.message??'Check the ranges and betting settings.')+'</div>'+
+   (capacityParts.length?'<div class="muted">'+capacityParts.map(escapeHtml).join(' · ')+'</div>':'');
+  return;
+ }
  const game=view.game,mb=game.memory/1048576,cap=Number($('memory-limit').value),locks=view.nodeLocks.length;
- const parts=[game.nodes.length.toLocaleString()+' logical tree nodes', (game.numericStorage?.mode??'dense')+' · '+C.storagePrecisions[game.numericStorage?.precision??'float64'],fmt(mb,1)+' MiB estimated solver state',
+ const parts=[...capacityParts, (game.numericStorage?.mode??'dense')+' · '+C.storagePrecisions[game.numericStorage?.precision??'float64'],
   (game.isFlop?(game.publicChance?'Dynamic training · full-game evaluation':game.sampledChance?'Fixed sampled flop':'Fully enumerated flop'):
    game.isTurn?'All legal river runouts':'Fixed river board'),
   locks?locks+' locked nodes; target is constrained':'No locks; unrestricted Nash target'];
  const notes=[];
+ if(!capacityParts.length)parts.push(game.nodes.length.toLocaleString()+' logical nodes',fmt(mb,1)+' MiB estimated solver state');
+ if(capacity?.workerLimit<cap*MiB)notes.push('This browser limits the preparation budget to '+fmt(capacity.workerLimit/MiB,0)+' MiB.');
  if(view.report&&Number.isFinite(view.report.exploitability))
   parts.push('Last measured '+(locks?'constrained':'Nash')+' exploitability '+fmt(view.report.exploitability,4)+' chips/player at iteration '+view.report.iteration);
  if(mb>cap)notes.push('Estimated memory exceeds configured '+cap+' MiB budget.');
@@ -1104,7 +1135,7 @@ function commitNodeLock(node,entry,notice){
  if(entry)updated.push(entry);
  // Validate exact hand IDs, card blockers, history, legal actions, and totals
  // before replacing any live lock or invalidating a solved result.
- C.makeGame({...config(),nodeLocks:updated},{preview:true});
+ C.makeGame({...config(),nodeLocks:updated},{preview:true,lazyTree:true});
  view.nodeLocks=updated;
  invalidate(notice);
  if(view.game){view.node=node.id;renderExplorer();renderTree();}
@@ -1418,7 +1449,7 @@ function workerMain(){
     schedule:createReportScheduler(Date.now(),m.config.useAdaptiveConvergence?m.tolerance:undefined,
      m.config.equilibrium==='gto'&&m.config.gtoAlgorithm==='dcfr')};
    setTimeout(()=>tick(job),0);
-  }catch(err){send({type:'error',message:err.message||String(err)});}
+  }catch(err){send({type:'error',message:err.message||String(err),capacity:err.capacity});}
  };
  function tick(j){
   if(!j||job!==j)return;
@@ -1519,20 +1550,28 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
  if(heuristicPanel?.running()){notify('Finish or cancel the heuristic comparison first.','warn');return false;}
  dismissNotice();
  if(!benchmarkConfig&&view.benchmark&&!view.benchmark.running)clearBenchmark();
- if(!makeLocalGame(benchmarkConfig))return false;
+ if(!makeLocalGame(benchmarkConfig)){
+  if(view.capacityError){$('advanced-toggle').open=true;$('pre-solve-quality').scrollIntoView({block:'nearest'});}
+  return false;
+ }
  const max=benchmarkLimits?.iterations??Number($('iterations').value),percent=benchmarkLimits?.targetPercent??($('tolerance').value.trim()===''?NaN:Number($('tolerance').value)),budget=benchmarkConfig?benchmarkConfig.memoryLimitBytes/1048576:Number($('memory-limit').value);
  let tol;try{tol=exploitabilityTargetChips(view.game.pot,percent);}catch(e){notify(e.message,'error');return false;}
  if(!Number.isInteger(max)||max<1||max>10000000){notify('Max iterations must be a whole number from 1 to 10,000,000.','error');return false;}
- if(!Number.isFinite(budget)||budget<2||budget>4096){notify('Set a memory budget between 2 and 4,096 MiB.','error');return false;}
+ if(!Number.isFinite(budget)||budget<2||budget>maxWorkerMiB){notify('Set a memory budget between 2 and 8,192 MiB.','error');return false;}
  if(view.game.memory/1048576>budget){notify(`The preview estimates ${fmt(view.game.memory/1048576,2)} MiB; the worker will check the exact ${budget} MiB limit before solving.`,'warn');}
  cancel();clearOutput();view.active=true;view.limit=max;view.solveTargetPercent=percent;
  $('solve').disabled=true;$('stop').disabled=false;$('save-checkpoint').disabled=false;$('stat-backend').textContent='—';setStatus('SOLVING','running');
  renderTree();renderExplorer();
- const cfg=benchmarkConfig||config(),generation=view.generation;view.activeConfig=cfg;
+ const cfg=benchmarkConfig?{...benchmarkConfig,...localMemoryLimits(benchmarkConfig.memoryLimitBytes)}:config(),generation=view.generation;view.activeConfig=cfg;
  view.solveRun={startedMs:Date.now(),startedIteration:checkpoint?.iteration??0,limit:max};
  const hands=Math.max(view.game.players[0].ids.length,view.game.players[1].ids.length);
  const batch=Math.max(1,Math.min(view.mode==='river'?15:5,Math.floor((view.mode==='river'?900:350)/hands)));
- const launchFallback=(message)=>{if(view.generation!==generation||!view.active)return;view.origin='fallback'; if(view.worker){view.worker.terminate();view.worker=null;}notify(message,'warn');runFallback(cfg,max,tol,batch,generation,checkpoint);};
+ const launchFallback=(message)=>{
+  if(view.generation!==generation||!view.active)return;
+  if(view.worker){view.worker.terminate();view.worker=null;}
+  if(view.game.capacity?.peakBytes>128*MiB){solverFailed('A Web Worker is required for this game’s memory estimate.');return;}
+  view.origin='fallback';notify(message,'warn');runFallback(cfg,max,tol,batch,generation,checkpoint);
+ };
  if(typeof Worker!=='undefined'&&typeof Blob!=='undefined'&&typeof URL.createObjectURL==='function'){
   try{
    if(!view.worker)view.worker=createSolverWorker();
@@ -1541,7 +1580,7 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
     if(view.generation!==generation)return;
     const m=e.data;
     if(m.runId!==generation)return;
-    if(m.type==='error'){solverFailed('Solver error: '+m.message);return;}
+    if(m.type==='error'){view.capacityError=m.capacity;renderPreSolveQuality();solverFailed('Solver error: '+m.message);return;}
     if(m.type==='checkpoint')downloadCheckpoint(m.checkpoint);
     if(m.type==='checkpoint-error')notify('Checkpoint failed: '+m.message,'error');
     if(m.type==='progress')updateProgress(m.progress);
@@ -1557,7 +1596,9 @@ function startSolver(checkpoint=null,benchmarkConfig=null,benchmarkLimits=null){
     if(m.type==='finished')finished(m.kind,m.report);
    };
    worker.onerror=e=>{if(view.generation===generation){e.preventDefault();launchFallback('Web Worker unavailable on this browser/file setup; solving in cooperative, yielding batches.');}};
-   worker.postMessage({type:'start',runId:generation,config:cfg,max,tolerance:tol,batch,checkpoint});
+    view.workerBytes=view.game.capacity?.peakBytes??view.game.memory;
+    const transfer=checkpoint&&view.workerBytes>128*MiB?[checkpoint.storage.buffer]:[];
+    worker.postMessage({type:'start',runId:generation,config:cfg,max,tolerance:tol,batch,checkpoint},transfer);
    view.origin='worker';return true;
   }catch(err){launchFallback('Could not create a local Web Worker; solving in non-blocking main-thread batches.');return true;}
  }
@@ -1705,7 +1746,8 @@ function restoreSolution(data){
   turnDonkSizes0:d.oopTurnDonkBetSizesPercent,turnEntryMode:d.turnEntryMode,flopDonkSizes0:d.oopFlopDonkBetSizesPercent,flopEntryMode:d.flopEntryMode,riverDonkSizes0:d.oopRiverDonkBetSizesPercent,riverEntryMode:d.riverEntryMode,flopSizes0:d.oopFlopBetSizesPercent,flopSizes1:d.ipFlopBetSizesPercent,raiseSizes0:d.oopRaiseSizesPercent,raiseSizes1:d.ipRaiseSizesPercent,turnRaiseSizes0:d.oopTurnRaiseSizesPercent,turnRaiseSizes1:d.ipTurnRaiseSizesPercent,flopRaiseSizes0:d.oopFlopRaiseSizesPercent,flopRaiseSizes1:d.ipFlopRaiseSizesPercent,flopTurnSamples:d.flopTurnSamples,flopRiverSamples:d.flopRiverSamples,maxRaises:d.maxRaises,allIn:d.allIn,equilibrium:d.equilibrium||'gto',gtoAlgorithm:d.gtoAlgorithm||'cfrplus',qreTemperaturePercent:d.qreTemperaturePercent||0.05,
   scheduledAlphaStart:d.scheduledAlphaStart??1,scheduledAlphaGain:d.scheduledAlphaGain??0.5,
   scheduledRampLength:d.scheduledRampLength??16,scheduledAveragingPower:d.scheduledAveragingPower??3,
-  useAdaptiveConvergence:!!d.useAdaptiveConvergence,weights0:w[0],weights1:w[1],maxNodes:100000,memoryLimitBytes:Number($('memory-limit').value)*1048576};
+  useAdaptiveConvergence:!!d.useAdaptiveConvergence,weights0:w[0],weights1:w[1],maxNodes:maxTreeRecords,
+  ...localMemoryLimits(Number($('memory-limit').value)*MiB)};
  const g=C.makeGame(cfg);if(!Array.isArray(r.nodes)||r.nodes.length!==g.nodes.length||!Array.isArray(data.tree)||data.tree.length!==g.nodes.length)throw Error('Saved report does not match the game tree.');
  for(const n of g.nodes){const rec=r.nodes[n.id],old=data.tree[n.id];if(!old||old.id!==n.id||old.pot!==n.pot||JSON.stringify(old.history)!==JSON.stringify(n.history))throw Error('Saved tree differs from this engine.');if(n.terminal||n.chance)continue;if(!rec||rec.player!==n.p||!Array.isArray(rec.actions)||rec.actions.length!==n.actions.length||
    rec.actions.some(v=>!Number.isFinite(v)||v<0||v>1+1e-9)||
@@ -1739,7 +1781,7 @@ function restoreSolution(data){
  view.fixedActionWarmup=cfg.useActionFrequencyPruning?cfg.actionPruneWarmupIterations??null:null;
  view.fixedPrunePlanned=cfg.useActionFrequencyPruning?cfg.actionPrunePlannedIterations??null:null;
  setChanceConfig(cfg);
- $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled; $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;$('max-nodes').value=Math.max(18000,g.treeStorage.budgetRecords);$('iterations').value=r.iteration;view.limit=r.iteration;
+ $('regret-pruning').checked=!!cfg.useRegretPruning;$('zero-reach-pruning').checked=!!cfg.useZeroReachPruning;$('enable-profile').checked=!!cfg.profileEnabled; $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;$('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;$('max-nodes').value=maxTreeRecords;$('iterations').value=r.iteration;view.limit=r.iteration;
  view.fullReportReady=true;view.game=g;view.parents=treeParents(g);
  setSolverTab('tree');showSource();renderBoard();renderRangeTab();renderSetupSummaries();updateReport(r,'finished');$('save-local').disabled=false;setStatus('SAVED SOLUTION','complete');$('progress-text').textContent='Saved result loaded';notify(d.gtoAlgorithm==='dcfr-2-0.5-2'&&d.algorithmRevision!=='dcfr-2-0.5-2-quadratic-v2'?
  'Legacy DCFR 2/0.5/2 solution loaded: before v16.2 this method used linear averaging. Displayed results remain historical; re-solve for corrected quadratic averaging.':
@@ -1782,7 +1824,7 @@ function applyCheckpointConfig(cfg){
  setChanceConfig(cfg);
  $('flop-turn-samples').value=cfg.flopTurnSamples||8;$('flop-river-samples').value=cfg.flopRiverSamples||6;$('flop-sampling-seed').value=cfg.flopSamplingSeed??0;
  $('raises').value=cfg.maxRaises;$('allin').checked=cfg.allIn;
- $('max-nodes').value=cfg.maxNodes;$('memory-limit').value=Math.min(4096,Math.max(2,Math.ceil(cfg.memoryLimitBytes/1048576)||128));
+ $('max-nodes').value=cfg.maxNodes??maxTreeRecords;$('memory-limit').value=Math.min(maxWorkerMiB,Math.max(2,Math.ceil(cfg.memoryLimitBytes/MiB)||128));
  $('turn-entry-mode').value=cfg.turnEntryMode||'normal';$('flop-entry-mode').value=cfg.flopEntryMode||'normal';$('river-entry-mode').value=cfg.riverEntryMode||'normal';
  $('storage-layout').value=cfg.storageLayout??'dense';
  $('storage-precision').value=cfg.storagePrecision??'float64';
@@ -1810,12 +1852,11 @@ function checkpointWire(){
    if(cp.checkpoint.iteration>=10000000)throw Error('The checkpoint has reached the iteration limit');
    applyCheckpointConfig(cp.config);
    $('iterations').value=Math.max(Number($('iterations').value)||0,cp.checkpoint.iteration+100);
-   startSolver(cp.checkpoint);
-   notify('Resuming exact numerical checkpoint at iteration '+cp.checkpoint.iteration+'.');
+   if(startSolver(cp.checkpoint))notify('Resuming exact numerical checkpoint at iteration '+cp.checkpoint.iteration+'.');
   }catch(error){notify('Could not resume checkpoint: '+error.message,'error');}
  };
 }
-function storageWire(){refreshSaved();$('save-local').onclick=async()=>{try{notify('Preparing full strategy report for local save…');await ensureFullReport();const d=solutionData();if(!d||view.active)throw Error('Finish or stop the solve first.');const id=new Date().toISOString(),label=d.config.board.join(' ')+' · '+(d.source?.line||d.config.mode)+' · '+d.results.iteration+' iter';await pokerToolsHost.request('save-solution',{id,label,data:d});await refreshSaved();notify('Solution saved in this browser. Export JSON for a portable backup.');}catch(e){notify('Local save unavailable: '+e.message+'. Use Export JSON instead.','warn');}};
+function storageWire(){refreshSaved();$('save-local').onclick=async()=>{try{notify('Preparing full strategy report for local save…');await ensureFullReport();const d=solutionData();if(!d||view.active)throw Error('Finish or stop the solve first.');const id=new Date().toISOString(),label=d.config.board.join(' ')+' · '+(d.source?.line||d.config.mode)+' · '+d.results.iteration+' iter';await pokerToolsHost.request('save-solution',{id,label,data:d});await refreshSaved();notify('Solution saved in this browser. Export JSON for a portable backup.');}catch(e){notify('Local save unavailable. '+e.message,'warn');}};
  $('load-local').onclick=async()=>{try{const row=await pokerToolsHost.request('load-solution',$('saved-select').value);if(!row)throw Error('Saved solution not found.');restoreSolution(row.data);}catch(e){notify(e.message,'error');}};
  $('delete-local').onclick=async()=>{try{await pokerToolsHost.request('delete-solution',$('saved-select').value);await refreshSaved();notify('Saved solution removed.');}catch(e){notify(e.message,'error');}};
  $('open-solution').onchange=async e=>{try{if(e.target.files[0])restoreSolution(JSON.parse(await e.target.files[0].text()));}catch(err){notify('Cannot open solution: '+err.message,'error');}e.target.value='';};
@@ -2017,7 +2058,7 @@ function init(){
  view.weights[0]=profile('example',0);view.weights[1]=profile('example',1);
  const single=createHeuristicTester(C);
  heuristicPanel=createHeuristicPanel(single,createMultiFlopTester(C,single),{
-  config,game:()=>view.game,previewGame:cfg=>C.makeGame(cfg,{preview:true}),maxIterations:()=>Number($('iterations').value),
+  config,game:()=>view.game,previewGame:cfg=>C.makeGame(cfg,{preview:true,lazyTree:true}),maxIterations:()=>Number($('iterations').value),
   busy:()=>view.active||view.benchmark?.running||view.sampleStudy?.running,createWorker:createSolverWorker,
   format:fmt,escapeHtml,cardText:C.cardText,download:downloadJson,downloadText,
  });

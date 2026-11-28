@@ -6,10 +6,10 @@ The solver keeps its original preorder decision IDs, action labels, deal order a
 
 - The packed tree uses an Int32 record for each materialized node's parent, label index and terminal descriptor index. Terminal records with the same cards, winner and contributions are shared. Betting sizes, contributions and action descriptions are shared where they are identical. Each strategic decision keeps its own history, children and strategy state.
 - A forced check keeps its logical node, but stores the single child inline. The solver forwards reach and counterfactual values directly. Browser navigation and reports reconstruct the check action as needed. Dense checkpoints keep their legacy one-action numerical rows.
-- An ordinary chance node keeps typed child offsets and shares the board's selected cards and chance weights. Five-card rank programs and legal-hand masks are shared for swapped turn and river cards. Played observations, betting history and the conditional chance schedules retain their order.
+- An ordinary packed chance node uses a shared ordered card table and a subtree stride to reconstruct child offsets. Five-card rank programs and legal-hand masks are shared for swapped turn and river cards. The histories and conditional chance schedules retain their order.
 - After both players go all-in, the tree reserves the same logical IDs in a contiguous span. The turn and river paths, weights, boards and final pot can be reconstructed from that span. The numerical tree never builds those runout histories. Strategy browser breadcrumbs use the stored parent links. Opening an individual runout reconstructs just the requested presentation view.
 - The native bridge remaps logical IDs to compact physical indices. It shares identical terminal records and chance-only continuations. The [full-tree WebAssembly kernel](solver-simd.md) evaluates those shared continuations as explicit deals. The JavaScript solver and the compact Float64 WASM backend, which uses JavaScript traversal, can instead call the all-in operator. Native policy updates and selected-node evaluation receive the same physical mapping.
-- The **Max tree records** setting covers distinct terminal records and materialized decisions and chance nodes. The budget excludes typed links for deduplicated terminals and logical nodes in an all-in span. There is also a two-million logical node ceiling. A solution or checkpoint from the previous layout can still address its original nodes.
+- The **Max tree records** setting covers distinct terminal records and materialized decisions and chance nodes. Deduplicated terminal links, all-in spans, and suit-equivalent branches retain their logical IDs. The current [capacity planner and record limits](solver-capacity.md) apply to new solves. A solution or checkpoint from the previous layout can still address its original nodes.
 
 ## All-in operators
 
@@ -48,7 +48,7 @@ done
 
 Capacity runs report construction time, elapsed solving time including periodic convergence checks, and memory after building and before solving. Engine MiB accounts for numerical state, programs, typed links and WASM. The benchmark also reports V8 heap, external allocations and RSS deltas. Browser working sets depend on devices, allocator behavior and whether the user requests a full report.
 
-### Exact flop capacity
+### Historical exact flop capacity
 
 These are single runs on Node 24.22.1 on an AMD EPYC 9V74. Setup and solve times are wall-clock seconds. RSS is the increase since process warm-up. A slash gives the explicit baseline and packed values in that order.
 
@@ -78,7 +78,7 @@ For the same broad ranges on the turn, the signed-count matrix used about 128 Ki
 
 ## Remaining limits
 
-- Deep stacks with multiple later-street sizes and repeated raises still create many genuinely distinct decisions. All of their legal actions remain in the tree. The deepest multi-street benchmark still exceeds the 100,000-record cap. A materialized decision carries one metadata object even when an exact symmetry shares its numerical policy.
+- Deep stacks with multiple later-street sizes and repeated raises still create many strategically distinct decisions. Each keeps its full set of legal actions. See the [current capacity benchmarks](solver-capacity.md) for the record and memory limits on these configurations.
 - The native WASM ABI still walks chance on all-ins. Its savings come from interning identical terminal and chance-only records and sharing board programs. Dedicated pairwise or board operator instructions would require a new native kernel.
 - Full-report generation, saved solution JSON and checkpoint signatures still observe the complete logical tree. Full strategy exports can be much larger than an interactive solve. The preview and selected-node report avoid that expansion.
 - An exact run resolves the configured game, including the chosen bet and raise sizes. Convergence time still grows with the number of decisions and range width. These are desktop measurements, so the larger cases require a suitable memory budget.

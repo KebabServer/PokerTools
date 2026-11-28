@@ -161,8 +161,8 @@
                 <p class="subtle-note" id="qre-mode-note" hidden>QRE favors mixed play. Both Nash exploitability and the regularized gap must reach the target.</p>
                 <label class="algorithm-toggle"><input type="checkbox" id="adaptive-convergence"><span>Adaptive exact convergence-check cadence (optional)</span></label>
 
-                <div class="solver-fields"><label>Iterations<input id="iterations" type="number" min="1" max="10000000" step="100" value="1000"></label><label><span id="tolerance-title">Target exploitability</span> <span class="field-unit" id="tolerance-unit">% of pot</span><input id="tolerance" type="number" min="0" step="any" value="0.35" title="Percent of the pot at the start of this solve"></label><label>Memory <span class="field-unit">MiB</span><input id="memory-limit" type="number" min="2" max="4096" step="1" value="128"></label></div>
-                <div class="field-row"><label><span class="inline-field-label">Max tree records </span><input id="max-nodes" type="number" min="20" max="100000" step="100" value="18000"></label></div>
+                <div class="solver-fields"><label>Iterations<input id="iterations" type="number" min="1" max="10000000" step="100" value="1000"></label><label><span id="tolerance-title">Target exploitability</span> <span class="field-unit" id="tolerance-unit">% of pot</span><input id="tolerance" type="number" min="0" step="any" value="0.35" title="Percent of the pot at the start of this solve"></label><label>Memory <span class="field-unit">MiB</span><input id="memory-limit" type="number" min="2" max="8192" step="1" value="128" title="Peak solver preparation budget, subject to this browser’s memory limits"></label></div>
+                <div class="field-row"><label><span class="inline-field-label">Max tree records </span><input id="max-nodes" type="number" min="20" max="1000000" step="1" value="1000000"></label></div>
                 <details class="advanced" id="optimization-settings"><summary>Runouts &amp; optimizations</summary>
                   <div class="field-row"><label>Numerical storage<select id="storage-layout"><option value="auto">Auto</option><option value="dense">Dense</option><option value="compact">Compact</option></select></label></div>
                   <label>Storage precision<select id="storage-precision">
@@ -211,7 +211,7 @@
                     <details class="benchmark-details"><summary>Full individual solver logs</summary><pre id="benchmark-output" role="log" aria-label="Sequential algorithm benchmark logs"></pre></details>
                   </div>
                 </details>
-                <section id="pre-solve-quality" class="study-results" aria-label="Game estimate"></section>
+                <section id="pre-solve-quality" class="study-results" aria-label="Game estimate" aria-live="polite"></section>
               </div>
             </details>
             <details class="advanced section-disclosure" id="heuristic-tester" hidden>

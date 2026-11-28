@@ -3,6 +3,8 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
   'use strict';
   preference??='auto';
   limitBytes=Number(limitBytes)||0;
+  // Kernels use signed i32 arithmetic for byte offsets and scratch bounds.
+  const maxArenaBytes=0x7fff0000;
   if(typeof WebAssembly==='undefined'||typeof atob!=='function'||!game.stateStorage)return null;
 
   const modules=createCompiledTraversal._moduleCache??=new Map();
@@ -54,7 +56,7 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
     }
     const pages=Math.ceil((used+2*1024*1024)/65536);
     const extra=pages*65536-game.stateStorage.byteLength;
-    if(!decisions.length||(limitBytes>0&&game.memory+extra>limitBytes))return null;
+    if(!decisions.length||pages*65536>maxArenaBytes||(limitBytes>0&&game.memory+extra>limitBytes))return null;
     const memory=new WebAssembly.Memory({initial:pages,maximum:pages});
     const update=new WebAssembly.Instance(module,{env:{memory}}).exports.update;
     const buffer=memory.buffer;
@@ -144,24 +146,25 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
   const chosenBinary=extendedCache||modernTraversal||typeof WASM_TRAVERSAL_BYTES_CLASSIC!=='string'
     ?legacyBinary:(explicitScalar||!requestedSimdSupported)&&typeof WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR==='string'
       ?WASM_TRAVERSAL_BYTES_CLASSIC_SCALAR:WASM_TRAVERSAL_BYTES_CLASSIC;
-  const memo=new Map();
   function maxDepth(id,p){
-    const key=id*2+p;if(memo.has(key))return memo.get(key);
     const node=game.nodeAt?game.nodeAt(id):game.nodes[id];
     if(node.terminal)return 0;
     if(node.allInSpan)return (node.street==='deal-turn'?6:3)*maxN*8;
-    const children=node.chance?(node.isoGroups?node.isoGroups.map(g=>g.representative.child):node.runouts.map(r=>r.child)):
-      node.actions.map(a=>a.child);
     const own=node.chance?3*maxN*8:node.actions.length===1?0:
       node.p===p?(node.actions.length+2)*maxN*8:3*maxN*8;
-    let rest=0;for(const child of children)rest=Math.max(rest,maxDepth(child,p));
-    const result=own+rest;memo.set(key,result);return result;
+    let rest=0;
+    if(node.isoGroups)for(const group of node.isoGroups)rest=Math.max(rest,maxDepth(group.representative.child,p));
+    else if(node.chanceTable)for(let k=0;k<node.chanceTable.cards.length;k++)
+      rest=Math.max(rest,maxDepth(id+1+k*node.chanceSpan,p));
+    else for(const edge of node.chance?node.runouts:node.actions)rest=Math.max(rest,maxDepth(edge.child,p));
+    return own+rest;
   }
   const scratchBudget=Math.max(2*1024*1024,maxDepth(game.root,0)+maxDepth(game.root,1)+1024*1024);
   // Native kernels use compact physical indices. Intern only terminal and
   // chance-only continuations. Every decision keeps a distinct native row.
   const packed=game.treeStorage.mode==='packed';
-  const nativeNodes=[],indices=new Map(),terminals=new Map(),terminalIndices=new WeakMap(),allInRiver=new Map();
+  const nativeNodes=[],indices=packed?new Int32Array(game.treeStorage.physicalSlots):null;
+  const terminals=new Map(),terminalIndices=new WeakMap(),allInRiver=new Map();
   let allInFlop;
   function append(node){
     const index=nativeNodes.length;nativeNodes.push(node);return index;
@@ -183,9 +186,8 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
   }
   function nativeIndex(id){
     if(!packed)return id;
-    const index=indices.get(id);
-    if(index!==undefined)return index;
     const node=game.nodeAt(id);
+    if(node.treeSlot!==undefined&&indices[node.treeSlot])return indices[node.treeSlot]-1;
     if(node.terminal){
       return terminalIndex(node.riverPayoff||node.type==='fold'?node:game.boardTerminal(node.turn,node.river));
     }
@@ -202,7 +204,7 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
     // Virtual river chance nodes below a flop all-in can still be addressed
     // for subtree evaluation. They share the matching immutable continuation.
     if(node.chance&&node.treeSlot===undefined)return allInRiverIndex(node.turn,game.riverTables.get(node.turn));
-    const next=append(node);indices.set(id,next);return next;
+    const next=append(node);indices[node.treeSlot]=next+1;return next;
   }
   if(packed){
     for(const node of game.staticNodes)nativeIndex(node.id);
@@ -212,7 +214,7 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
   let layouts=0,runouts=0;
   for(const pair of new Set(game.riverPayoffLayouts.values()))for(const l of pair)
     for(const key of ['mineOrder','oppOrder','groupStart','weakEnd','tieEnd'])layouts+=l[key].byteLength+16;
-  for(const node of nativeTree)if(node.chance)runouts+=node.chanceChildren?.length??node.runouts.length;
+  for(const node of nativeTree)if(node.chance)runouts+=node.chanceTable?.cards.length??node.runouts.length;
   const sourceCopies=game.numericStorage.metadata??game.nodeLocks.reduce((sum,lock)=>{
     const node=game.nodes[lock.nodeId];
     return sum+node.lockedRows.byteLength+node.lockedMask.byteLength;
@@ -224,7 +226,7 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
     return budget<size?turn*50+size:null;
   }
   if(publicChance)for(const node of nativeTree)if(node.chance){
-    const key=publicDrawKey(node,node.isoGroups?.length??node.chanceChildren?.length??node.runouts.length);
+    const key=publicDrawKey(node,node.isoGroups?.length??node.chanceTable?.cards.length??node.runouts.length);
     if(key!==null)publicDrawKeys.set(key,0);
   }
   const chanceBytes=publicChance?publicChance.clockBytes+publicDrawKeys.size*104+16:0;
@@ -237,7 +239,8 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
   // The worker's memory budget also applies to compiled scratch capacity.
   // Refuse optional compilation instead of exceeding a mobile allocation limit.
   const actualBytes=pages*65536;
-  if(limitBytes>0&&game.memory+actualBytes-stateBytes>limitBytes)
+  if(actualBytes>maxArenaBytes||limitBytes>0&&game.memory+actualBytes-stateBytes>limitBytes||
+      game.capacity&&game.memory+actualBytes+game.capacity.jsMetadataBytes>game.capacity.workerLimit)
     return compatibilityFallback();
   // Reuse compiled modules between solves. Linear memory and caches are
   // per game, including instances of the source-backed kernel.
@@ -324,7 +327,11 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
     }
     const maps=new WeakMap();
     function mapPtr(m){if(!m)return 0;if(!maps.has(m))maps.set(m,copyTyped(m));return maps.get(m);}
-    const rows=[],strategy=sourceModule?new Int32Array(nativeTree.length*9):null;
+    const recordCount=nativeTree.length,nodePtr=allocate(recordCount*22*4,4);
+    const strategyPtr=sourceModule?allocate(recordCount*9*4,4):0;
+    if(nodePtr===null||strategyPtr===null)throw Error('No WASM space for packed node records');
+    const rows=new Int32Array(memory.buffer,nodePtr,recordCount*22);
+    const strategy=sourceModule?new Int32Array(memory.buffer,strategyPtr,recordCount*9):null;
     const privateAlias=new WeakMap();
     for(const key of publicDrawKeys.keys()){
       const address=allocate(104,4);
@@ -374,18 +381,18 @@ function createCompiledTraversal(game, base64, limitBytes, preference) {
         node.pruned=new Uint8Array(memory.buffer,prunedPtr,node.actions.length);
         if(existing)node.pruned.set(existing);
       }
-      rows.push(kind,node.p??-1,node.actions?.length??0,childPtr,ng,groupPtr,
+      rows.set([kind,node.p??-1,node.actionCount??0,childPtr,ng,groupPtr,
         node.current?.byteOffset??0,node.regret?.byteOffset??0,node.averageSum?.byteOffset??0,
         node.qreEntropy?.byteOffset??0,node.qreLog?.byteOffset??0,
         copyTyped(node.valid?.[0]),copyTyped(node.valid?.[1]),
         layoutPtr(payoffs?.[0]),layoutPtr(payoffs?.[1]),
         node.terminal&&node.type==='fold'?node.winner:-1,
         node.c?.[0]??0,node.c?.[1]??0,node.turn??-1,node.river??-1,
-        previousPtr,prunedPtr);
+        previousPtr,prunedPtr],i*22);
     }
-    const nodePtr=ints(rows),reachPtrs=[],outPtrs=[],ownPtrs=[];
+    const reachPtrs=[],outPtrs=[],ownPtrs=[];
     const rootReachPtrs=game.players.map((_,p)=>copyTyped(game.players[1-p].priors));
-    if(strategy)exports.configure_strategy(copyTyped(strategy),game.regretScale,
+    if(strategy)exports.configure_strategy(strategyPtr,game.regretScale,
       16*Number.EPSILON*Math.max(1,game.pot+game.stack)*game.regretScale);
     if(publicChance){
       const last=copyTyped(publicChance.last),factors=copyTyped(publicChance.factors),counts=allocate(8,4);
