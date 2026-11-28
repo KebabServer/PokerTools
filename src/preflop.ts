@@ -1,12 +1,23 @@
-import { cardText, deck } from './cards.ts'
-import { gridHands } from './ranges.ts'
+import { deck } from './cards.ts'
+import { gridHands, startingHandName } from './ranges.ts'
 
 type SpotKind = '2Bet' | '3Bet' | '4Bet'
 export type PreflopSpot = { id: string; label: string }
-type PreflopAction = { label: string; color: string; frequencies: Float64Array }
-export type PreflopPreset = { name: string; ranges: Map<string, PreflopAction[]> }
+export type PreflopAction = {
+  label: string
+  color: string
+  frequencies: Float64Array
+  comboFrequencies: Float64Array
+}
+export type PreflopSpotContext = { actor: string; investedBb: number[] | null }
+export type PreflopPreset = {
+  name: string
+  ranges: Map<string, PreflopAction[]>
+  contexts: Map<string, PreflopSpotContext>
+}
 
-const positions = ['UTG', 'MP', 'CO', 'BTN', 'SB', 'BB']
+export const preflopPositions = ['UTG', 'MP', 'CO', 'BTN', 'SB', 'BB'] as const
+export const preflopStudyPath = 'preflop-ranges.tsv'
 
 function spotFor(kind: SpotKind, opener: string, opponent: string): PreflopSpot {
   const label = kind === '2Bet' ? opener + ' RFI'
@@ -15,10 +26,10 @@ function spotFor(kind: SpotKind, opener: string, opponent: string): PreflopSpot 
   return { id: [kind, opener, opponent].join('/'), label }
 }
 
-export const preflopPositionRows = positions.slice(0, -1).map((opener, row) => ({
+export const preflopPositionRows = preflopPositions.slice(0, -1).map((opener, row) => ({
   opener,
   opening: spotFor('2Bet', opener, opener),
-  responses: positions.slice(1).map((opponent, column) => column < row ? null : {
+  responses: preflopPositions.slice(1).map((opponent, column) => column < row ? null : {
     opponent,
     threeBet: spotFor('3Bet', opener, opponent),
     fourBet: spotFor('4Bet', opener, opponent),
@@ -54,31 +65,34 @@ function colorForAction(label: string) {
 export const preflopHands = gridHands.flat()
 const handIndices = new Map(preflopHands.map((hand, index) => [hand, index]))
 const combosPerHand = Array<number>(preflopHands.length).fill(0)
-const handIndexByCombo: number[] = []
-const cardCodes = deck.map(cardText)
+export const preflopComboOrder = 'cdhs-low-major-v1'
+export const preflopCombos: readonly (readonly [number, number])[] = deck.flatMap(low =>
+  deck.slice(low + 1).map(high => [low, high] as const))
+const exportIndexByCombo = Uint16Array.from(preflopCombos, ([low, high]) => high * (high - 1) / 2 + low)
+const handByExportIndex = new Uint8Array(preflopCombos.length)
 
-// Export vectors list each pair in ascending higher card order, then ascending lower card order.
-for (const high of deck) {
-  const [highRank, highSuit] = cardCodes[high]
-  for (let low = 0; low < high; low++) {
-    const [lowRank, lowSuit] = cardCodes[low]
-    const suffix = highRank === lowRank ? '' : highSuit === lowSuit ? 's' : 'o'
-    const hand = handIndices.get(highRank + lowRank + suffix)!
-    handIndexByCombo.push(hand)
-    combosPerHand[hand]++
-  }
-}
+// The TSV groups by higher card. PokerTools' internal exact ranges group by lower card.
+preflopCombos.forEach(([low, high], index) => {
+  const hand = handIndices.get(startingHandName(low, high))!
+  handByExportIndex[exportIndexByCombo[index]] = hand
+  combosPerHand[hand]++
+})
 
 function readFrequencies(vector: string) {
   const values = vector.trim().split(/\s+/)
-  if (values.length !== handIndexByCombo.length) throw new Error('Expected 1,326 combo frequencies.')
+  if (values.length !== preflopCombos.length) throw new Error('Expected 1,326 combo frequencies.')
   const totals = new Float64Array(preflopHands.length)
+  const exportFrequencies = new Float64Array(preflopCombos.length)
   for (const [index, value] of values.entries()) {
     const frequency = Number(value)
     if (!Number.isFinite(frequency) || frequency < 0 || frequency > 1) throw new Error('Invalid combo frequency.')
-    totals[handIndexByCombo[index]] += frequency
+    exportFrequencies[index] = frequency
+    totals[handByExportIndex[index]] += frequency
   }
-  return totals.map((sum, hand) => sum / combosPerHand[hand])
+  return {
+    frequencies: totals.map((sum, hand) => sum / combosPerHand[hand]),
+    comboFrequencies: Float64Array.from(exportIndexByCombo, index => exportFrequencies[index]),
+  }
 }
 
 export function parsePreflopPresets(text: string): PreflopPreset[] {
@@ -91,6 +105,8 @@ export function parsePreflopPresets(text: string): PreflopPreset[] {
   }
   const presetColumn = column('RangeName')
   const spotColumns = ['Situation', 'Pos1', 'Pos2'].map(column)
+  const actorColumn = fields.indexOf('Position')
+  const investedColumn = fields.indexOf('Invested')
   const actionColumns = fields.flatMap((field, index) => {
     const match = /^Action(\d+)$/.exec(field)
     return match ? [{ action: index, range: column('Range' + match[1]) }] : []
@@ -104,12 +120,20 @@ export function parsePreflopPresets(text: string): PreflopPreset[] {
     const name = row[presetColumn]?.trim()
     const spot = spotColumns.map(col => row[col]?.trim()).join('/')
     if (!name || !spotIds.has(spot)) throw new Error('Invalid preflop spot in row ' + (index + 2) + '.')
-    const preset = presets.get(name) ?? { name, ranges: new Map<string, PreflopAction[]>() }
+    const preset = presets.get(name) ?? {
+      name, ranges: new Map<string, PreflopAction[]>(), contexts: new Map<string, PreflopSpotContext>(),
+    }
     if (preset.ranges.has(spot)) throw new Error('Duplicate preflop spot in row ' + (index + 2) + '.')
     const actions = actionColumns.flatMap(({ action, range }) => {
       const label = row[action]?.trim()
       if (!label || label === 'NoRange') return []
-      return [{ label, color: colorForAction(label), frequencies: readFrequencies(row[range] ?? '') }]
+      return [{ label, color: colorForAction(label), ...readFrequencies(row[range] ?? '') }]
+    })
+    const investedBb = row[investedColumn]?.trim().split(/\s+/).map(Number)
+    preset.contexts.set(spot, {
+      actor: row[actorColumn]?.trim() ?? '',
+      investedBb: investedBb?.length === preflopPositions.length && investedBb.every(value => Number.isFinite(value) && value >= 0)
+        ? investedBb : null,
     })
     preset.ranges.set(spot, actions)
     presets.set(name, preset)
@@ -118,7 +142,7 @@ export function parsePreflopPresets(text: string): PreflopPreset[] {
   return [...presets.values()]
 }
 
-export function mixForHand(actions: PreflopAction[], index: number) {
+export function mixForHand(actions: readonly PreflopAction[], index: number) {
   const mix = actions.map(({ label, color, frequencies }) => ({ label, color, frequency: frequencies[index] }))
   const unlisted = 1 - mix.reduce((sum, action) => sum + action.frequency, 0)
   if (mix.length && unlisted > 1e-8) mix.push({ label: 'Unlisted', color: preflopColors.unlisted, frequency: unlisted })

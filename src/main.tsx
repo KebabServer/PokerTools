@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BookOpen, Calculator, ChartColumn, Cpu, Grid3X3, Layers3, NotebookPen, Spade } from 'lucide-react'
+import { BookOpen, Calculator, ChartColumn, Cpu, Grid3X3, Layers3, Network, NotebookPen, Spade } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
 import { Replayer } from './Replayer.tsx'
 import { EquityCalculator } from './EquityCalculator.tsx'
@@ -14,12 +14,14 @@ const FlopReports = lazy(() => import('./FlopReports.tsx'))
 const FlopViewer = lazy(() => import('./FlopViewer.tsx'))
 const Notes = lazy(() => import('./Notes.tsx'))
 const PreflopViewer = lazy(() => import('./PreflopViewer.tsx'))
+const GtoLibrary = lazy(() => import('./GtoLibrary.tsx'))
 const TurnRiverLab = lazy(() => import('./TurnRiverLab.tsx'))
 
 const tabs = [
   { id: 'replayer', label: 'Replayer', compactLabel: 'Replay', name: 'Hand Replayer', Icon: Spade },
   { id: 'equity', label: 'Equity', name: 'Equity Calculator', Icon: Calculator },
   { id: 'preflop', label: 'Preflop', name: 'Preflop Viewer', Icon: Grid3X3 },
+  { id: 'gto-library', label: 'GTO Library', compactLabel: 'GTO', name: 'GTO Library', Icon: Network },
   { id: 'flop-viewer', label: 'Flop Viewer', compactLabel: 'Flop', name: 'Flop Viewer', Icon: Layers3 },
   { id: 'flop-reports', label: 'Flop Reports', compactLabel: 'Reports', name: 'Flop Reports', Icon: ChartColumn },
   { id: 'solver', label: 'Solver', name: 'Solver', Icon: Cpu },
@@ -48,7 +50,7 @@ function Workspace({ session }: { session: Session }) {
     const change = () => {
       const tab = tabFromHash()
       setTool(tab)
-      if (tab === 'preflop' || tab === 'flop-reports' || tab === 'flop-viewer' || tab === 'notes' || tab === 'solver') {
+      if (tab === 'preflop' || tab === 'gto-library' || tab === 'flop-reports' || tab === 'flop-viewer' || tab === 'notes' || tab === 'solver') {
         setOpenedTabs(opened => opened.has(tab) ? opened : new Set(opened).add(tab))
       }
       window.scrollTo(0, 0)
@@ -114,6 +116,9 @@ function Workspace({ session }: { session: Session }) {
       <div hidden={tool !== 'equity'}><EquityCalculator key={calculationVersion} userId={session?.user.id} initialCalculation={calculation} deletedCalculationId={deletedCalculationId} /></div>
       {openedTabs.has('preflop') && <div hidden={tool !== 'preflop'}>
         <Suspense fallback={<p role="status">Loading preflop viewer…</p>}><PreflopViewer /></Suspense>
+      </div>}
+      {openedTabs.has('gto-library') && <div hidden={tool !== 'gto-library'}>
+        <Suspense fallback={<p role="status">Loading GTO Library…</p>}><GtoLibrary /></Suspense>
       </div>}
       {openedTabs.has('flop-viewer') && <div hidden={tool !== 'flop-viewer'}>
         <Suspense fallback={<p role="status">Loading flop viewer…</p>}><FlopViewer userId={session?.user.id} /></Suspense>

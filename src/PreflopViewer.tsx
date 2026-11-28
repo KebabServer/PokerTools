@@ -1,14 +1,12 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
-import type { KeyboardEvent } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import {
-  mixBackground, mixForHand, parsePreflopPresets, preflopColors, preflopHands, preflopPositionRows, preflopSpotGroups,
+  mixBackground, mixForHand, parsePreflopPresets, preflopColors, preflopHands, preflopPositionRows, preflopSpotGroups, preflopStudyPath,
   type PreflopPreset, type PreflopSpot,
 } from './preflop.ts'
 import { readStudyFile } from './studyFiles.ts'
-import './preflop.css'
+import { PreflopHandGrid } from './PreflopHandGrid.tsx'
 
 const percent = new Intl.NumberFormat('en', { style: 'percent', maximumFractionDigits: 1 })
-const matrixSize = 13
 const colorLegend = [
   { label: 'Raise', color: preflopColors.raise },
   { label: 'Call', color: preflopColors.call },
@@ -64,42 +62,15 @@ function RangeViewer({ presets }: { presets: PreflopPreset[] }) {
   const [presetIndex, setPreset] = useState(0)
   const [spotId, setSpot] = useState(preflopPositionRows[0].opening.id)
   const [handIndex, setHand] = useState(0)
-  const grid = useRef<HTMLDivElement>(null)
   const preset = presets[presetIndex]
   const actions = preset.ranges.get(spotId) ?? []
   const selectedMix = mixForHand(actions, handIndex)
   const total = selectedMix.reduce((sum, item) => sum + item.frequency, 0)
 
-  function moveOnGrid(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const rowStart = index - index % matrixSize
-    const rowEnd = rowStart + matrixSize - 1
-    let next: number
-    switch (event.key) {
-      case 'ArrowLeft': next = Math.max(rowStart, index - 1); break
-      case 'ArrowRight': next = Math.min(rowEnd, index + 1); break
-      case 'ArrowUp': next = index < matrixSize ? index : index - matrixSize; break
-      case 'ArrowDown': next = index + matrixSize < preflopHands.length ? index + matrixSize : index; break
-      case 'Home': next = event.ctrlKey ? 0 : rowStart; break
-      case 'End': next = event.ctrlKey ? preflopHands.length - 1 : rowEnd; break
-      default: return
-    }
-    event.preventDefault()
-    setHand(next)
-    grid.current?.querySelectorAll('button')[next]?.focus()
-  }
-
   return <>
     <div className="preflop-layout">
       <section className="panel preflop-chart" aria-label="Preflop range chart">
-        <span className="sr-only" id="preflop-grid-keys">Use the arrow keys to select a starting hand.</span>
-        <div className="preflop-hand-grid" role="group" ref={grid} aria-label="Starting hands" aria-describedby="preflop-grid-keys">
-          {preflopHands.map((name, index) => <button className="preflop-cell" type="button" key={name}
-            tabIndex={index === handIndex ? 0 : -1} aria-pressed={index === handIndex}
-            style={{ backgroundImage: mixBackground(mixForHand(actions, index)) }}
-            onClick={() => setHand(index)} onKeyDown={event => moveOnGrid(event, index)}>
-            {name}
-          </button>)}
-        </div>
+        <PreflopHandGrid actions={actions} hand={handIndex} onHandChange={setHand} />
       </section>
       <div className="preflop-positions">
         <SpotMatrix stage="4-bet" preset={preset} hand={handIndex} spotId={spotId} onChange={setSpot} />
@@ -151,7 +122,7 @@ export default function PreflopViewer() {
     const controller = new AbortController()
     async function load() {
       try {
-        const data = parsePreflopPresets(await readStudyFile('preflop-ranges.tsv', controller.signal))
+        const data = parsePreflopPresets(await readStudyFile(preflopStudyPath, controller.signal))
         if (!controller.signal.aborted) setPresets(data)
       } catch {
         if (!controller.signal.aborted) setPresets(null)
