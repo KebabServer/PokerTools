@@ -84,15 +84,70 @@
 .gto-range-status { list-style: none; padding: 8px 0; border-block: 1px solid var(--border); }
 .gto-range-status li { display: flex; align-items: baseline; gap: 7px; }
 .gto-range-status strong { color: #ececec; min-width: 2.3em; }
-.gto-flop-picker { display: grid; justify-items: start; gap: 6px; }
-.gto-flop-picker fieldset { min-width: 0; padding: 0; margin: 0; border: 0; width: 100%; }
-.gto-flop-picker legend { color: var(--muted); font-size: .81rem; margin-bottom: 6px; padding: 0; }
-.gto-flop-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
-.gto-flop-inputs select { min-width: 0; min-height: 44px; }
+.gto-flop-trigger { justify-self: start; }
+body:has(.gto-flop-dialog[open]) { overflow: hidden; }
+.gto-flop-dialog {
+  width: min(570px, 100% - 16px);
+  max-width: none;
+  max-height: calc(100% - 16px);
+  padding: 12px 14px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #4b4b4b;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  box-shadow: 0 14px 50px #0008;
+}
+.gto-flop-dialog::backdrop { background: #0009; }
+.gto-flop-dialog form { display: grid; gap: 10px; }
+.gto-picker-head, .gto-picker-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gto-picker-head .icon-button { border-color: transparent; }
+.gto-picker-preview { display: flex; gap: 5px; }
+.gto-picker-slot { display: grid; place-items: center; position: relative; }
+.gto-picker-slot .playing-card { width: 36px; height: 45px; border-radius: 5px; }
+.gto-picker-slot .card-face { --rank-size: 1.5rem; --watermark-size: 3.1rem; }
+.gto-picker-slot .card-empty { background: var(--raised); border-color: #666; }
+.gto-picker-slot svg { position: absolute; color: var(--muted); pointer-events: none; }
+.gto-picker-deck, .gto-picker-suit { display: grid; gap: 4px; }
+.gto-picker-suit { grid-template-columns: repeat(13, minmax(0, 1fr)); }
+.gto-picker-card {
+  display: block;
+  position: relative;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  touch-action: manipulation;
+}
+.gto-picker-card .card-face {
+  --rank-size: clamp(1rem, 4vw, 1.45rem);
+  --watermark-size: clamp(2.15rem, 7.5vw, 3.1rem);
+  display: flex;
+  width: 100%;
+  height: 45px;
+  border-radius: inherit;
+}
+.gto-picker-card[aria-pressed="true"] .card-face { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.gto-picker-card:hover:not(:disabled) .card-face { filter: brightness(1.14); }
+.gto-picker-card:disabled { opacity: .55; }
+.gto-picker-card:focus-visible { outline-offset: 1px; z-index: 1; }
+.gto-picker-order { position: absolute; top: 2px; right: 2px; padding: 1px 3px; border-radius: 3px; background: #192d25; color: #bfefda; font-size: .6rem; font-weight: 750; line-height: 1.1; }
+.gto-picker-footer { flex-wrap: wrap; }
+.gto-picker-footer p { flex: 1; min-width: 6ch; font-size: .78rem; }
+.gto-picker-buttons { display: flex; gap: 5px; margin-left: auto; }
 .gto-catalog-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: .81rem; }
 
 @media (max-width: 780px) {
   .gto-layout { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+}
+@media (max-width: 390px) {
+  .gto-flop-dialog { padding: 8px; }
+  .gto-flop-dialog form { gap: 7px; }
+  .gto-picker-suit { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+  .gto-picker-card .card-face { --rank-size: 1.15rem; --watermark-size: 2.65rem; height: 42px; }
+  .gto-picker-buttons .button { padding-inline: 9px; }
 }
 @media (max-width: 440px) {
   .main-wrap[data-tool="gto-library"] { padding-top: 12px; }

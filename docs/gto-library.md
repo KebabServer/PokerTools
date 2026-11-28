@@ -1,6 +1,6 @@
 # GTO Library v1
 
-Open **GTO Library** after signing in. The table starts at UTG with six 100 bb stacks and 0.5/1 bb blinds. Choose an action to advance the betting history. Back, forward, and the history buttons restore the pot, stacks, and acting seat at that point. Reset returns to UTG. After preflop, select three distinct cards and choose **View flop**. Turn and River show placeholders once the flop has been entered.
+Open **GTO Library** after signing in. The table starts at UTG with six 100 bb stacks and 0.5/1 bb blinds. Choose an action to advance the betting history. Back, forward, and the history buttons restore the pot, stacks, and acting seat at that point. Reset returns to UTG. After preflop, open **Choose flop**, select three cards from the deck, and choose **Set flop**. Tap a selected card again to remove it. Turn and River show placeholders once the flop has been entered.
 
 The browser uses the `GTOw 500nl Simple` preset from the existing private `preflop-ranges.tsv` study file. The export records each spot's actor, invested amounts, action labels, and strategy vectors. Starting stack depth and rake parameters are unspecified in the export. V1 uses the requested 100 bb configuration and reports gross pots before rake. Folded contributions stay in the pot. The game returns unmatched chips when preflop ends.
 

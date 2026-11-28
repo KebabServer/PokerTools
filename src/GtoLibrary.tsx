@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, RotateCcw } from 'lucide-react'
-import { cardText, deck } from './cards.ts'
+import { useEffect, useId, useRef, useState } from 'react'
+import { ArrowLeft, ArrowRight, Plus, RotateCcw, X } from 'lucide-react'
+import { cardText, deck, suits } from './cards.ts'
 import { PlayingCard } from './PlayingCard.tsx'
 import { PreflopHandGrid } from './PreflopHandGrid.tsx'
 import {
@@ -18,8 +18,8 @@ import './gto-library.css'
 
 const percent = new Intl.NumberFormat('en', { style: 'percent', maximumFractionDigits: 1 })
 const streetName = (street: GtoStreet) => street[0].toUpperCase() + street.slice(1)
-const suitLabels: Record<string, string> = { s: '♠', h: '♥', d: '♦', c: '♣' }
 const flopSlots = ['First flop card', 'Second flop card', 'Third flop card']
+const pickerRows = [...suits].reverse().map(suit => deck.filter(card => suits[card % suits.length] === suit).reverse())
 
 function actionLabel(move: GtoMove, game: GtoGameState, amount = 0) {
   if (move.kind === 'raise') return 'Raise to ' + formatGtoBb(move.to, game.config)
@@ -141,23 +141,69 @@ function GtoStrategyPanel({ node, hand, selectHand }: { node: GtoNode; hand: num
 }
 
 function FlopPicker({ board, onFlop }: { board: readonly number[]; onFlop: (cards: number[]) => void }) {
-  const [draft, setDraft] = useState<number[]>(flopSlots.map((_, index) => board[index] ?? -1))
-  return <form className="gto-flop-picker" onSubmit={event => { event.preventDefault(); onFlop(draft) }}>
-    <fieldset>
-      <legend>{board.length ? 'Change flop' : 'Choose flop cards'}</legend>
-      <div className="gto-flop-inputs">
-        {flopSlots.map((label, index) => <select key={label} aria-label={label} value={draft[index]}
-          onChange={event => setDraft(draft.map((value, i) => i === index ? Number(event.target.value) : value))}>
-          <option value={-1}>Card {index + 1}</option>
-          {[...deck].reverse().map(card => {
-            const [rank, suit] = cardText(card)
-            return <option disabled={draft.includes(card) && card !== draft[index]} key={card} value={card}>{rank}{suitLabels[suit]}</option>
-          })}
-        </select>)}
-      </div>
-    </fieldset>
-    <button type="submit" className="button small" disabled={draft.includes(-1) || draft.every((card, i) => card === board[i])}>View flop</button>
-  </form>
+  const dialog = useRef<HTMLDialogElement>(null)
+  const title = useId()
+  const [draft, setDraft] = useState<number[]>([])
+  const full = draft.length === flopSlots.length
+  const canApply = full && draft.some(card => !board.includes(card))
+
+  useEffect(() => {
+    const dismiss = () => dialog.current?.close()
+    window.addEventListener('hashchange', dismiss)
+    return () => window.removeEventListener('hashchange', dismiss)
+  }, [])
+
+  function toggleCard(card: number) {
+    setDraft(cards => {
+      if (cards.includes(card)) return cards.filter(selected => selected !== card)
+      return cards.length < flopSlots.length ? [...cards, card] : cards
+    })
+  }
+
+  return <>
+    <button type="button" className="button gto-flop-trigger" aria-haspopup="dialog" onClick={() => {
+      setDraft([...board])
+      dialog.current?.showModal()
+    }}>{board.length ? 'Change flop' : 'Choose flop'}</button>
+    <dialog className="gto-flop-dialog" ref={dialog} aria-labelledby={title}>
+      <form onSubmit={event => {
+        event.preventDefault()
+        if (!canApply) return
+        dialog.current?.close()
+        onFlop(draft)
+      }}>
+        <header className="gto-picker-head">
+          <h2 id={title}>Set the flop</h2>
+          <button type="button" className="icon-button" aria-label="Close flop picker" onClick={() => dialog.current?.close()}><X size={17} aria-hidden="true" /></button>
+        </header>
+        <div className="gto-picker-preview" role="group" aria-label="Selected flop cards">
+          {flopSlots.map((slot, index) => <span className="gto-picker-slot" key={slot}>
+            <PlayingCard card={draft[index]} />
+            {index === draft.length && <Plus size={15} aria-hidden="true" />}
+          </span>)}
+        </div>
+        <div className="gto-picker-deck" role="group" aria-label="Deck">
+          {pickerRows.map(row => <div key={row[0]} className="gto-picker-suit">
+            {row.map(card => {
+              const picked = draft.indexOf(card)
+              return <button key={card} type="button" className="gto-picker-card" aria-pressed={picked !== -1}
+                disabled={full && picked === -1} onClick={() => toggleCard(card)}>
+                <PlayingCard card={card} />
+                {picked !== -1 && <span className="gto-picker-order" aria-hidden="true">{picked + 1}</span>}
+              </button>
+            })}
+          </div>)}
+        </div>
+        <footer className="gto-picker-footer">
+          <p role="status">{full ? 'Tap a selected card to remove it.' : draft.length + ' of 3 selected'}</p>
+          <div className="gto-picker-buttons">
+            <button type="button" className="button" onClick={() => dialog.current?.close()}>Cancel</button>
+            <button type="submit" className="button primary" disabled={!canApply}>Set flop</button>
+          </div>
+        </footer>
+      </form>
+    </dialog>
+  </>
 }
 
 function PostflopPanel({ node, street, study, onFlop }: { node: GtoNode; street: GtoStreet; study: GtoStudy; onFlop: (cards: number[]) => void }) {
@@ -197,7 +243,7 @@ function PostflopPanel({ node, street, study, onFlop }: { node: GtoNode; street:
         </li>
       })}
     </ul>
-    {street === 'flop' && <FlopPicker key={node.id} board={node.game.board} onFlop={onFlop} />}
+    {street === 'flop' && <FlopPicker board={node.game.board} onFlop={onFlop} />}
     <div className="gto-catalog-status" role="status">
       {street !== 'flop' ? <p>{streetName(street)} strategy unavailable.</p>
         : !headsUp ? <p>Multiway flop strategies are unavailable.</p>
